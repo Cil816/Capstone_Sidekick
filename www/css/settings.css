@@ -1,0 +1,147 @@
+.settings-content {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-bottom: 26px;
+}
+
+.settings-card {
+  background: #ffffff;
+  border: 1px solid #e8edf2;
+  border-radius: 16px;
+  padding: 14px 14px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.04);
+}
+
+.settings-card-featured {
+  background: linear-gradient(180deg, #f8fbff 0%, #ffffff 68%);
+}
+
+.settings-card h2 {
+  font-size: 15px;
+  color: #1f2937;
+  margin: 0 0 4px;
+}
+
+.settings-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.settings-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 56px;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: #e7f0fb;
+  color: #36597a;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.setting-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  border-top: 1px solid #f3f4f6;
+  padding-top: 10px;
+}
+
+.setting-title {
+  display: block;
+  font-size: 15px;
+  color: #1f2937;
+  font-weight: 500;
+}
+
+.setting-row small {
+  display: block;
+  font-size: 12px;
+  color: #6b7280;
+  margin-top: 2px;
+}
+
+.toggle-input {
+  position: relative;
+  width: 48px;
+  height: 28px;
+  border-radius: 999px;
+  border: 1px solid #c9d4e3;
+  background: #e7edf5;
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+  transition: background 0.18s ease, border-color 0.18s ease;
+}
+
+.toggle-input::before {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 3px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.2);
+  transition: transform 0.18s ease;
+}
+
+.toggle-input:checked {
+  background: #6b8cae;
+  border-color: #5f7f9f;
+}
+
+.toggle-input:checked::before {
+  transform: translateX(20px);
+}
+
+.toggle-input:focus-visible {
+  outline: 3px solid rgba(107, 140, 174, 0.25);
+  outline-offset: 1px;
+}
+
+.settings-card .btn {
+  min-height: 46px;
+}
+
+.settings-action {
+  justify-content: flex-start;
+  padding-left: 14px;
+  font-weight: 600;
+}
+
+.settings-card.danger .btn {
+  background: #334155;
+}
+
+.settings-message {
+  font-size: 13px;
+  color: #065f46;
+  background: #ecfdf5;
+  border: 1px solid #a7f3d0;
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+@media (max-width: 380px) {
+  .settings-content {
+    gap: 12px;
+  }
+
+  .setting-title {
+    font-size: 14px;
+  }
+
+  .settings-card {
+    padding: 12px;
+  }
+}

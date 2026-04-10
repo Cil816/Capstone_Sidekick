@@ -1,0 +1,66 @@
+/* Welcome Screen Specific Styles */
+.welcome-screen {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.welcome-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    /* allow parent to size the viewport; avoid forcing 100vh which can create extra scroll space */
+    min-height: 0;
+    padding: 0 24px;
+}
+
+.logo-section {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    margin-bottom: 48px;
+}
+
+.logo-circle {
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    background: #6B8CAE;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 12px;
+}
+
+.compass-icon {
+    width: 40px;
+    height: 40px;
+    color: white;
+}
+
+.app-title {
+    font-size: 32px;
+    font-weight: 500;
+    color: #2C3E50;
+    margin-bottom: 8px;
+}
+
+.app-title {
+    font-size: 26px;
+    font-weight: 500;
+    color: #2C3E50;
+    margin-bottom: 6px;
+}
+.app-subtitle {
+    font-size: 14px;
+    color: #6B7280;
+}
+
+.tagline {
+    text-align: center;
+    color: #6B7280;
+    margin-bottom: 24px;
+    max-width: 320px;
+}
+}
