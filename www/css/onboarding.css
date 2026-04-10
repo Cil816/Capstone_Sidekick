@@ -1,0 +1,126 @@
+/* Onboarding Screen Specific Styles */
+.flex-spacer {
+    flex: 1;
+}
+
+.step-indicator {
+    font-size: 14px;
+    color: #6B7280;
+}
+
+.progress-bar {
+    width: 100%;
+    height: 8px;
+    background: #E5E7EB;
+    border-radius: 4px;
+    overflow: hidden;
+    margin: 0 24px;
+    max-width: calc(100% - 48px);
+}
+
+.progress-fill {
+    height: 100%;
+    background: #6B8CAE;
+    transition: width 0.3s ease;
+    width: 33.33%;
+}
+
+.onboarding-content {
+    padding-top: 24px;
+    /* Default small bottom padding; runtime helper may increase via --bottom-overlay-height */
+    padding-bottom: calc(24px + var(--bottom-overlay-height, 0px));
+}
+
+.onboarding-content h1 {
+    font-size: 24px;
+    font-weight: 500;
+    color: #2C3E50;
+    margin-bottom: 8px;
+}
+
+.onboarding-content p {
+    font-size: 16px;
+    color: #6B7280;
+    margin-bottom: 24px;
+}
+
+.chip-container {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+
+.chip {
+    padding: 12px 16px;
+    border-radius: 12px;
+    background: #F5F7FA;
+    color: #374151;
+    border: none;
+    cursor: pointer;
+    font-size: 14px;
+    transition: all 0.2s;
+}
+
+.chip:hover {
+    background: #E5E7EB;
+}
+
+.chip.selected {
+    background: #6B8CAE;
+    color: white;
+}
+
+.budget-container {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.budget-option {
+    width: 100%;
+    padding: 16px;
+    border-radius: 12px;
+    background: #F5F7FA;
+    color: #374151;
+    border: none;
+    cursor: pointer;
+    font-size: 16px;
+    text-align: left;
+    transition: all 0.2s;
+}
+
+.budget-option:hover {
+    background: #E5E7EB;
+}
+
+.budget-option.selected {
+    background: #6B8CAE;
+    color: white;
+}
+
+.onboarding-footer {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    max-width: 448px;
+    margin: 0 auto;
+    padding: 16px;
+    background: white;
+    box-shadow: 0 -6px 18px rgba(44,62,80,0.04);
+    border-top: 1px solid #E5E7EB;
+    z-index: 1000;
+}
+
+@media (min-width: 600px) {
+    /* On larger screens keep footer in-flow to avoid covering content */
+    .onboarding-footer {
+        position: static;
+        box-shadow: none;
+        border-top: 0;
+        padding: 24px 0;
+        max-width: 100%;
+    }
+
+    .onboarding-content { padding-bottom: calc(24px + var(--bottom-overlay-height, 0px)); }
+}

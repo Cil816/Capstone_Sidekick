@@ -1,0 +1,25 @@
+/* Login Screen Specific Styles */
+.forgot-link {
+    color: #6B8CAE;
+    font-size: 14px;
+    text-decoration: none;
+}
+
+.forgot-link:hover {
+    text-decoration: underline;
+}
+
+.footer-text {
+    text-align: center;
+    margin-top: 24px;
+    color: #6B7280;
+}
+
+.footer-text a {
+    color: #6B8CAE;
+    text-decoration: none;
+}
+
+.footer-text a:hover {
+    text-decoration: underline;
+}

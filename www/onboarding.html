@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>Sidekick AI - Onboarding</title>
+    <link rel="stylesheet" href="css/common.css">
+    <link rel="stylesheet" href="css/onboarding.css">
+</head>
+<body>
+    <div class="app-container">
+        <div class="screen">
+            <div class="header">
+                <button class="back-btn" id="onboarding-back" onclick="handleBack()" style="display: none;">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M15 18l-6-6 6-6"/>
+                    </svg>
+                </button>
+                <div class="flex-spacer"></div>
+                <span class="step-indicator" id="step-indicator">Step 1 of 3</span>
+            </div>
+            
+            <div class="progress-bar">
+                <div class="progress-fill" id="progress-fill"></div>
+            </div>
+            
+            <div class="content onboarding-content" id="onboarding-content">
+                <!-- Dynamic content loaded by JS -->
+            </div>
+            
+            <div class="onboarding-footer">
+                <button class="btn btn-primary btn-full" id="onboarding-continue" onclick="handleNext()">
+                    Continue
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M9 18l6-6-6-6"/>
+                    </svg>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/core.js"></script>
+    <script src="js/onboarding.js"></script>
+</body>
+</html>
