@@ -1,0 +1,390 @@
+/* Dashboard Screen Specific Styles */
+.dashboard-screen {
+    /* rely on runtime helper and app-container padding; keep a small gap for elements */
+    padding-bottom: 16px;
+}
+
+.header-section {
+    padding: 20px 16px 16px;
+}
+
+.search-section {
+    padding: 0 16px 16px;
+}
+
+.search-bar {
+    position: relative;
+}
+
+.search-icon {
+    position: absolute;
+    left: 16px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 20px;
+    height: 20px;
+    color: #9CA3AF;
+}
+
+.search-bar input {
+    width: 100%;
+    height: 44px;
+    padding-left: 44px;
+    padding-right: 12px;
+    background: #F5F7FA;
+    border: none;
+    border-radius: 10px;
+    font-size: 15px;
+    outline: none;
+}
+
+.search-bar input:focus {
+    box-shadow: 0 0 0 2px #6B8CAE;
+}
+
+.section {
+    padding: 0 16px 20px;
+}
+
+.section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+}
+
+.section-header h2 {
+    font-size: 18px;
+    font-weight: 500;
+    color: #2C3E50;
+}
+
+.see-all {
+    color: #6B8CAE;
+    font-size: 14px;
+    text-decoration: none;
+}
+
+.see-all:hover {
+    text-decoration: underline;
+}
+
+/* Horizontal Scroll */
+.horizontal-scroll {
+    display: flex;
+    gap: 12px;
+    overflow-x: auto;
+    padding-bottom: 6px;
+    margin: 0 -16px;
+    padding-left: 16px;
+    padding-right: 16px;
+}
+
+.horizontal-scroll::-webkit-scrollbar {
+    height: 4px;
+}
+
+.horizontal-scroll::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.horizontal-scroll::-webkit-scrollbar-thumb {
+    background: #E5E7EB;
+    border-radius: 2px;
+}
+
+/* Place Card */
+.place-card {
+    min-width: 220px;
+    background: white;
+    border: 1px solid #E5E7EB;
+    border-radius: 12px;
+    overflow: hidden;
+    flex-shrink: 0;
+    cursor: pointer;
+    touch-action: manipulation;
+}
+
+.place-image {
+    height: 140px;
+    background: linear-gradient(135deg, #6B8CAE 0%, #8BA8C7 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+}
+
+.place-image img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.place-image svg {
+    width: 44px;
+    height: 44px;
+    color: white;
+    opacity: 0.5;
+}
+
+.place-info {
+    padding: 12px;
+}
+
+.place-info h3 {
+    font-size: 15px;
+    font-weight: 500;
+    color: #2C3E50;
+    margin-bottom: 4px;
+}
+
+.place-info p {
+    font-size: 14px;
+    color: #6B7280;
+}
+
+/* Grid Layout */
+.grid-2 {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+}
+
+/* Destination Card */
+.destination-card {
+    background: white;
+    border: 1px solid #E5E7EB;
+    border-radius: 16px;
+    overflow: hidden;
+    cursor: pointer;
+    touch-action: manipulation;
+}
+
+@media (hover: hover) and (pointer: fine) {
+    .place-card:hover,
+    .destination-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 18px rgba(44, 62, 80, 0.08);
+        transition: transform 0.2s, box-shadow 0.2s;
+    }
+}
+
+.destination-image {
+    height: 110px;
+    background: linear-gradient(135deg, #6B8CAE 0%, #8BA8C7 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+}
+
+.destination-image img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.destination-image svg {
+    width: 40px;
+    height: 40px;
+    color: white;
+    opacity: 0.5;
+}
+
+.destination-info {
+    padding: 10px;
+}
+
+.destination-info h3 {
+    font-size: 13px;
+    font-weight: 500;
+    color: #2C3E50;
+    margin-bottom: 2px;
+}
+
+.destination-info p {
+    font-size: 11px;
+    color: #6B7280;
+}
+
+/* Floating Chat Button */
+.floating-chat-btn {
+    position: fixed;
+    /* keep floating button slightly above the centered pill nav; use runtime overlay height when available */
+    bottom: calc(var(--bottom-overlay-height, var(--nav-height)) + env(safe-area-inset-bottom) + 18px);
+    right: 16px;
+    width: 48px;
+    height: 48px;
+    background: #6B8CAE;
+    border: none;
+    border-radius: 50%;
+    box-shadow: 0 6px 18px rgba(107, 140, 174, 0.16);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.2s;
+    z-index: 10001;
+    text-decoration: none;
+}
+
+/* On larger screens keep floating button placement less intrusive */
+@media (min-width: 600px) {
+    .dashboard-screen { padding-bottom: 24px; }
+    .floating-chat-btn {
+        bottom: 24px;
+        right: 24px;
+    }
+}
+
+.floating-chat-btn:hover {
+    background: #5A7A9A;
+}
+
+.floating-chat-btn svg {
+    width: 24px;
+    height: 24px;
+    color: white;
+}
+
+.destination-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 12000;
+    display: none;
+}
+
+.destination-modal.open {
+    display: block;
+}
+
+.destination-modal-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.45);
+}
+
+.destination-modal-panel {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: min(92vw, 430px);
+    max-height: 86vh;
+    overflow: auto;
+    background: #fff;
+    border-radius: 16px;
+    padding: 14px;
+    box-shadow: 0 18px 32px rgba(2, 6, 23, 0.25);
+}
+
+.destination-modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.destination-modal-header h3 {
+    font-size: 18px;
+    color: #1f2937;
+}
+
+.destination-close-btn {
+    border: 0;
+    background: transparent;
+    font-size: 28px;
+    line-height: 1;
+    color: #64748b;
+    cursor: pointer;
+    padding: 4px 8px;
+}
+
+.destination-subtitle {
+    color: #64748b;
+    margin-top: 2px;
+    font-size: 13px;
+}
+
+.destination-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+}
+
+.destination-tags .tag {
+    font-size: 11px;
+    color: #0f766e;
+    background: #ecfeff;
+    border: 1px solid #a5f3fc;
+    padding: 4px 8px;
+    border-radius: 999px;
+}
+
+.destination-map {
+    margin-top: 10px;
+    height: 180px;
+    border-radius: 12px;
+    border: 1px solid #e5e7eb;
+    background: #f8fafc;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #64748b;
+    font-size: 12px;
+}
+
+.destination-meta-grid {
+    margin-top: 12px;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+}
+
+.meta-card {
+    border: 1px solid #e5e7eb;
+    border-radius: 12px;
+    padding: 10px;
+    background: #f8fafc;
+}
+
+.meta-label {
+    display: block;
+    font-size: 11px;
+    color: #64748b;
+    margin-bottom: 4px;
+}
+
+.meta-card strong {
+    font-size: 13px;
+    color: #0f172a;
+}
+
+.destination-actions {
+    margin-top: 12px;
+}
+
+.destination-actions .btn {
+    width: 100%;
+    min-height: 44px;
+}
+
+@media (max-width: 600px) {
+    .destination-modal-panel {
+        left: 0;
+        right: 0;
+        top: auto;
+        bottom: 0;
+        transform: none;
+        width: 100%;
+        max-height: 84vh;
+        border-radius: 16px 16px 0 0;
+        padding: 14px 14px calc(14px + env(safe-area-inset-bottom));
+    }
+
+    .place-card {
+        min-width: 200px;
+    }
+}

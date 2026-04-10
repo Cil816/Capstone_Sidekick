@@ -1,0 +1,11 @@
+{
+  "appId": "com.sidekick.app",
+  "appName": "Sidekick",
+  "webDir": "www",
+  "plugins": {
+    "Keyboard": {
+      "resize": "body",
+      "resizeOnFullScreen": true
+    }
+  }
+}

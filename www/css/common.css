@@ -1,0 +1,513 @@
+/* Reset and Base Styles */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+/* Base page sizing: prevent horizontal scroll and ensure full-height */
+/* Ensure page fills viewport and no horizontal scroll */
+html, body {
+    height: 100%;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    overflow-x: hidden;
+    /* Use dynamic viewport height for mobile keyboards */
+    height: 100dvh;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    font-size: 16px;
+    line-height: 1.5;
+    color: #2C3E50;
+    background-color: #ffffff;
+}
+
+:root {
+    --nav-height: 52px;
+}
+
+.app-container {
+    width: 100%;
+    max-width: 100%;
+    display: flex;
+    flex-direction: column;
+    /* padding-bottom equals runtime overlay height (nav/input/footer) + safe area + small gap */
+    padding: 0 8px calc(var(--bottom-overlay-height, var(--nav-height)) + env(safe-area-inset-bottom)) 8px;
+    margin: 0 auto;
+    /* Use dynamic viewport height to account for mobile keyboards */
+    min-height: calc(100dvh - (var(--bottom-overlay-height, var(--nav-height)) + env(safe-area-inset-bottom)));
+    background: white;
+    position: relative;
+    max-height: 100dvh;
+    overflow: hidden;
+}
+
+/* Screen Container */
+.screen {
+    /* main content expands to fill available space */
+    flex: 1 1 auto;
+    /* allow flex children to control height and prevent double-viewport calculations that cause overflow */
+    min-height: 0;
+    background: white;
+}
+
+/* Buttons */
+.btn {
+    padding: 12px 24px;
+    border-radius: 12px;
+    border: none;
+    font-size: 16px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+}
+
+.btn-primary {
+    background: #6B8CAE;
+    color: white;
+}
+
+.btn-primary:hover {
+    background: #5A7A9A;
+}
+
+.btn-primary:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.btn-outline {
+    background: transparent;
+    color: #6B8CAE;
+    border: 2px solid #6B8CAE;
+}
+
+.btn-outline:hover {
+    background: #F5F7FA;
+}
+
+.btn-full {
+    width: 100%;
+}
+
+.btn svg {
+    width: 20px;
+    height: 20px;
+}
+
+/* Ghost / minimal button */
+.btn-ghost {
+    background: transparent;
+    color: #374151;
+    border: none;
+    padding: 8px 10px;
+    border-radius: 8px;
+}
+
+/* Reminder card standardized appearance used by alerts */
+.reminder {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px;
+    border-radius: 10px;
+    border: 1px solid #E5E7EB;
+    background: #fff;
+    margin-top: 8px;
+}
+.reminder .meta { color: #6B7280; font-size: 13px }
+.reminder .reminder-left { display: flex; flex-direction: column; gap:6px }
+.reminder .reminder-actions { display:flex; gap:8px; align-items:center }
+
+/* Header title tweaks for consistent alignment */
+.header h1, .header-top h1 {
+    font-size: 18px;
+    font-weight: 600;
+    margin: 0;
+    color: #2C3E50;
+}
+
+.header-top .btn-ghost { color: #6B7280 }
+
+/* Header */
+.header {
+    padding: 12px 12px 12px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.back-btn {
+    padding: 8px;
+    margin-left: -8px;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    border-radius: 8px;
+    transition: background 0.2s;
+}
+
+.back-btn:hover {
+    background: #F5F7FA;
+}
+
+.back-btn svg {
+    width: 24px;
+    height: 24px;
+    color: #374151;
+}
+
+/* Content */
+.content {
+    flex: 1;
+    padding: 0 24px;
+    overflow-y: auto;
+    /* Allow scrolling when keyboard appears */
+    -webkit-overflow-scrolling: touch;
+    min-height: 0;
+}
+
+.screen-title {
+    font-size: 18px;
+    font-weight: 600;
+    color: #2C3E50;
+    margin-bottom: 6px;
+}
+
+.screen-subtitle {
+    font-size: 16px;
+    color: #6B7280;
+    margin-bottom: 32px;
+}
+
+/* Forms */
+.form {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    width: 100%;
+}
+
+.form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.form-group label {
+    font-size: 16px;
+    font-weight: 500;
+    color: #374151;
+}
+
+.form-group input {
+    /* Ensure inputs scroll into view on focus for keyboard visibility */
+    scroll-margin: 12px;
+}
+
+.form-group input {
+    height: 48px;
+    padding: 0 16px;
+    background: #F5F7FA;
+    border: 1px solid #E5E7EB;
+    border-radius: 12px;
+    font-size: 16px;
+    outline: none;
+    transition: all 0.2s;
+}
+
+.form-group input:focus {
+    border-color: #6B8CAE;
+    box-shadow: 0 0 0 3px rgba(107, 140, 174, 0.1);
+}
+
+/* Bottom Navigation */
+.bottom-nav {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    width: 100%;
+    margin: 0;
+    height: var(--nav-height);
+    background: #ffffff;
+    border-top: 1px solid #E5E7EB;
+    display: flex;
+    align-items: center;
+    justify-content: space-around;
+    padding: 0 16px;
+    z-index: 1000;
+    box-shadow: 0 -6px 20px rgba(44,62,80,0.05);
+}
+
+/* Larger screens: center container and limit width */
+@media (min-width: 600px) {
+    .app-container { max-width: 520px; }
+    .bottom-nav { max-width: 520px; margin: 0 auto; left: 0; right: 0; }
+}
+
+/* Facebook-style fixed bottom navigation (full-width, always visible) */
+.bottom-nav.overlay {
+    /* Centered floating pill nav (reference: Facebook mobile) */
+    position: fixed;
+    left: 50%;
+    /* Start with no vertical offset; translateY toggled by JS via classes */
+    transform: translateX(-50%) translateY(0);
+    /* Anchor flush to the bottom edge so the nav occupies the lowest point of the viewport */
+    bottom: 0;
+    width: calc(100% - 40px);
+    max-width: 420px;
+    height: var(--nav-height);
+    padding: 6px 8px;
+    border-radius: 12px;
+    background: #ffffff;
+    box-shadow: 0 10px 30px rgba(15,23,42,0.08);
+    z-index: 10000;
+    backdrop-filter: blur(6px);
+    border-top: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-around;
+    transition: transform 320ms cubic-bezier(.22,.9,.35,1), opacity 240ms ease;
+}
+
+/* Hidden/visible states toggled by JS (scroll down -> hidden) */
+.bottom-nav.overlay.navbar-hidden {
+    transform: translateX(-50%) translateY(140%);
+    opacity: 0;
+    pointer-events: none;
+}
+.bottom-nav.overlay.navbar-visible {
+    transform: translateX(-50%) translateY(0);
+    opacity: 1;
+    pointer-events: auto;
+}
+
+/* Ensure nav items are evenly spaced and icon-first like Facebook */
+.bottom-nav .nav-item {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    text-decoration: none;
+    color: #6B7280;
+    padding: 6px 4px;
+    transition: color 160ms ease, background 160ms ease;
+}
+
+.bottom-nav .nav-item svg {
+    width: 22px;
+    height: 22px;
+}
+
+.bottom-nav .nav-item span {
+    font-size: 11px;
+    line-height: 1;
+    color: inherit;
+}
+
+.bottom-nav .nav-item.active {
+    color: #1877F2;
+}
+
+.bottom-nav .nav-item.active::after {
+    content: '';
+    display: block;
+    width: 6px;
+    height: 6px;
+    background: #1877F2;
+    border-radius: 50%;
+    margin-top: 6px;
+}
+
+/* Small screens: icons-only to save space */
+@media (max-width: 360px) {
+    .bottom-nav .nav-item span { display: none; }
+}
+
+/* Slightly larger compact breakpoint for five-item navs */
+@media (max-width: 420px) {
+    .bottom-nav .nav-item span { display: none; }
+}
+
+/* Form row helper: wrap fields and keep buttons visible */
+.form-row {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.form-row input,
+.form-row select,
+.form-row textarea {
+    flex: 1 1 160px;
+    min-width: 120px;
+}
+
+.form-row .btn {
+    flex: 0 0 auto;
+    margin-top: 6px;
+}
+
+/* Reduce button padding on very small screens to avoid overflow */
+@media (max-width: 360px) {
+    .btn { padding: 8px 10px; font-size: 14px; }
+}
+
+/* Constrain app width for mobile-first layout and center on larger screens */
+@media (min-width: 400px) {
+    .app-container { max-width: 430px; }
+}
+
+/* Prevent overlap when keyboard opens on mobile by keeping nav above content */
+html, body { -webkit-tap-highlight-color: transparent; }
+
+/* Top variant: place the same overlay at the top of the viewport */
+.bottom-nav.overlay.top {
+    top: 16px;
+    bottom: auto;
+    transform: translateX(-50%);
+    box-shadow: 0 10px 30px rgba(44,62,80,0.08);
+}
+
+/* When the overlay nav is at the top, ensure page content isn't hidden behind it by default */
+.app-container.with-top-nav {
+    padding-top: calc(64px + 24px);
+}
+
+/* Ensure nav icons and labels remain visible on scroll */
+.bottom-nav.overlay .nav-item { color: #6B7280; }
+
+/* Active state for nav items */
+.bottom-nav .nav-item.active {
+    color: #6B8CAE;
+}
+.bottom-nav .nav-item.active svg {
+    stroke: #6B8CAE;
+}
+
+/* (Removed hidden state to keep overlay nav always visible while scrolling) */
+
+/* Add safe area inset for devices with home indicator */
+/* remove redundant body padding to avoid double spacing below page */
+/* body { padding-bottom: env(safe-area-inset-bottom); } */
+
+.nav-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    color: #9CA3AF;
+    transition: color 0.2s;
+    text-decoration: none;
+}
+
+.nav-item svg {
+    width: 24px;
+    height: 24px;
+}
+
+.nav-item span {
+    font-size: 12px;
+}
+
+.nav-item.active {
+    color: #6B8CAE;
+}
+
+/* --- Animations --- */
+@keyframes pageIn {
+    from {
+        opacity: 0;
+        transform: translateY(8px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes cardIn {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes messageIn {
+    from {
+        opacity: 0;
+        transform: translateY(6px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.screen {
+    animation: pageIn 320ms ease both;
+}
+
+/* Lightweight rendering mode for constrained mobile devices */
+.perf-lite .screen {
+    animation: none;
+}
+
+.perf-lite .btn,
+.perf-lite .nav-item,
+.perf-lite .bottom-nav.overlay {
+    transition: none;
+}
+
+.perf-lite .bottom-nav.overlay {
+    backdrop-filter: none;
+    box-shadow: 0 2px 8px rgba(15, 23, 42, 0.06);
+}
+
+.perf-lite .floating-chat-btn,
+.perf-lite .destination-modal-panel,
+.perf-lite .place-card,
+.perf-lite .destination-card {
+    box-shadow: none;
+}
+
+/* --- Auth messages --- */
+.auth-error {
+    margin-top: 14px;
+    padding: 10px 12px;
+    border-radius: 12px;
+    background: #FEF2F2;
+    color: #B91C1C;
+    border: 1px solid #FECACA;
+    font-size: 14px;
+}
+
+/* Responsive adjustments */
+@media (max-width: 448px) {
+    .app-container {
+        max-width: 100%;
+    }
+
+    .bottom-nav {
+        max-width: 100%;
+    }
+}
