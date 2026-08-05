@@ -33,11 +33,6 @@ let _selectedPlace = null;
     });
   }
 
-});
-    if (typeof window.initMap === 'function') return window.initMap();
-    if (typeof initMap === 'function') return initMap();
-  }
-}
 
 // Called by Google Maps callback or invoked if google.maps already present
 window.initMap = function(){
