@@ -472,3 +472,4 @@ document.addEventListener("DOMContentLoaded", () => {
 window.sendMessage = sendMessage;
 window.handleKeyPress = handleKeyPress;
 window.clearChat = clearChat;
+
