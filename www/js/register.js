@@ -81,29 +81,15 @@ async function handleRegister(event) {
       submitBtn.textContent = "Creating account...";
     }
 
-    const users = window.SidekickCore.getUsers();
-    const existing = users.find((u) => u.email === email);
-    if (existing) {
-      if (errEl) {
-        errEl.textContent = "This email is already registered. Try logging in.";
-        errEl.removeAttribute("hidden");
-      }
-      return;
-    }
-
-    const passwordHash = await window.SidekickCore.hashPasswordSHA256(password);
-    users.push({
-      email,
-      name,
-      passwordHash,
-      createdAt: Date.now(),
+    const user = await window.SidekickCore.apiRequest("/api/register", {
+      method: "POST",
+      body: JSON.stringify({ name, email, password }),
     });
-    window.SidekickCore.setUsers(users);
 
     // Auto-login after registration.
     window.SidekickCore.setAuthSession({
       email,
-      name,
+      name: user.name || name,
       loggedInAt: Date.now(),
     });
 

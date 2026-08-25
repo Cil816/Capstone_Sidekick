@@ -70,28 +70,15 @@ async function handleLogin(event) {
       submitBtn.textContent = "Logging in...";
     }
 
-    const users = window.SidekickCore.getUsers();
-    const user = users.find((u) => u.email === email);
-    if (!user) {
-      if (errEl) {
-        errEl.textContent = "Account not found. Please register first.";
-        errEl.removeAttribute("hidden");
-      }
-      return;
-    }
-
-    const passwordHash = await window.SidekickCore.hashPasswordSHA256(password);
-    if (passwordHash !== user.passwordHash) {
-      if (errEl) {
-        errEl.textContent = "Incorrect password. Please try again.";
-        errEl.removeAttribute("hidden");
-      }
-      return;
-    }
+    const result = await window.SidekickCore.apiRequest("/api/login", {
+      method: "POST",
+      body: JSON.stringify({ email, password }),
+    });
+    const user = result.user;
 
     window.SidekickCore.setAuthSession({
       email,
-      name: user.name,
+      name: user?.name || "",
       loggedInAt: Date.now(),
     });
 

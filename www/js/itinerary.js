@@ -1,39 +1,6 @@
 // Google Maps selected place storage
 let _selectedPlace = null;
 
-
-  // Remove All button handler (inside DOMContentLoaded so `email` is available)
-  const removeAllBtn = document.getElementById('remove-all-itinerary');
-  if (removeAllBtn) {
-    removeAllBtn.addEventListener('click', (e) => {
-      e.preventDefault();
-      if (!confirm('Remove your entire itinerary? This cannot be undone.')) return;
-      try {
-        const map = window.SidekickCore.getItineraryByEmail();
-        delete map[email];
-        window.SidekickCore.setItineraryByEmail(map);
-        // also remove itinerary-derived reminders for this email
-        try {
-          const rem = window.SidekickCore.getRemindersFor(email) || [];
-          const kept = rem.filter(r => !(r.type === 'Itinerary' || typeof r.parentDueAt !== 'undefined'));
-          window.SidekickCore && window.SidekickCore.addReminderFor; // noop to avoid linter
-          // overwrite reminders storage directly via internal setter
-          const all = JSON.parse(localStorage.getItem('sidekick.remindersByEmail.v1') || '{}');
-          all[email] = kept;
-          localStorage.setItem('sidekick.remindersByEmail.v1', JSON.stringify(all));
-          document.dispatchEvent(new CustomEvent('sidekick:reminders-updated', { detail: { email } }));
-        } catch (err2) {}
-      } catch (err) {}
-      // update UI to show builder and empty state
-      const container = document.getElementById('itinerary-content');
-      if (container) {
-        container.innerHTML = `<div id="no-itinerary-message" style="padding:24px;color:#6B7280">You don't have an itinerary yet. Use the builder above to create one.</div><button class="add-activity-btn" id="add-activity-btn" type="button" style="display:none">+ Add Activity</button>`;
-      }
-      showBuilder(true);
-    });
-  }
-
-
 // Called by Google Maps callback or invoked if google.maps already present
 window.initMap = function(){
   try{
@@ -64,6 +31,12 @@ window.initMap = function(){
     console.warn('initMap error', e);
   }
 };
+
+function initMapIfAvailable() {
+  if (window.google?.maps && typeof window.initMap === 'function') {
+    window.initMap();
+  }
+}
 
 // initialize maps if script already loaded
 setTimeout(initMapIfAvailable, 300);
@@ -364,6 +337,33 @@ document.addEventListener("DOMContentLoaded", () => {
   function showBuilder(show = true) {
     if (!builderEl) return;
     builderEl.style.display = show ? 'block' : 'none';
+  }
+
+  const removeAllBtn = document.getElementById('remove-all-itinerary');
+  if (removeAllBtn) {
+    removeAllBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (!window.confirm('Remove your entire itinerary? This cannot be undone.')) return;
+      try {
+        const map = window.SidekickCore.getItineraryByEmail();
+        delete map[email];
+        window.SidekickCore.setItineraryByEmail(map);
+        const all = JSON.parse(localStorage.getItem('sidekick.remindersByEmail.v1') || '{}');
+        all[email] = (all[email] || []).filter((reminder) => (
+          reminder.type !== 'Itinerary' && typeof reminder.parentDueAt === 'undefined'
+        ));
+        localStorage.setItem('sidekick.remindersByEmail.v1', JSON.stringify(all));
+        document.dispatchEvent(new CustomEvent('sidekick:reminders-updated', { detail: { email } }));
+      } catch (error) {
+        console.error('Unable to remove itinerary', error);
+      }
+
+      const container = document.getElementById('itinerary-content');
+      if (container) {
+        container.innerHTML = `<div id="no-itinerary-message" style="padding:24px;color:#6B7280">You don't have an itinerary yet. Use the builder above to create one.</div><button class="add-activity-btn" id="add-activity-btn" type="button" style="display:none">+ Add Activity</button>`;
+      }
+      showBuilder(true);
+    });
   }
 
   // If user already has an itinerary, show it; otherwise show the builder so user opts in.

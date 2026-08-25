@@ -24,9 +24,11 @@ public class MainActivity extends BridgeActivity {
 		settings.setJavaScriptEnabled(true);
 		settings.setDomStorageEnabled(true);
 		settings.setDatabaseEnabled(true);
+		settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
 
 		Log.d(TAG, "WebView configured: js=" + settings.getJavaScriptEnabled()
 				+ ", domStorage=" + settings.getDomStorageEnabled()
-				+ ", database=" + settings.getDatabaseEnabled());
+				+ ", database=" + settings.getDatabaseEnabled()
+				+ ", mixedContent=" + settings.getMixedContentMode());
 	}
 }

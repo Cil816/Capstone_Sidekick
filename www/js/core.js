@@ -140,6 +140,23 @@ async function hashPasswordSHA256(password) {
   return h1.toString(16).padStart(8, "0") + h2.toString(16).padStart(8, "0");
 }
 
+function getApiBaseUrl() {
+  const isAndroidApp = /Android/i.test(navigator.userAgent) && window.location.protocol === "https:";
+  return isAndroidApp ? "http://10.0.2.2:3001" : "http://localhost:3001";
+}
+
+async function apiRequest(path, options = {}) {
+  const response = await fetch(`${getApiBaseUrl()}${path}`, {
+    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+    ...options,
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.error || "The server request failed.");
+  }
+  return payload;
+}
+
 function redirect(path) {
   window.location.href = path;
 }
@@ -705,6 +722,7 @@ window.SidekickCore = {
   SIDEKICK_KEYS,
   escapeHtml,
   hashPasswordSHA256,
+  apiRequest,
   getUsers,
   setUsers,
   getAuthSession,
