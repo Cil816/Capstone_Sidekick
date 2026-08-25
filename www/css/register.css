@@ -13,3 +13,46 @@
 .footer-text a:hover {
     text-decoration: underline;
 }
+
+.terms-check {
+    display: flex;
+    gap: 9px;
+    align-items: flex-start;
+    color: #4B5563;
+    font-size: 13px;
+    line-height: 1.45;
+}
+
+.terms-check input {
+    margin-top: 3px;
+    accent-color: #6B8CAE;
+}
+
+.terms-link {
+    border: 0;
+    padding: 0;
+    color: #6B8CAE;
+    background: transparent;
+    text-decoration: underline;
+    cursor: pointer;
+    font: inherit;
+}
+
+.terms-dialog {
+    max-width: 420px;
+    border: 0;
+    border-radius: 12px;
+    padding: 24px;
+    color: #27364B;
+    line-height: 1.55;
+}
+
+.terms-dialog::backdrop { background: rgb(16 24 40 / 45%); }
+.terms-dialog-header { display: flex; justify-content: space-between; align-items: center; }
+.terms-dialog h2 { margin: 0; font-size: 21px; }
+.terms-close { border: 0; background: transparent; font-size: 26px; cursor: pointer; color: #6B7280; }
+
+.resend-button {
+    display: block;
+    margin: 20px auto 0;
+}

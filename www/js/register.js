@@ -40,9 +40,10 @@ async function handleRegister(event) {
   const nameEl = document.getElementById("register-name");
   const emailEl = document.getElementById("register-email");
   const passwordEl = document.getElementById("register-password");
+  const termsEl = document.getElementById("terms-accepted");
   const submitBtn = event?.target?.querySelector?.('button[type="submit"]');
 
-  if (!nameEl || !emailEl || !passwordEl) {
+  if (!nameEl || !emailEl || !passwordEl || !termsEl) {
     console.error("Missing form elements");
     return false;
   }
@@ -58,6 +59,22 @@ async function handleRegister(event) {
   const name = String(nameEl.value || "").trim();
   const email = window.SidekickCore.normalizeEmail(emailEl.value);
   const password = String(passwordEl.value || "");
+
+  if (!emailEl.validity.valid || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    if (errEl) {
+      errEl.textContent = "Please enter a valid email address.";
+      errEl.removeAttribute("hidden");
+    }
+    return;
+  }
+
+  if (!termsEl.checked) {
+    if (errEl) {
+      errEl.textContent = "You must agree to the Terms and Conditions to register.";
+      errEl.removeAttribute("hidden");
+    }
+    return;
+  }
 
   if (!name || !email || !password) {
     if (errEl) {
@@ -83,27 +100,15 @@ async function handleRegister(event) {
 
     const user = await window.SidekickCore.apiRequest("/api/register", {
       method: "POST",
-      body: JSON.stringify({ name, email, password }),
+      body: JSON.stringify({ name, email, password, termsAccepted: true }),
     });
 
-    // Auto-login after registration.
-    window.SidekickCore.setAuthSession({
-      email,
-      name: user.name || name,
-      loggedInAt: Date.now(),
-    });
-
-    // After auto-login, send users to onboarding only if they have no saved prefs.
-    const prefs = window.SidekickCore.getPreferences();
-    logRegisterDebug("Registration success, redirecting", {
-      email,
-      destination: prefs ? "dashboard.html" : "onboarding.html",
-    });
-    window.location.href = prefs ? "dashboard.html" : "onboarding.html";
+    logRegisterDebug("Registration success, redirecting to verification", { email });
+    window.location.href = `verify.html?email=${encodeURIComponent(user.email || email)}`;
   } catch (e) {
     console.error(e);
     if (errEl) {
-      errEl.textContent = "Registration failed. Please try again.";
+      errEl.textContent = e.message || "Registration failed. Please try again.";
       errEl.removeAttribute("hidden");
     }
   } finally {
@@ -130,6 +135,10 @@ function bindRegisterForm() {
   });
 
   logRegisterDebug("Form listener bound");
+
+  const dialog = document.getElementById("terms-dialog");
+  document.getElementById("terms-link")?.addEventListener("click", () => dialog?.showModal());
+  document.getElementById("terms-close")?.addEventListener("click", () => dialog?.close());
 }
 
 window.addEventListener("error", function (event) {

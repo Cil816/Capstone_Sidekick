@@ -21,7 +21,15 @@ DB_USERNAME=sa
 DB_PASSWORD=your_password_here
 DB_PORT=1433
 PORT=3001
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_SECURE=false
+SMTP_USER=your_smtp_username
+SMTP_PASSWORD=your_smtp_password
+SMTP_FROM=no-reply@example.com
 ```
+
+Run `schema.sql` once against `sidekick_db` before starting the backend. The SMTP settings are required for registration verification emails.
 
 ## Run locally
 
@@ -33,6 +41,8 @@ npm start
 
 - GET /health
 - POST /api/register
+- POST /api/verify-otp
+- POST /api/resend-otp
 - POST /api/login
 - GET /api/preferences/:email
 - PUT /api/preferences/:email

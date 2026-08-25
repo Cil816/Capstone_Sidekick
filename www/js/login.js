@@ -91,7 +91,7 @@ async function handleLogin(event) {
   } catch (e) {
     console.error(e);
     if (errEl) {
-      errEl.textContent = "Login failed. Please try again.";
+      errEl.textContent = e.message || "Login failed. Please try again.";
       errEl.removeAttribute("hidden");
     }
   } finally {

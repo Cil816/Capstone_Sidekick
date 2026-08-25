@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Sidekick AI - Verify email</title>
+  <link rel="stylesheet" href="css/common.css">
+  <link rel="stylesheet" href="css/login.css">
+  <link rel="stylesheet" href="css/register.css">
+</head>
+<body>
+  <div class="app-container">
+    <div class="screen">
+      <div class="header"><a href="register.html" class="back-btn" aria-label="Back to registration">&#8592;</a></div>
+      <div class="content">
+        <h1 class="screen-title">Verify your email</h1>
+        <p class="screen-subtitle">Enter the 6-digit code we sent to <strong id="verify-email"></strong>.</p>
+        <form class="form" id="verify-form">
+          <div class="form-group">
+            <label for="verify-otp">Verification code</label>
+            <input type="text" id="verify-otp" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required>
+          </div>
+          <button type="submit" class="btn btn-primary btn-full">Verify email</button>
+        </form>
+        <button type="button" class="terms-link resend-button" id="resend-otp">Resend code</button>
+        <div class="auth-error" id="auth-error" role="alert" aria-live="polite" hidden></div>
+      </div>
+    </div>
+  </div>
+  <script src="js/core.js"></script>
+  <script src="js/verify.js"></script>
+</body>
+</html>
