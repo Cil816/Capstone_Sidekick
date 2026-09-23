@@ -52,6 +52,352 @@ function normalizeEmail(email) {
   return String(email || '').trim().toLowerCase();
 }
 
+function getAiApiKey() {
+  return String(process.env.AI_API_KEY || process.env.GEMINI_API_KEY || '').trim();
+}
+
+function getKnownDestinationCatalog() {
+  return [
+    'Banaue Rice Terraces',
+    'Batangas',
+    'Boracay',
+    'Cebu',
+    'Coron',
+    'El Nido',
+    'Intramuros',
+    'Makati',
+    'Palawan',
+    'Rizal Park',
+    'Sagada',
+    'Siargao',
+    'Tagaytay',
+    'Taal Volcano',
+    'Bohol',
+    'Davao',
+    'Ilocos Norte',
+  ];
+}
+
+async function getUserProfileContext(email) {
+  if (!email) {
+    return {
+      travelTypes: [],
+      interests: [],
+      preferredPlaces: [],
+      recentTrips: [],
+    };
+  }
+
+  const pool = await getPool();
+  const userResult = await pool.query`SELECT user_id FROM dbo.users WHERE email = ${normalizeEmail(email)}`;
+  if (!userResult.recordset.length) {
+    return {
+      travelTypes: [],
+      interests: [],
+      preferredPlaces: [],
+      recentTrips: [],
+    };
+  }
+
+  const userId = userResult.recordset[0].user_id;
+
+  const [travelTypes, interests, preferredPlaces, recentTrips] = await Promise.all([
+    pool.query`
+      SELECT ts.style_name AS name
+      FROM dbo.user_travel_styles uts
+      JOIN dbo.travel_styles ts ON uts.style_id = ts.style_id
+      WHERE uts.user_id = ${userId}
+    `,
+    pool.query`
+      SELECT i.interest_name AS name
+      FROM dbo.user_interests ui
+      JOIN dbo.interests i ON ui.interest_id = i.interest_id
+      WHERE ui.user_id = ${userId}
+    `,
+    pool.query`
+      SELECT pp.place_name AS name
+      FROM dbo.user_preferred_places upp
+      JOIN dbo.preferred_places pp ON upp.place_id = pp.place_id
+      WHERE upp.user_id = ${userId}
+    `,
+    pool.query`
+      SELECT TOP 5 trip_title, destination, start_date, end_date, budget, status
+      FROM dbo.trips
+      WHERE user_id = ${userId}
+      ORDER BY created_at DESC
+    `,
+  ]);
+
+  return {
+    travelTypes: (travelTypes.recordset || []).map((row) => row.name),
+    interests: (interests.recordset || []).map((row) => row.name),
+    preferredPlaces: (preferredPlaces.recordset || []).map((row) => row.name),
+    recentTrips: (recentTrips.recordset || []).map((row) => ({
+      trip_title: row.trip_title,
+      destination: row.destination,
+      start_date: row.start_date,
+      end_date: row.end_date,
+      budget: row.budget,
+      status: row.status,
+    })),
+  };
+}
+
+function extractJsonObject(text) {
+  if (!text) return null;
+  const trimmed = String(text).trim();
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  const candidate = fenced ? fenced[1] : trimmed;
+  try {
+    return JSON.parse(candidate);
+  } catch (error) {
+    const firstBrace = candidate.indexOf('{');
+    const lastBrace = candidate.lastIndexOf('}');
+    if (firstBrace !== -1 && lastBrace > firstBrace) {
+      try {
+        return JSON.parse(candidate.slice(firstBrace, lastBrace + 1));
+      } catch (innerError) {
+        return null;
+      }
+    }
+    return null;
+  }
+}
+
+function sanitizePlanText(text) {
+  return String(text || '').replace(/```json|```/gi, '').trim();
+}
+
+function createItineraryFallback(userProfile, prompt) {
+  const destination = userProfile?.preferredPlaces?.[0] || 'Bohol';
+  const budgetLabel = userProfile?.budget || 'Mid-Range';
+  const dayCount = Number(prompt?.dayCount || 3);
+  const itinerary = [];
+
+  for (let dayIndex = 0; dayIndex < dayCount; dayIndex += 1) {
+    const dayNumber = dayIndex + 1;
+    const activities = [
+      {
+        id: `fallback-${dayNumber}-1`,
+        timeLabel: 'Morning',
+        title: `Explore ${destination}`,
+        location: `${destination}, Philippines`,
+        note: 'Start the day with an easy sightseeing route and a local meal.',
+        transportMode: 'Jeepney / Grab',
+        travelMinutes: 25,
+        travelDistanceKm: 12,
+        estimatedActivityCostPhp: 450,
+        estimatedTransportCostPhp: 240,
+        estimatedTotalCostPhp: 690,
+        dueAt: Date.now() + dayIndex * 86400000 + 9 * 3600000,
+        iso: new Date(Date.now() + dayIndex * 86400000 + 9 * 3600000).toISOString(),
+      },
+      {
+        id: `fallback-${dayNumber}-2`,
+        timeLabel: 'Afternoon',
+        title: 'Local food and scenic stops',
+        location: `${destination}, Philippines`,
+        note: 'Balance your travel day with a scenic stop and food spots that match the trip budget.',
+        transportMode: 'Tricycle',
+        travelMinutes: 18,
+        travelDistanceKm: 8,
+        estimatedActivityCostPhp: 620,
+        estimatedTransportCostPhp: 160,
+        estimatedTotalCostPhp: 780,
+        dueAt: Date.now() + dayIndex * 86400000 + 14 * 3600000,
+        iso: new Date(Date.now() + dayIndex * 86400000 + 14 * 3600000).toISOString(),
+      },
+      {
+        id: `fallback-${dayNumber}-3`,
+        timeLabel: 'Evening',
+        title: 'Relax and prepare for the next day',
+        location: `${destination}, Philippines`,
+        note: 'Keep the evening relaxed with a low-stress dinner and rest period.',
+        transportMode: 'Walk / Tricycle',
+        travelMinutes: 15,
+        travelDistanceKm: 5,
+        estimatedActivityCostPhp: 520,
+        estimatedTransportCostPhp: 120,
+        estimatedTotalCostPhp: 640,
+        dueAt: Date.now() + dayIndex * 86400000 + 18 * 3600000,
+        iso: new Date(Date.now() + dayIndex * 86400000 + 18 * 3600000).toISOString(),
+      },
+    ];
+
+    itinerary.push({
+      dayNumber,
+      dateLabel: `Day ${dayNumber}`,
+      estimatedDayCostPhp: activities.reduce((sum, activity) => sum + Number(activity.estimatedTotalCostPhp || 0), 0),
+      estimatedDayCostLowPhp: 0,
+      estimatedDayCostHighPhp: 0,
+      activities,
+    });
+  }
+
+  return {
+    itinerary,
+    meta: {
+      destination,
+      budget: budgetLabel,
+      source: 'backend-fallback',
+      generatedAt: new Date().toISOString(),
+    },
+  };
+}
+
+async function callGeminiApi({ message, contextText, systemInstruction, responseMimeType = 'text/plain' }) {
+  const apiKey = getAiApiKey();
+  if (!apiKey) {
+    throw new Error('AI_API_KEY is missing. Add your Gemini API key in backend/.env.');
+  }
+
+  const payload = {
+    contents: [
+      {
+        role: 'user',
+        parts: [{ text: `${contextText}\n\nUser request:\n${message}` }],
+      },
+    ],
+    ...(systemInstruction ? { systemInstruction: { parts: [{ text: systemInstruction }] } } : {}),
+    generationConfig: {
+      temperature: 0.6,
+      maxOutputTokens: 1200,
+      responseMimeType,
+    },
+  };
+
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${apiKey}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+
+  if (response.status === 401) {
+    throw new Error('AI authentication failed. Check the API key in backend/.env.');
+  }
+
+  if (response.status === 429) {
+    throw new Error('The AI service is rate limited. Please try again in a moment.');
+  }
+
+  if (!response.ok) {
+    throw new Error('The AI service is currently unavailable. Please try again later.');
+  }
+
+  const data = await response.json();
+  const rawText = data?.candidates?.[0]?.content?.parts?.map((part) => part.text || '').join('') || '';
+
+  if (!rawText) {
+    throw new Error('AI returned an empty response.');
+  }
+
+  return rawText.trim();
+}
+
+async function generateItineraryFromAi({ email, message, selectedDestination, profile, tripContext }) {
+  const userProfile = profile || (email ? await getUserProfileContext(email) : { travelTypes: [], interests: [], preferredPlaces: [] });
+  const destinationCatalog = getKnownDestinationCatalog();
+  const selectedDestinationName = selectedDestination?.name || selectedDestination?.destination || userProfile.preferredPlaces?.[0] || 'Batangas';
+  const destinationList = Array.from(new Set([selectedDestinationName, ...(userProfile.preferredPlaces || []), ...destinationCatalog])).slice(0, 12);
+  const contextText = [
+    'You are the Sidekick travel assistant for the Philippine travel app.',
+    'Use only practical, budget-aware, itinerary planning knowledge for local destinations and activities.',
+    `User interests: ${userProfile.interests?.join(', ') || 'not provided'}`,
+    `Travel style: ${userProfile.travelTypes?.join(', ') || 'not provided'}`,
+    `Preferred places: ${userProfile.preferredPlaces?.join(', ') || 'not provided'}`,
+    `Recent trips: ${userProfile.recentTrips?.map((trip) => `${trip.trip_title || trip.destination} (${trip.destination})`).join('; ') || 'none'}`,
+    `Selected destination context: ${selectedDestinationName}`,
+    `Available destination catalog: ${destinationList.join(', ')}`,
+    `Trip request: ${message}`,
+  ].join('\n');
+
+  const systemInstruction = `You are Sidekick AI, a Philippine travel planner. Return valid JSON only. Format: {"destination":"...","days":[{"day":1,"activities":[{"name":"...","type":"attraction|food|transport|activity","description":"...","location":"...","estimatedCost":500}]}]} . Keep costs in PHP. Use Philippine destinations and keep the plan realistic. Use the user's interests and budget when known. Do not include markdown fences. If destination is missing, infer from the user's profile or selected destination. Keep activities practical and varied.`;
+
+  const raw = await callGeminiApi({
+    message,
+    contextText,
+    systemInstruction,
+    responseMimeType: 'application/json',
+  });
+
+  const parsed = extractJsonObject(raw);
+  if (!parsed || !Array.isArray(parsed.days) || !parsed.days.length) {
+    throw new Error('The AI returned an invalid itinerary format.');
+  }
+
+  const itinerary = parsed.days.map((dayEntry, index) => ({
+    dayNumber: Number(dayEntry.day || index + 1),
+    dateLabel: `Day ${Number(dayEntry.day || index + 1)}`,
+    estimatedDayCostPhp: Array.isArray(dayEntry.activities)
+      ? dayEntry.activities.reduce((sum, activity) => sum + Number(activity.estimatedCost || 0), 0)
+      : 0,
+    estimatedDayCostLowPhp: 0,
+    estimatedDayCostHighPhp: 0,
+    activities: (dayEntry.activities || []).map((activity, activityIndex) => ({
+      id: `ai-${index + 1}-${activityIndex + 1}`,
+      timeLabel: ['Morning', 'Afternoon', 'Evening', 'Night'][activityIndex % 4] || 'Morning',
+      title: String(activity.name || 'Activity'),
+      location: String(activity.location || parsed.destination || 'Philippines'),
+      note: String(activity.description || 'This stop fits your itinerary goals.'),
+      transportMode: 'Jeepney / Grab',
+      travelMinutes: 20 + activityIndex * 10,
+      travelDistanceKm: 8 + activityIndex * 6,
+      estimatedActivityCostPhp: Number(activity.estimatedCost || 0),
+      estimatedTransportCostPhp: Math.round(Number(activity.estimatedCost || 0) * 0.28),
+      estimatedTotalCostPhp: Number(activity.estimatedCost || 0) + Math.round(Number(activity.estimatedCost || 0) * 0.28),
+      dueAt: Date.now() + index * 86400000 + activityIndex * 1800000,
+      iso: new Date(Date.now() + index * 86400000 + activityIndex * 1800000).toISOString(),
+    })),
+  }));
+
+  return {
+    itinerary,
+    meta: {
+      destination: parsed.destination || selectedDestinationName,
+      source: 'gemini-ai',
+      generatedAt: new Date().toISOString(),
+      budget: profile?.budget || 'Mid-Range',
+      interests: profile?.interests || [],
+      travelTypes: profile?.travelTypes || [],
+    },
+  };
+}
+
+async function generateChatReply({ email, message, selectedDestination, history, profile }) {
+  const userProfile = profile || (email ? await getUserProfileContext(email) : { travelTypes: [], interests: [], preferredPlaces: [] });
+  const destinationName = selectedDestination?.name || selectedDestination?.destination || userProfile.preferredPlaces?.[0] || '';
+  const contextText = [
+    'You are the Sidekick AI travel assistant for the Philippines.',
+    'Use the user profile and destination context when available and avoid asking for information the user already supplied.',
+    `User travel style: ${userProfile.travelTypes?.join(', ') || 'not provided'}`,
+    `User interests: ${userProfile.interests?.join(', ') || 'not provided'}`,
+    `Preferred places: ${userProfile.preferredPlaces?.join(', ') || 'not provided'}`,
+    `Selected destination: ${destinationName || 'not selected'}`,
+    `Conversation history: ${(history || []).slice(-6).map((item) => `${item.role}: ${item.content}`).join(' | ') || 'none'}`,
+  ].join('\n');
+
+  const systemInstruction = `You are Sidekick AI, a helpful Philippine travel planner. Answer in concise, natural language. If the user asks to generate an itinerary, propose a realistic plan and say that the app can create it. Keep the answer practical, friendly, and specific to Philippine destinations, food, beaches, attractions, and transportation. Do not reveal API keys or internal implementation details.`;
+
+  let reply = '';
+  try {
+    reply = await callGeminiApi({ message, contextText, systemInstruction, responseMimeType: 'text/plain' });
+  } catch (error) {
+    throw error;
+  }
+
+  const itineraryIntent = /(plan|itinerary|trip|travel plan|day trip|2-day|3-day|4-day)/i.test(message) && (destinationName || userProfile.preferredPlaces?.length || userProfile.interests?.length);
+  if (!itineraryIntent) {
+    return { reply: sanitizePlanText(reply) };
+  }
+
+  const generated = await generateItineraryFromAi({ email, message, selectedDestination, profile: userProfile });
+  return {
+    reply: `${sanitizePlanText(reply)}\n\nI built a structured itinerary for ${generated.meta.destination || destinationName || 'your trip'}. Open the Itinerary tab to review it.`,
+    itinerary: generated.itinerary,
+    meta: generated.meta,
+  };
+}
+
 function sendJson(res, status, payload) {
   return res.status(status).json(payload);
 }
@@ -520,6 +866,87 @@ app.post('/api/reminders/:email', async (req, res) => {
     });
   } catch (error) {
     return sendJson(res, 500, { error: error.message });
+  }
+});
+
+app.post('/api/chat', async (req, res) => {
+  const { email, message = '', selectedDestination, history = [], profile = {} } = req.body || {};
+  const normalizedEmail = normalizeEmail(email);
+  const userMessage = String(message || '').trim();
+
+  if (!userMessage) {
+    return sendJson(res, 400, { error: 'Please enter a message for the assistant.' });
+  }
+
+  try {
+    const userProfile = {
+      ...profile,
+      travelTypes: Array.isArray(profile.travelTypes) ? profile.travelTypes : [],
+      interests: Array.isArray(profile.interests) ? profile.interests : [],
+      preferredPlaces: Array.isArray(profile.preferredPlaces) ? profile.preferredPlaces : [],
+      budget: profile.budget || 'Mid-Range',
+    };
+
+    const response = await generateChatReply({
+      email: normalizedEmail,
+      message: userMessage,
+      selectedDestination,
+      history,
+      profile: userProfile,
+    });
+
+    return sendJson(res, 200, response);
+  } catch (error) {
+    console.error('Chat error:', error.message);
+    return sendJson(res, 500, {
+      reply: 'Sorry, I hit a temporary issue while planning. Please try again in a moment.',
+      meta: { error: error.message || 'AI unavailable' },
+    });
+  }
+});
+
+app.post('/api/itinerary/generate', async (req, res) => {
+  const { email, message = '', selectedDestination, profile = {} } = req.body || {};
+  const normalizedEmail = normalizeEmail(email);
+  const userMessage = String(message || '').trim();
+
+  if (!userMessage) {
+    return sendJson(res, 400, { error: 'Please describe the itinerary you want to generate.' });
+  }
+
+  try {
+    const userProfile = {
+      ...profile,
+      travelTypes: Array.isArray(profile.travelTypes) ? profile.travelTypes : [],
+      interests: Array.isArray(profile.interests) ? profile.interests : [],
+      preferredPlaces: Array.isArray(profile.preferredPlaces) ? profile.preferredPlaces : [],
+      budget: profile.budget || 'Mid-Range',
+    };
+
+    const generated = await generateItineraryFromAi({
+      email: normalizedEmail,
+      message: userMessage,
+      selectedDestination,
+      profile: userProfile,
+    });
+
+    return sendJson(res, 200, {
+      ok: true,
+      itinerary: generated.itinerary,
+      meta: generated.meta,
+    });
+  } catch (error) {
+    console.error('Itinerary generation error:', error.message);
+    return sendJson(res, 200, {
+      ok: true,
+      itinerary: createItineraryFallback(profile || { preferredPlaces: [] }, { dayCount: 3 }).itinerary,
+      meta: {
+        destination: selectedDestination?.name || selectedDestination?.destination || 'Philippines',
+        source: 'backend-fallback',
+        generatedAt: new Date().toISOString(),
+      },
+      fallback: true,
+    });
   }
 });
 

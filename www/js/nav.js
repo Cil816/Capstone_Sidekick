@@ -43,7 +43,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
       document.addEventListener('sidekick:reminders-updated', (ev) => { updateBadge(); });
       window.addEventListener('focus', updateBadge);
-      // initial update
+      
       setTimeout(updateBadge, 300);
     }
   } catch (e) {}

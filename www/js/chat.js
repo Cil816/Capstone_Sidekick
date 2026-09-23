@@ -1,6 +1,5 @@
-const OPENAI_MODEL = "gpt-4o-mini";
-const OPENAI_KEY_STORAGE_KEY = "sidekick.openai.key.v1";
 const COMPANION_MEMORY_KEY = "sidekick.aiCompanionByEmail.v2";
+const SELECTED_DESTINATION_KEY = "sidekick.selectedDestination.v1";
 
 const TRAINING_CONTEXT = [
   "You are Sidekick Companion, trained to help users plan Philippines travel inside the Sidekick app.",
@@ -12,10 +11,18 @@ const TRAINING_CONTEXT = [
   "Never claim to perform external bookings or payments.",
 ].join(" ");
 
-function getOpenAIApiKey() {
-  const fromWindow = String(window.SIDEKICK_OPENAI_KEY || "").trim();
-  if (fromWindow) return fromWindow;
-  return String(localStorage.getItem(OPENAI_KEY_STORAGE_KEY) || "").trim();
+function getSelectedDestination() {
+  try {
+    const raw = localStorage.getItem(SELECTED_DESTINATION_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function setSelectedDestination(destination) {
+  if (!destination) return;
+  localStorage.setItem(SELECTED_DESTINATION_KEY, JSON.stringify(destination));
 }
 
 function getChatForEmail(email) {
@@ -196,39 +203,27 @@ Output rules:
 - Mention app actions naturally (Itinerary tab, Alerts tab) when useful.`;
 }
 
-async function askOpenAI(history, prefs, state) {
-  const key = getOpenAIApiKey();
-  if (!key) throw new Error("NO_KEY");
-
-  const system = buildSystemPrompt(prefs, state);
-  const messages = [
-    { role: "system", content: system },
-    ...history.slice(-12).map((m) => ({
-      role: m.role === "user" ? "user" : "assistant",
-      content: m.content,
-    })),
-  ];
-
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${key}`,
+async function askSidekickBackend(history, prefs, state, userText) {
+  const selectedDestination = getSelectedDestination();
+  const payload = {
+    email: window.SidekickCore.getAuthSession()?.email || "",
+    message: userText,
+    selectedDestination,
+    history: (history || []).slice(-12),
+    profile: {
+      interests: prefs?.interests || [],
+      travelTypes: prefs?.travelTypes || [],
+      preferredPlaces: prefs?.preferredPlaces || [],
+      budget: state?.budget || prefs?.budget || "Mid-Range",
     },
-    body: JSON.stringify({
-      model: OPENAI_MODEL,
-      messages,
-      temperature: 0.6,
-      max_tokens: 500,
-    }),
+  };
+
+  const data = await window.SidekickCore.apiRequest("/api/chat", {
+    method: "POST",
+    body: JSON.stringify(payload),
   });
 
-  if (res.status === 401) throw new Error("API_401");
-  if (res.status === 429) throw new Error("API_429");
-  if (!res.ok) throw new Error(`API_${res.status}`);
-
-  const data = await res.json();
-  return String(data?.choices?.[0]?.message?.content || "").trim();
+  return data;
 }
 
 function fallbackReply(userText, state, prefs) {
@@ -434,7 +429,19 @@ async function sendMessage() {
       reply = "Saved. I updated your planning preferences. Say \"generate itinerary now\" anytime when you are ready.";
     } else {
       try {
-        reply = await askOpenAI(history, prefs, companionState);
+        const backendReply = await askSidekickBackend(history, prefs, companionState, userText);
+        reply = backendReply.reply || fallbackReply(userText, companionState, prefs);
+
+        if (backendReply.itinerary && Array.isArray(backendReply.itinerary)) {
+          saveGeneratedItinerary(session.email, {
+            itinerary: backendReply.itinerary,
+            meta: {
+              ...(backendReply.meta || {}),
+              startDate: new Date().toISOString(),
+              source: backendReply.meta?.source || "sidekick-chat-ai",
+            },
+          });
+        }
       } catch (e) {
         reply = fallbackReply(userText, companionState, prefs);
       }

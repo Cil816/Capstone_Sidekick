@@ -1,6 +1,10 @@
 # Dependencies
 node_modules/
 
+# Local secrets
+.env
+backend/.env
+
 # Capacitor / Android generated artifacts
 android/.gradle/
 android/.idea/

@@ -1,4 +1,5 @@
-const GOOGLE_MAPS_API_KEY = "YOUR_GOOGLE_MAPS_API_KEY_HERE";
+const GOOGLE_MAPS_API_KEY = (window.SIDEKICK_CONFIG && window.SIDEKICK_CONFIG.googleMapsApiKey) || "YOUR_RESTRICTED_GOOGLE_MAPS_KEY";
+const SELECTED_DESTINATION_KEY = "sidekick.selectedDestination.v1";
 
 let _gmapsLoadPromise = null;
 let _placesService = null;
@@ -307,6 +308,20 @@ function renderDestinationCard(place) {
   `;
 }
 
+function persistSelectedDestination(place) {
+  if (!place) return;
+  localStorage.setItem(SELECTED_DESTINATION_KEY, JSON.stringify(place));
+}
+
+function getSelectedDestination() {
+  try {
+    const raw = localStorage.getItem(SELECTED_DESTINATION_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (error) {
+    return null;
+  }
+}
+
 function openModal() {
   const modal = document.getElementById("destination-modal");
   if (!modal) return;
@@ -323,7 +338,15 @@ function closeModal() {
 
 async function showDestinationDetails(place, prefs, session) {
   _selectedPlace = place;
+  persistSelectedDestination(place);
   openModal();
+
+  const imageEl = document.getElementById("destination-image");
+  if (imageEl) {
+    imageEl.innerHTML = place.photoUrl
+      ? `<img src="${place.photoUrl}" alt="${window.SidekickCore.escapeHtml(place.name)}" loading="lazy" />`
+      : `<div class="destination-photo-fallback">${svgPin()}</div>`;
+  }
 
   setText("destination-title", place.name);
   setText("destination-subtitle", `${place.region}, Philippines`);
@@ -402,6 +425,14 @@ async function showDestinationDetails(place, prefs, session) {
   const generateBtn = document.getElementById("destination-generate");
   if (generateBtn) {
     generateBtn.onclick = () => generateFocusedItinerary(place, prefs, session);
+  }
+
+  const askAiBtn = document.getElementById("destination-ask-ai");
+  if (askAiBtn) {
+    askAiBtn.onclick = () => {
+      persistSelectedDestination(place);
+      window.location.href = "chat.html";
+    };
   }
 }
 

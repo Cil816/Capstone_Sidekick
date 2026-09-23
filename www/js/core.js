@@ -37,6 +37,10 @@
 
 /* Sidekick Core (no backend): auth, user preferences, itinerary + chat generation */
 
+window.SIDEKICK_CONFIG = window.SIDEKICK_CONFIG || {
+  googleMapsApiKey: "YOUR_RESTRICTED_GOOGLE_MAPS_KEY",
+};
+
 const SIDEKICK_KEYS = {
   users: "sidekick.users.v1",
   auth: "sidekick.auth.v1",
