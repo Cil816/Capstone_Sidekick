@@ -56,6 +56,67 @@ function getAiApiKey() {
   return String(process.env.AI_API_KEY || process.env.GEMINI_API_KEY || '').trim();
 }
 
+function getMapsApiKey() {
+  return String(process.env.GOOGLE_MAPS_API_KEY || '').trim();
+}
+
+function mapPlace(place) {
+  const location = place.location || place.geometry?.location;
+  return {
+    placeId: place.id || place.place_id || place.placeId || null,
+    name: place.displayName?.text || place.name || 'Unnamed place',
+    address: place.formattedAddress || place.formatted_address || place.vicinity || '',
+    lat: location?.latitude ?? location?.lat ?? place.lat ?? null,
+    lng: location?.longitude ?? location?.lng ?? place.lng ?? null,
+    rating: place.rating ?? null,
+    types: Array.isArray(place.types) ? place.types.slice(0, 6) : [],
+  };
+}
+
+function parseLocation(value) {
+  const [latitude, longitude] = String(value || '').split(',').map(Number);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+    throw new Error('A location must be provided as latitude,longitude.');
+  }
+  return { latitude, longitude };
+}
+
+async function callGooglePlacesApi(path, payload) {
+  const apiKey = getMapsApiKey();
+  if (!apiKey) throw new Error('Google Maps is not configured on the backend. Add GOOGLE_MAPS_API_KEY to backend/.env.');
+  const response = await fetch(`https://places.googleapis.com/v1/${path}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Goog-Api-Key': apiKey,
+      'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.types',
+    },
+    body: JSON.stringify(payload),
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error('Google Maps is currently unavailable.');
+  }
+  return data;
+}
+
+async function callGoogleRoutesApi(payload) {
+  const apiKey = getMapsApiKey();
+  if (!apiKey) throw new Error('Google Maps is not configured on the backend. Add GOOGLE_MAPS_API_KEY to backend/.env.');
+  const response = await fetch('https://routes.googleapis.com/directions/v2:computeRoutes', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Goog-Api-Key': apiKey,
+      'X-Goog-FieldMask': 'routes.legs.startLocation,routes.legs.endLocation,routes.legs.distanceMeters,routes.legs.duration,routes.legs.localizedValues',
+    },
+    body: JSON.stringify(payload),
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error('Google Maps is currently unavailable.');
+  return data;
+}
+
 function getKnownDestinationCatalog() {
   return [
     'Banaue Rice Terraces',
@@ -292,6 +353,254 @@ async function callGeminiApi({ message, contextText, systemInstruction, response
   }
 
   return rawText.trim();
+}
+
+const sidekickToolDeclarations = [
+  { name: 'getCurrentUser', description: 'Read the authenticated Sidekick user name and email.', parameters: { type: 'OBJECT', properties: {} } },
+  { name: 'getUserPreferences', description: 'Read the current user travel styles, interests, and preferred places.', parameters: { type: 'OBJECT', properties: {} } },
+  {
+    name: 'updateUserPreferences',
+    description: 'Replace the current user travel preferences.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        travelTypes: { type: 'ARRAY', items: { type: 'STRING' } },
+        interests: { type: 'ARRAY', items: { type: 'STRING' } },
+        preferredPlaces: { type: 'ARRAY', items: { type: 'STRING' } },
+      },
+    },
+  },
+  { name: 'getTrips', description: 'Read the current user trips.', parameters: { type: 'OBJECT', properties: {} } },
+  {
+    name: 'createTrip',
+    description: 'Create a trip owned by the current user.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        trip_title: { type: 'STRING' }, destination: { type: 'STRING' }, start_date: { type: 'STRING' }, end_date: { type: 'STRING' }, budget: { type: 'STRING' },
+      },
+      required: ['trip_title', 'destination', 'start_date'],
+    },
+  },
+  {
+    name: 'updateTrip',
+    description: 'Update a trip owned by the current user.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        trip_id: { type: 'INTEGER' }, trip_title: { type: 'STRING' }, destination: { type: 'STRING' }, start_date: { type: 'STRING' }, end_date: { type: 'STRING' }, budget: { type: 'STRING' }, status: { type: 'STRING' },
+      },
+      required: ['trip_id'],
+    },
+  },
+  {
+    name: 'deleteTrip',
+    description: 'Delete a trip owned by the current user after the user has confirmed.',
+    parameters: { type: 'OBJECT', properties: { trip_id: { type: 'INTEGER' }, confirmed: { type: 'BOOLEAN' } }, required: ['trip_id', 'confirmed'] },
+  },
+  {
+    name: 'searchPlaces',
+    description: 'Search Google Maps for places matching a query and optional location.',
+    parameters: {
+      type: 'OBJECT',
+      properties: { query: { type: 'STRING' }, location: { type: 'STRING' } },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'getNearbyPlaces',
+    description: 'Find nearby Google Maps places by category and location.',
+    parameters: {
+      type: 'OBJECT',
+      properties: { category: { type: 'STRING' }, location: { type: 'STRING' }, radiusMeters: { type: 'INTEGER' } },
+      required: ['category', 'location'],
+    },
+  },
+  {
+    name: 'getDirections',
+    description: 'Get a route, distance, and travel time between two places.',
+    parameters: {
+      type: 'OBJECT',
+      properties: { origin: { type: 'STRING' }, destination: { type: 'STRING' }, travelMode: { type: 'STRING' } },
+      required: ['origin', 'destination'],
+    },
+  },
+  {
+    name: 'addPlaceToItinerary',
+    description: 'Request adding a place to the user itinerary through the existing Sidekick UI.',
+    parameters: {
+      type: 'OBJECT',
+      properties: { name: { type: 'STRING' }, location: { type: 'STRING' }, dayNumber: { type: 'INTEGER' }, note: { type: 'STRING' } },
+      required: ['name', 'location', 'dayNumber'],
+    },
+  },
+];
+
+async function executeSidekickTool(name, args, email) {
+  const pool = await getPool();
+  const normalizedEmail = normalizeEmail(email);
+  const userResult = await pool.query`
+    SELECT user_id, name, email
+    FROM dbo.users
+    WHERE email = ${normalizedEmail} AND is_verified = 1
+  `;
+  const user = userResult.recordset[0];
+  if (!user) throw new Error('Authenticated user was not found.');
+
+  if (name === 'getCurrentUser') return { user_id: user.user_id, name: user.name, email: user.email };
+  if (name === 'getUserPreferences') return getUserProfileContext(normalizedEmail);
+
+  if (name === 'updateUserPreferences') {
+    const travelTypes = Array.isArray(args.travelTypes) ? args.travelTypes : [];
+    const interests = Array.isArray(args.interests) ? args.interests : [];
+    const preferredPlaces = Array.isArray(args.preferredPlaces) ? args.preferredPlaces : [];
+    await pool.query`DELETE FROM dbo.user_travel_styles WHERE user_id = ${user.user_id}`;
+    await pool.query`DELETE FROM dbo.user_interests WHERE user_id = ${user.user_id}`;
+    await pool.query`DELETE FROM dbo.user_preferred_places WHERE user_id = ${user.user_id}`;
+    for (const value of travelTypes) {
+      const row = await pool.query`SELECT style_id FROM dbo.travel_styles WHERE style_name = ${String(value)}`;
+      if (row.recordset[0]?.style_id) await pool.query`INSERT INTO dbo.user_travel_styles (user_id, style_id) VALUES (${user.user_id}, ${row.recordset[0].style_id})`;
+    }
+    for (const value of interests) {
+      const row = await pool.query`SELECT interest_id FROM dbo.interests WHERE interest_name = ${String(value)}`;
+      if (row.recordset[0]?.interest_id) await pool.query`INSERT INTO dbo.user_interests (user_id, interest_id) VALUES (${user.user_id}, ${row.recordset[0].interest_id})`;
+    }
+    for (const value of preferredPlaces) {
+      const row = await pool.query`SELECT place_id FROM dbo.preferred_places WHERE place_name = ${String(value)}`;
+      if (row.recordset[0]?.place_id) await pool.query`INSERT INTO dbo.user_preferred_places (user_id, place_id) VALUES (${user.user_id}, ${row.recordset[0].place_id})`;
+    }
+    return { travelTypes, interests, preferredPlaces };
+  }
+
+  if (name === 'getTrips') {
+    const result = await pool.query`SELECT * FROM dbo.trips WHERE user_id = ${user.user_id} ORDER BY created_at DESC`;
+    return result.recordset;
+  }
+  if (name === 'createTrip') {
+    const result = await pool.query`
+      INSERT INTO dbo.trips (user_id, trip_title, destination, start_date, end_date, budget, status)
+      OUTPUT INSERTED.*
+      VALUES (${user.user_id}, ${String(args.trip_title)}, ${String(args.destination)}, ${String(args.start_date)}, ${args.end_date || null}, ${args.budget || null}, 'draft')
+    `;
+    return result.recordset[0];
+  }
+  if (name === 'updateTrip') {
+    const result = await pool.query`
+      UPDATE dbo.trips
+      SET trip_title = COALESCE(${args.trip_title || null}, trip_title), destination = COALESCE(${args.destination || null}, destination), start_date = COALESCE(${args.start_date || null}, start_date), end_date = COALESCE(${args.end_date || null}, end_date), budget = COALESCE(${args.budget || null}, budget), status = COALESCE(${args.status || null}, status)
+      OUTPUT INSERTED.*
+      WHERE trip_id = ${Number(args.trip_id)} AND user_id = ${user.user_id}
+    `;
+    if (!result.recordset.length) throw new Error('Trip was not found for the authenticated user.');
+    return result.recordset[0];
+  }
+  if (name === 'deleteTrip') {
+    if (args.confirmed !== true) return { requiresConfirmation: true, message: 'Please confirm before permanently deleting this trip.' };
+    const result = await pool.query`DELETE FROM dbo.trips WHERE trip_id = ${Number(args.trip_id)} AND user_id = ${user.user_id}`;
+    if (!result.rowsAffected[0]) throw new Error('Trip was not found for the authenticated user.');
+    return { deleted: true, trip_id: Number(args.trip_id) };
+  }
+  if (name === 'searchPlaces') {
+    const data = await callGooglePlacesApi('places:searchText', {
+      textQuery: String(args.query),
+      ...(args.location ? { locationBias: { circle: { center: parseLocation(args.location), radius: 50000 } } } : {}),
+      maxResultCount: 8,
+    });
+    const places = (data.places || []).slice(0, 8).map(mapPlace);
+    return { places, uiAction: { type: 'SHOW_PLACES', places } };
+  }
+  if (name === 'getNearbyPlaces') {
+    const data = await callGooglePlacesApi('places:searchNearby', {
+      includedTypes: [String(args.category)],
+      locationRestriction: { circle: { center: parseLocation(args.location), radius: Math.min(50000, Math.max(100, Number(args.radiusMeters) || 5000)) } },
+      maxResultCount: 8,
+    });
+    const places = (data.places || []).slice(0, 8).map(mapPlace);
+    return { places, uiAction: { type: 'SHOW_PLACES', places } };
+  }
+  if (name === 'getDirections') {
+    const data = await callGoogleRoutesApi({
+      origin: { address: String(args.origin) },
+      destination: { address: String(args.destination) },
+      travelMode: String(args.travelMode || 'DRIVE').toUpperCase(),
+      computeAlternativeRoutes: false,
+    });
+    const leg = data.routes?.[0]?.legs?.[0];
+    if (!leg) throw new Error('No route was found between those locations.');
+    return {
+      origin: String(args.origin),
+      destination: String(args.destination),
+      distance: leg.localizedValues?.distance?.text || `${Math.round(Number(leg.distanceMeters || 0) / 1000)} km`,
+      duration: leg.localizedValues?.duration?.text || leg.duration || null,
+      uiAction: { type: 'SHOW_ROUTE', origin: leg.start_address, destination: leg.end_address },
+    };
+  }
+  if (name === 'addPlaceToItinerary') {
+    return {
+      added: false,
+      uiAction: {
+        type: 'ADD_ITINERARY_ACTIVITY',
+        activity: { title: String(args.name), location: String(args.location), dayNumber: Math.max(1, Number(args.dayNumber) || 1), note: String(args.note || 'Added by Sidekick AI.') },
+      },
+    };
+  }
+  throw new Error(`Unsupported Sidekick tool: ${name}`);
+}
+
+async function generateAgentReply({ email, message, selectedDestination, history, profile }) {
+  const currentProfile = await getUserProfileContext(email);
+  const lowerMessage = String(message || '').toLowerCase();
+  const currentUser = await executeSidekickTool('getCurrentUser', {}, email);
+
+  if (/\b(name|email)\b/.test(lowerMessage) && /\b(my|i)\b/.test(lowerMessage)) {
+    return { reply: `Your name is ${currentUser.name} and your email is ${currentUser.email}.`, meta: { source: 'sidekick-direct' } };
+  }
+
+  if (/\b(saved|current|my)\b.*\b(preferences?|travel style|interests?)\b/.test(lowerMessage)) {
+    const styles = currentProfile.travelTypes?.join(', ') || 'none saved';
+    const interests = currentProfile.interests?.join(', ') || 'none saved';
+    const places = currentProfile.preferredPlaces?.join(', ') || 'none saved';
+    return { reply: `Your travel styles are ${styles}. Your interests are ${interests}. Your preferred places are ${places}.`, meta: { source: 'sidekick-direct' } };
+  }
+
+  const contextText = [
+    'You are Sidekick AI, the authenticated user\'s travel app agent.',
+    `Current screen context: ${selectedDestination?.name || 'not selected'}`,
+    `Current preferences: ${JSON.stringify(currentProfile)}`,
+    `Conversation history: ${(history || []).slice(-3).map((item) => `${item.role}: ${String(item.content || '').slice(0, 500)}`).join(' | ') || 'none'}`,
+  ].join('\n');
+  const systemInstruction = 'Use Sidekick tools for current user data and mutations. Never claim a mutation succeeded unless its tool succeeds. Ask for confirmation before destructive deletion. Do not reveal credentials or internal tool details. For ordinary questions, answer directly and concisely.';
+  const contents = [{ role: 'user', parts: [{ text: `${contextText}\n\nUser request:\n${message}` }] }];
+  const uiActions = [];
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const apiKey = getAiApiKey();
+    if (!apiKey) throw new Error('AI_API_KEY is missing. Add your Gemini API key in backend/.env.');
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${apiKey}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contents, systemInstruction: { parts: [{ text: systemInstruction }] }, tools: [{ functionDeclarations: sidekickToolDeclarations }], generationConfig: { temperature: 0.5, maxOutputTokens: 900, responseMimeType: 'text/plain' } }),
+    });
+    if (!response.ok) throw new Error('The AI service is currently unavailable. Please try again later.');
+    const data = await response.json();
+    const candidate = data?.candidates?.[0];
+    const parts = candidate?.content?.parts || [];
+    const calls = parts.filter((part) => part.functionCall?.name);
+    if (!calls.length) {
+      const reply = parts.map((part) => part.text || '').join('').trim();
+      if (!reply) throw new Error('AI returned an empty response.');
+      return { reply: sanitizePlanText(reply), actions: uiActions, meta: { source: 'gemini-agent', model: 'gemini-3.6-flash' } };
+    }
+    contents.push(candidate.content);
+    const functionResponses = [];
+    for (const part of calls) {
+      let result;
+      try { result = await executeSidekickTool(part.functionCall.name, part.functionCall.args || {}, email); } catch (error) { result = { error: error.message }; }
+      if (result?.uiAction) uiActions.push(result.uiAction);
+      functionResponses.push({ functionResponse: { name: part.functionCall.name, response: result } });
+    }
+    contents.push({ role: 'user', parts: functionResponses });
+  }
+  throw new Error('The AI agent reached its tool-call limit.');
 }
 
 async function generateItineraryFromAi({ email, message, selectedDestination, profile, tripContext }) {
@@ -869,6 +1178,42 @@ app.post('/api/reminders/:email', async (req, res) => {
   }
 });
 
+app.post('/api/maps/places', async (req, res) => {
+  const { queries = [], seeds = [] } = req.body || {};
+  const safeQueries = Array.isArray(queries) ? queries.map((query) => String(query || '').trim()).filter(Boolean).slice(0, 4) : [];
+  const safeSeeds = Array.isArray(seeds) ? seeds.slice(0, 3) : [];
+
+  if (!safeQueries.length) {
+    return sendJson(res, 400, { error: 'At least one place search query is required.' });
+  }
+
+  try {
+    const jobs = [];
+    for (const query of safeQueries) {
+      if (safeSeeds.length) {
+        for (const seed of safeSeeds) {
+          jobs.push(callGooglePlacesApi('places:searchText', {
+            textQuery: `${query} in Philippines`,
+            locationBias: { circle: { center: { latitude: Number(seed.lat), longitude: Number(seed.lng) }, radius: 50000 } },
+            maxResultCount: 8,
+          }));
+        }
+      } else {
+        jobs.push(callGooglePlacesApi('places:searchText', { textQuery: `${query} in Philippines`, maxResultCount: 8 }));
+      }
+    }
+
+    const results = await Promise.all(jobs);
+    const places = Array.from(new Map(
+      results.flatMap((result) => result.places || []).filter((place) => place.id).map((place) => [place.id, mapPlace(place)])
+    ).values()).filter((place) => place.lat !== null && place.lng !== null).slice(0, 40);
+
+    return sendJson(res, 200, { places });
+  } catch (error) {
+    return sendJson(res, 503, { error: error.message || 'Google Maps is currently unavailable.' });
+  }
+});
+
 app.post('/api/chat', async (req, res) => {
   const { email, message = '', selectedDestination, history = [], profile = {} } = req.body || {};
   const normalizedEmail = normalizeEmail(email);
@@ -887,7 +1232,7 @@ app.post('/api/chat', async (req, res) => {
       budget: profile.budget || 'Mid-Range',
     };
 
-    const response = await generateChatReply({
+    const response = await generateAgentReply({
       email: normalizedEmail,
       message: userMessage,
       selectedDestination,

@@ -6,6 +6,8 @@
 
 .header-section {
     padding: 20px 16px 16px;
+    background: linear-gradient(135deg, rgba(222, 247, 249, .9), rgba(242, 250, 253, .76));
+    border-radius: 0 0 24px 24px;
 }
 
 .search-section {
@@ -103,11 +105,13 @@
     flex-shrink: 0;
     cursor: pointer;
     touch-action: manipulation;
+    box-shadow: 0 8px 20px rgba(52, 76, 104, .07);
+    transition: transform .2s ease, box-shadow .2s ease, border-color .2s ease;
 }
 
 .place-image {
     height: 140px;
-    background: linear-gradient(135deg, #6B8CAE 0%, #8BA8C7 100%);
+    background: linear-gradient(135deg, #2c91b0 0%, #72dfe0 100%);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -172,7 +176,7 @@
 
 .destination-image {
     height: 110px;
-    background: linear-gradient(135deg, #6B8CAE 0%, #8BA8C7 100%);
+    background: linear-gradient(135deg, #2c91b0 0%, #72dfe0 100%);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -217,7 +221,7 @@
     right: 16px;
     width: 48px;
     height: 48px;
-    background: #6B8CAE;
+    background: linear-gradient(135deg, #2c91b0, #68ddd9);
     border: none;
     border-radius: 50%;
     box-shadow: 0 6px 18px rgba(107, 140, 174, 0.16);
@@ -240,7 +244,7 @@
 }
 
 .floating-chat-btn:hover {
-    background: #5A7A9A;
+    background: linear-gradient(135deg, #237c98, #4fc6ca);
 }
 
 .floating-chat-btn svg {

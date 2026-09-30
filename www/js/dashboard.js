@@ -85,7 +85,7 @@ function ensureGoogleMapsLoaded() {
       return;
     }
     if (!GOOGLE_MAPS_API_KEY || GOOGLE_MAPS_API_KEY === "YOUR_GOOGLE_MAPS_API_KEY_HERE") {
-      reject(new Error("Google Maps API key is not configured"));
+      reject(new Error("No API"));
       return;
     }
     const script = document.createElement("script");
@@ -211,6 +211,22 @@ function toDashboardPlace(gPlace) {
   };
 }
 
+function toBackendDashboardPlace(place) {
+  return {
+    id: place.placeId,
+    placeId: place.placeId,
+    name: place.name || "Unknown Place",
+    region: normalizeRegion(place.address),
+    address: place.address || "Philippines",
+    lat: Number(place.lat),
+    lng: Number(place.lng),
+    tags: extractTags(place.types),
+    rating: Number(place.rating || 0),
+    ratingCount: 0,
+    photoUrl: "",
+  };
+}
+
 function preferenceScore(place, prefs) {
   const text = `${place.name} ${place.region} ${(place.tags || []).join(" ")}`.toLowerCase();
   let score = (place.rating || 0) * 1.8 + Math.min(3, (place.ratingCount || 0) / 2000);
@@ -229,17 +245,41 @@ function preferenceScore(place, prefs) {
 }
 
 async function fetchPlacesFromGoogle(prefs, searchQuery = "") {
+  const keywords = buildPreferenceKeywords(prefs, searchQuery);
+  const seeds = getPhilippinesSeedLocations();
+
+  try {
+    const data = await window.SidekickCore.apiRequest("/api/maps/places", {
+      method: "POST",
+      body: JSON.stringify({ queries: keywords, seeds }),
+    });
+    const allPlaces = (data.places || []).map(toBackendDashboardPlace).filter((place) => place.lat && place.lng);
+    if (allPlaces.length) {
+      const recommended = allPlaces
+        .slice()
+        .sort((a, b) => preferenceScore(b, prefs) - preferenceScore(a, prefs))
+        .slice(0, IS_PERF_LITE ? 5 : 8);
+      const popularDestinations = allPlaces
+        .slice()
+        .sort((a, b) => b.rating - a.rating)
+        .slice(0, IS_PERF_LITE ? 5 : 8);
+      return { recommended, popularDestinations, allPlaces };
+    }
+  } catch (backendError) {
+    // Fall back to the existing browser Google Maps Places service.
+  }
+
   await ensureGoogleMapsLoaded();
   const service = ensurePlacesService();
   const isMobile = window.matchMedia && window.matchMedia("(max-width: 768px)").matches;
   const maxKeywordCount = IS_PERF_LITE ? 1 : isMobile ? 2 : 4;
   const maxSeedCount = IS_PERF_LITE ? 1 : isMobile ? 2 : 3;
-  const keywords = buildPreferenceKeywords(prefs, searchQuery).slice(0, maxKeywordCount);
-  const seeds = getPhilippinesSeedLocations().slice(0, maxSeedCount);
+  const limitedKeywords = keywords.slice(0, maxKeywordCount);
+  const limitedSeeds = seeds.slice(0, maxSeedCount);
 
   const jobs = [];
-  for (const keyword of keywords) {
-    for (const seed of seeds) {
+  for (const keyword of limitedKeywords) {
+    for (const seed of limitedSeeds) {
       jobs.push(
         textSearchAsync(service, {
           query: `${keyword} in Philippines`,

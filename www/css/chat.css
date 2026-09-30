@@ -83,7 +83,7 @@
 
 .ai-message .message-bubble {
     background: #F5F7FA;
-    color: #1F2937;
+    color: #081b1a;
     border-bottom-left-radius: 4px;
 }
 
@@ -130,13 +130,13 @@
 }
 
 .chat-input-container input:focus {
-    box-shadow: 0 0 0 2px #6B8CAE;
+    box-shadow: 0 0 0 2px #6cd1bb;
 }
 
 .send-btn {
     width: 48px;
     height: 48px;
-    background: #6B8CAE;
+    background: #0fffd7;
     border: none;
     border-radius: 12px;
     display: flex;
@@ -147,7 +147,7 @@
 }
 
 .send-btn:hover {
-    background: #5A7A9A;
+    background: #4ff9ffb6;
 }
 
 .send-btn svg {
@@ -204,3 +204,29 @@
     0%, 60%, 100% { transform: translateY(0); opacity: 0.5; }
     30%            { transform: translateY(-6px); opacity: 1; }
 }
+
+/* The conversation should feel like a calm, premium assistant surface. */
+.chat-screen {
+    background: radial-gradient(circle at 90% 0%, rgba(104, 221, 217, .18), transparent 32%), #f7fcfd;
+}
+
+.chat-header {
+    background: rgba(255, 255, 255, .84);
+    backdrop-filter: blur(12px);
+}
+
+.chat-header-info h1 { font-size: 20px; font-weight: 800; }
+
+.ai-message .message-bubble {
+    background: linear-gradient(135deg, #eefbfd, #f5fbfc);
+    border: 1px solid #e1e9f2;
+    box-shadow: 0 6px 16px rgba(52, 76, 104, .05);
+}
+
+.user-message .message-bubble {
+    background: linear-gradient(135deg, #2c91b0, #68ddd9);
+    box-shadow: 0 7px 16px rgba(99, 139, 181, .18);
+}
+
+.message-bubble { border-radius: 18px; }
+.message-bubble p { line-height: 1.6; }

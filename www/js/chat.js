@@ -272,6 +272,54 @@ function saveGeneratedItinerary(email, generated) {
   } catch (e) {}
 }
 
+function applyAgentActions(email, actions) {
+  const summaries = [];
+  for (const action of Array.isArray(actions) ? actions : []) {
+    if (action?.type === "SHOW_PLACES" && Array.isArray(action.places)) {
+      localStorage.setItem("sidekick.aiPlaces.v1", JSON.stringify(action.places.slice(0, 8)));
+      summaries.push(`Map results: ${action.places.map((place) => place.name).filter(Boolean).join(", ") || "No matching places found."}`);
+      continue;
+    }
+
+    if (action?.type === "SHOW_ROUTE") {
+      localStorage.setItem("sidekick.aiRoute.v1", JSON.stringify({ origin: action.origin, destination: action.destination }));
+      summaries.push(`Route ready from ${action.origin} to ${action.destination}.`);
+      continue;
+    }
+
+    if (action?.type === "ADD_ITINERARY_ACTIVITY" && action.activity) {
+      const map = window.SidekickCore.getItineraryByEmail();
+      const itineraryData = map[email];
+      const dayNumber = Math.max(1, Number(action.activity.dayNumber) || 1);
+      const day = itineraryData?.itinerary?.find((entry) => Number(entry.dayNumber) === dayNumber);
+      if (!day) {
+        summaries.push(`I could not find Day ${dayNumber} in your current itinerary.`);
+        continue;
+      }
+      day.activities = Array.isArray(day.activities) ? day.activities : [];
+      day.activities.push({
+        id: `agent-${Date.now()}-${day.activities.length + 1}`,
+        timeLabel: "Flexible",
+        title: String(action.activity.title || "New activity"),
+        location: String(action.activity.location || ""),
+        note: String(action.activity.note || "Added by Sidekick AI."),
+        transportMode: "To be planned",
+        travelMinutes: 0,
+        travelDistanceKm: 0,
+        estimatedActivityCostPhp: 0,
+        estimatedTransportCostPhp: 0,
+        estimatedTotalCostPhp: 0,
+        dueAt: Date.now(),
+        iso: new Date().toISOString(),
+      });
+      window.SidekickCore.setItineraryByEmail(map);
+      if (window.SidekickCore.syncRemindersFromItinerary) window.SidekickCore.syncRemindersFromItinerary(email);
+      summaries.push(`Added ${action.activity.title} to Day ${dayNumber}.`);
+    }
+  }
+  return summaries;
+}
+
 function generateItineraryFromCompanion(email, prefs, state) {
   const generatorPrefs = buildPrefsForGenerator(prefs, state);
   const generated = window.SidekickCore.generateItinerary(generatorPrefs, {
@@ -419,18 +467,12 @@ async function sendMessage() {
 
     if (merged.reset) {
       reply = "Companion memory reset. Tell me destination and number of days, then I can build your travel plan again.";
-    } else if (merged.signals.wantsGenerate) {
-      if (companionNeedsEssentials(companionState)) {
-        reply = "I can generate your itinerary, but I still need destination and day count. Example: Cebu for 4 days.";
-      } else {
-        reply = generateItineraryFromCompanion(session.email, prefs, companionState);
-      }
-    } else if (merged.signals.rememberNote || merged.signals.mustSee.length || merged.signals.avoid.length || merged.signals.budget || merged.signals.pace) {
-      reply = "Saved. I updated your planning preferences. Say \"generate itinerary now\" anytime when you are ready.";
     } else {
       try {
         const backendReply = await askSidekickBackend(history, prefs, companionState, userText);
         reply = backendReply.reply || fallbackReply(userText, companionState, prefs);
+        const actionSummary = applyAgentActions(session.email, backendReply.actions);
+        if (actionSummary.length) reply = `${reply}\n\n${actionSummary.join("\n")}`;
 
         if (backendReply.itinerary && Array.isArray(backendReply.itinerary)) {
           saveGeneratedItinerary(session.email, {

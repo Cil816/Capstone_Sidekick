@@ -132,6 +132,25 @@
   padding: 10px 12px;
 }
 
+.settings-card {
+  border-color: #e0e8f1;
+  box-shadow: 0 10px 24px rgba(52, 76, 104, .07);
+}
+
+.settings-card-featured {
+  background: linear-gradient(135deg, rgba(222, 247, 249, .96), rgba(242, 250, 253, .96));
+}
+
+.settings-chip {
+  background: linear-gradient(135deg, rgba(67, 191, 208, .18), rgba(127, 223, 225, .24));
+  color: #28758b;
+}
+
+.toggle-input:checked {
+  background: linear-gradient(135deg, #2c91b0, #68ddd9);
+  border-color: #2c91b0;
+}
+
 @media (max-width: 380px) {
   .settings-content {
     gap: 12px;
