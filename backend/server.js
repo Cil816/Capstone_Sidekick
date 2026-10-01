@@ -62,6 +62,9 @@ function getMapsApiKey() {
 
 function mapPlace(place) {
   const location = place.location || place.geometry?.location;
+  const photo = place.photos?.[0];
+  const photoResource = photo?.name || null;
+  const photoAttribution = photo?.authorAttributions?.[0] || null;
   return {
     placeId: place.id || place.place_id || place.placeId || null,
     name: place.displayName?.text || place.name || 'Unnamed place',
@@ -70,6 +73,11 @@ function mapPlace(place) {
     lng: location?.longitude ?? location?.lng ?? place.lng ?? null,
     rating: place.rating ?? null,
     types: Array.isArray(place.types) ? place.types.slice(0, 6) : [],
+    photoResource,
+    photoAttribution: photoAttribution ? {
+      name: photoAttribution.displayName || '',
+      uri: photoAttribution.uri || '',
+    } : null,
   };
 }
 
@@ -89,7 +97,7 @@ async function callGooglePlacesApi(path, payload) {
     headers: {
       'Content-Type': 'application/json',
       'X-Goog-Api-Key': apiKey,
-      'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.types',
+      'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.types,places.photos.name,places.photos.authorAttributions',
     },
     body: JSON.stringify(payload),
   });
@@ -1211,6 +1219,25 @@ app.post('/api/maps/places', async (req, res) => {
     return sendJson(res, 200, { places });
   } catch (error) {
     return sendJson(res, 503, { error: error.message || 'Google Maps is currently unavailable.' });
+  }
+});
+
+app.get('/api/maps/photo', async (req, res) => {
+  const resourceName = String(req.query.name || '');
+  if (!/^places\/[A-Za-z0-9_-]+\/photos\/[A-Za-z0-9_-]+$/.test(resourceName)) {
+    return sendJson(res, 400, { error: 'Invalid Google photo resource.' });
+  }
+
+  try {
+    const apiKey = getMapsApiKey();
+    if (!apiKey) throw new Error('Google Maps is not configured on the backend.');
+    const response = await fetch(`https://places.googleapis.com/v1/${resourceName}/media?maxWidthPx=800&key=${apiKey}`);
+    if (!response.ok) return sendJson(res, 502, { error: 'Google photo is currently unavailable.' });
+    res.set('Content-Type', response.headers.get('content-type') || 'image/jpeg');
+    res.set('Cache-Control', 'public, max-age=3600');
+    return res.send(Buffer.from(await response.arrayBuffer()));
+  } catch (error) {
+    return sendJson(res, 503, { error: 'Google photo is currently unavailable.' });
   }
 });
 

@@ -4,6 +4,7 @@ node_modules/
 # Local secrets
 .env
 backend/.env
+www/js/config.local.js
 
 # Capacitor / Android generated artifacts
 android/.gradle/

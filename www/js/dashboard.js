@@ -59,6 +59,11 @@ function setText(id, text) {
   if (el) el.textContent = text;
 }
 
+function setSearchStatus(text = "") {
+  const status = document.getElementById("destination-search-status");
+  if (status) status.textContent = text;
+}
+
 function getDefaultOriginCoord() {
   return { lat: 14.5995, lng: 120.9842, label: "Manila" };
 }
@@ -84,7 +89,7 @@ function ensureGoogleMapsLoaded() {
       resolve();
       return;
     }
-    if (!GOOGLE_MAPS_API_KEY || GOOGLE_MAPS_API_KEY === "YOUR_GOOGLE_MAPS_API_KEY_HERE") {
+      if (!GOOGLE_MAPS_API_KEY || GOOGLE_MAPS_API_KEY === "YOUR_RESTRICTED_GOOGLE_MAPS_KEY") {
       reject(new Error("No API"));
       return;
     }
@@ -119,6 +124,10 @@ function textSearchAsync(service, request) {
 }
 
 function buildPreferenceKeywords(prefs, searchQuery = "") {
+  if (String(searchQuery || "").trim()) {
+    return [String(searchQuery).trim()];
+  }
+
   const byInterest = {
     Beaches: "beach attractions",
     Hiking: "hiking trails",
@@ -212,6 +221,9 @@ function toDashboardPlace(gPlace) {
 }
 
 function toBackendDashboardPlace(place) {
+  const photoUrl = place.photoResource && window.SidekickCore.getApiBaseUrl
+    ? `${window.SidekickCore.getApiBaseUrl()}/api/maps/photo?name=${encodeURIComponent(place.photoResource)}`
+    : "";
   return {
     id: place.placeId,
     placeId: place.placeId,
@@ -223,8 +235,18 @@ function toBackendDashboardPlace(place) {
     tags: extractTags(place.types),
     rating: Number(place.rating || 0),
     ratingCount: 0,
-    photoUrl: "",
+    photoUrl,
+    photoAttribution: place.photoAttribution || null,
   };
+}
+
+function renderPhotoAttribution(place) {
+  const attribution = place.photoAttribution;
+  if (!attribution?.name) return "";
+  const label = window.SidekickCore.escapeHtml(attribution.name);
+  return attribution.uri
+    ? `<small class="photo-attribution"><a href="${window.SidekickCore.escapeHtml(attribution.uri)}" target="_blank" rel="noopener">${label}</a></small>`
+    : `<small class="photo-attribution">${label}</small>`;
 }
 
 function preferenceScore(place, prefs) {
@@ -322,7 +344,7 @@ function renderPlaceCard(place) {
     : svgPin();
   return `
     <div class="place-card" data-place-id="${window.SidekickCore.escapeHtml(place.placeId)}">
-      <div class="place-image">${imgPart}</div>
+      <div class="place-image">${place.photoUrl ? `<img src="${window.SidekickCore.escapeHtml(place.photoUrl)}" alt="${safeName}" loading="lazy" onerror="this.style.display='none'" />` : imgPart}${renderPhotoAttribution(place)}</div>
       <div class="place-info">
         <h3>${safeName}</h3>
         <p>${safeRegion}</p>
@@ -339,7 +361,7 @@ function renderDestinationCard(place) {
     : svgPin();
   return `
     <div class="destination-card" data-place-id="${window.SidekickCore.escapeHtml(place.placeId)}">
-      <div class="destination-image">${imgPart}</div>
+      <div class="destination-image">${place.photoUrl ? `<img src="${window.SidekickCore.escapeHtml(place.photoUrl)}" alt="${safeName}" loading="lazy" onerror="this.style.display='none'" />` : imgPart}${renderPhotoAttribution(place)}</div>
       <div class="destination-info">
         <h3>${safeName}</h3>
         <p>${safeRegion}</p>
@@ -424,32 +446,41 @@ async function showDestinationDetails(place, prefs, session) {
       title: place.name,
     });
 
-    _directionsService = new google.maps.DirectionsService();
-    _directionsRenderer = new google.maps.DirectionsRenderer({
-      map: _modalMap,
-      suppressMarkers: false,
-      preserveViewport: false,
-      polylineOptions: { strokeColor: "#6B8CAE", strokeWeight: 5 },
-    });
+    try {
+      _directionsService = new google.maps.DirectionsService();
+      _directionsRenderer = new google.maps.DirectionsRenderer({
+        map: _modalMap,
+        suppressMarkers: false,
+        preserveViewport: false,
+        polylineOptions: { strokeColor: "#2c91b0", strokeWeight: 5 },
+      });
 
-    const result = await _directionsService.route({
-      origin: { lat: origin.lat, lng: origin.lng },
-      destination: { lat: place.lat, lng: place.lng },
-      travelMode: google.maps.TravelMode.DRIVING,
-    });
+      const result = await _directionsService.route({
+        origin: { lat: origin.lat, lng: origin.lng },
+        destination: { lat: place.lat, lng: place.lng },
+        travelMode: google.maps.TravelMode.DRIVING,
+      });
 
-    _directionsRenderer.setDirections(result);
+      _directionsRenderer.setDirections(result);
 
-    const leg = result.routes && result.routes[0] && result.routes[0].legs && result.routes[0].legs[0];
-    if (leg) {
-      const distanceKm = Math.max(1, Math.round((leg.distance && leg.distance.value ? leg.distance.value : 0) / 1000));
-      const durationMin = Math.max(5, Math.round((leg.duration && leg.duration.value ? leg.duration.value : 0) / 60));
-      const mode = estimateModeByDistanceKm(distanceKm);
-      const cost = estimateCostByDistance(distanceKm, prefs && prefs.budget ? prefs.budget : "Mid-Range");
+      const leg = result.routes && result.routes[0] && result.routes[0].legs && result.routes[0].legs[0];
+      if (leg) {
+        const distanceKm = Math.max(1, Math.round((leg.distance && leg.distance.value ? leg.distance.value : 0) / 1000));
+        const durationMin = Math.max(5, Math.round((leg.duration && leg.duration.value ? leg.duration.value : 0) / 60));
+        const mode = estimateModeByDistanceKm(distanceKm);
+        const cost = estimateCostByDistance(distanceKm, prefs && prefs.budget ? prefs.budget : "Mid-Range");
 
-      setText("destination-route-mode", `${mode} (${origin.label} to ${place.name})`);
-      setText("destination-route-time", `${durationMin} min`);
-      setText("destination-route-distance", `${distanceKm} km`);
+        setText("destination-route-mode", `${mode} (${origin.label} to ${place.name})`);
+        setText("destination-route-time", `${durationMin} min`);
+        setText("destination-route-distance", `${distanceKm} km`);
+        setText("destination-route-cost", `~PHP ${cost.toLocaleString()}`);
+      }
+    } catch (routeError) {
+      const mode = estimateModeByDistanceKm(120);
+      const cost = estimateCostByDistance(120, prefs && prefs.budget ? prefs.budget : "Mid-Range");
+      setText("destination-route-mode", mode);
+      setText("destination-route-time", "about 3-5 hours");
+      setText("destination-route-distance", "estimated");
       setText("destination-route-cost", `~PHP ${cost.toLocaleString()}`);
     }
   } catch (err) {
@@ -590,7 +621,8 @@ document.addEventListener("DOMContentLoaded", async () => {
       clearTimeout(searchTimer);
       renderDestinationLists(recommended, popular, q, prefs, session);
 
-      if (!IS_PERF_LITE && normalizeQuery(q).length >= 3) {
+      if (normalizeQuery(q).length >= 3) {
+        setSearchStatus("Searching places...");
         searchTimer = setTimeout(async () => {
           try {
             const dynamic = await fetchPlacesFromGoogle(prefs, q);
@@ -598,11 +630,16 @@ document.addEventListener("DOMContentLoaded", async () => {
               recommended = dynamic.recommended;
               popular = dynamic.popularDestinations;
               renderDestinationLists(recommended, popular, q, prefs, session);
+              setSearchStatus("");
+            } else {
+              setSearchStatus("No places found. Try a different search.");
             }
           } catch (e) {
-            // ignore live search failures and keep current list
+            setSearchStatus("Unable to load places right now. Please try again.");
           }
         }, 380);
+      } else if (!normalizeQuery(q)) {
+        setSearchStatus("");
       }
     });
   }

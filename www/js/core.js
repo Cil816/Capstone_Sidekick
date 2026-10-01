@@ -749,6 +749,7 @@ window.SidekickCore = {
   clearRemindersForEmail,
   formatDateRange,
   buildDashboardRecommendations,
+  getApiBaseUrl,
   generateItinerary,
   updateItineraryActivitySchedule,
   // expose place database for UI builders
