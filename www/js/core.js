@@ -37,8 +37,10 @@
 
 /* Sidekick Core (no backend): auth, user preferences, itinerary + chat generation */
 
-window.SIDEKICK_CONFIG = window.SIDEKICK_CONFIG || {
-  googleMapsApiKey: "YOUR_RESTRICTED_GOOGLE_MAPS_KEY",
+window.SIDEKICK_CONFIG = {
+  apiMode: "development",
+  googleMapsApiKey: "",
+  ...(window.SIDEKICK_CONFIG || {}),
 };
 
 const SIDEKICK_KEYS = {
@@ -145,6 +147,8 @@ async function hashPasswordSHA256(password) {
 }
 
 function getApiBaseUrl() {
+  const configuredBase = String(window.SIDEKICK_CONFIG?.apiBaseUrl || "").trim().replace(/\/+$/, "");
+  if (configuredBase) return configuredBase;
   const isAndroidApp = /Android/i.test(navigator.userAgent) && window.location.protocol === "https:";
   return isAndroidApp ? "http://10.0.2.2:3001" : "http://localhost:3001";
 }
@@ -747,6 +751,7 @@ window.SidekickCore = {
   getNotificationPreferences,
   setNotificationPreferences,
   clearRemindersForEmail,
+  getApiBaseUrl,
   formatDateRange,
   buildDashboardRecommendations,
   getApiBaseUrl,
@@ -1324,5 +1329,3 @@ if (document.readyState === "loading") {
 // NOTE: do not automatically create or sync itineraries on page load.
 // Itineraries should only be created when the user explicitly builds them.
 // Scheduling of existing reminders still occurs elsewhere on DOMContentLoaded.
-
-

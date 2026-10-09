@@ -2,29 +2,6 @@ document.addEventListener('DOMContentLoaded', function () {
   const nav = document.querySelector('.bottom-nav.overlay');
   if (!nav) return;
 
-  const currentPage = window.location.pathname.split('/').pop() || 'dashboard.html';
-  if (currentPage !== 'chat.html' && !document.querySelector('.sidekick-launcher')) {
-    const launcher = document.createElement('button');
-    launcher.className = 'sidekick-launcher';
-    launcher.type = 'button';
-    launcher.setAttribute('aria-label', 'Open Sidekick assistant');
-    launcher.title = 'Open Sidekick';
-    launcher.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg><span>Sidekick</span>';
-    const panel = document.createElement('div');
-    panel.className = 'sidekick-panel';
-    panel.setAttribute('role', 'dialog');
-    panel.setAttribute('aria-label', 'Sidekick assistant');
-    const frame = document.createElement('iframe');
-    frame.title = 'Sidekick assistant';
-    frame.src = 'chat.html';
-    panel.appendChild(frame);
-    launcher.addEventListener('click', () => {
-      const open = panel.classList.toggle('open');
-      launcher.setAttribute('aria-expanded', String(open));
-    });
-    document.body.append(launcher, panel);
-  }
-
   // Active link highlighting
   try {
     const links = Array.from(nav.querySelectorAll('.nav-item'));

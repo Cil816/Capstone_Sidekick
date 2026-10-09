@@ -1,45 +1,68 @@
-// Google Maps selected place storage
+// Selected place storage for the Places API (New) search results.
 let _selectedPlace = null;
 
-// Called by Google Maps callback or invoked if google.maps already present
-window.initMap = function(){
-  try{
-    const mapEl = document.getElementById('map');
-    if (!mapEl) return;
-    const center = { lat: 14.5995, lng: 120.9842 };
-    const map = new google.maps.Map(mapEl, { center, zoom: 6, disableDefaultUI: true });
-    const input = document.getElementById('place-search');
-    if (!input) return;
-    const autocomplete = new google.maps.places.Autocomplete(input, { fields: ['name','geometry','formatted_address'] });
-    const marker = new google.maps.Marker({ map });
-    autocomplete.addListener('place_changed', () => {
-      const place = autocomplete.getPlace();
-      if (!place || !place.geometry) return;
-      const loc = place.geometry.location;
-      _selectedPlace = {
-        name: place.name || input.value,
-        address: place.formatted_address || '',
-        lat: loc.lat(),
-        lng: loc.lng()
-      };
-      marker.setPosition(loc);
-      map.setCenter(loc);
-      map.setZoom(13);
-      document.dispatchEvent(new CustomEvent('sidekick:selected-place', { detail: _selectedPlace }));
+async function searchPlacesForBuilder(query) {
+  const mapEl = document.getElementById("map");
+  if (!mapEl || !String(query || "").trim()) return;
+  mapEl.textContent = "Searching verified Google Maps places...";
+  try {
+    const data = await window.SidekickCore.apiRequest("/api/maps/places", {
+      method: "POST",
+      body: JSON.stringify({ queries: [String(query).trim()] }),
     });
-  }catch(e){
-    console.warn('initMap error', e);
-  }
-};
-
-function initMapIfAvailable() {
-  if (window.google?.maps && typeof window.initMap === 'function') {
-    window.initMap();
+    const places = Array.isArray(data.places) ? data.places.slice(0, 8) : [];
+    mapEl.innerHTML = "";
+    if (!places.length) {
+      mapEl.textContent = "No verified places found.";
+      return;
+    }
+    places.forEach((place) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "map-place-result";
+      const photoUrl = getPlacePhotoUrl(place);
+      button.innerHTML = `
+        <span class="map-place-result-media">
+          ${photoUrl
+            ? `<img src="${window.SidekickCore.escapeHtml(photoUrl)}" alt="" loading="lazy" />`
+            : svgPin()}
+        </span>
+        <span class="map-place-result-copy">
+          <strong>${window.SidekickCore.escapeHtml(place.name)}</strong>
+          <span>${window.SidekickCore.escapeHtml(place.address || "Address unavailable")}</span>
+        </span>
+      `;
+      const image = button.querySelector("img");
+      if (image) image.addEventListener("error", () => image.replaceWith(createPhotoPlaceholder()));
+      button.addEventListener("click", () => {
+        _selectedPlace = place;
+        document.dispatchEvent(new CustomEvent("sidekick:selected-place", { detail: place }));
+        mapEl.querySelectorAll(".map-place-result").forEach((item) => item.classList.remove("selected"));
+        button.classList.add("selected");
+      });
+      mapEl.appendChild(button);
+    });
+  } catch (error) {
+    mapEl.textContent = error.message || "Google Places is currently unavailable.";
   }
 }
 
-// initialize maps if script already loaded
-setTimeout(initMapIfAvailable, 300);
+function getPlacePhotoUrl(place) {
+  if (String(window.SIDEKICK_CONFIG?.apiMode || "").toLowerCase() === "development") return "";
+  const resource = String(place?.photoResource || "").trim();
+  const baseUrl = window.SidekickCore?.getApiBaseUrl?.() || "";
+  return resource && baseUrl
+    ? `${baseUrl}/api/maps/photo?name=${encodeURIComponent(resource)}`
+    : "";
+}
+
+function createPhotoPlaceholder() {
+  const placeholder = document.createElement("span");
+  placeholder.className = "activity-photo-placeholder";
+  placeholder.innerHTML = svgPin();
+  return placeholder;
+}
+
 function svgClock() {
   return `
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -65,8 +88,14 @@ function renderActivity(activity) {
   const distance = typeof activity?.travelDistanceKm === 'number' ? `${Math.round(activity.travelDistanceKm)} km` : 'distance n/a';
   const mins = typeof activity?.travelMinutes === 'number' ? `${Math.round(activity.travelMinutes)} min` : 'time n/a';
   const cost = typeof activity?.estimatedTotalCostPhp === 'number' ? `PHP ${Number(activity.estimatedTotalCostPhp).toLocaleString()}` : 'cost n/a';
+  const photoUrl = getPlacePhotoUrl(activity);
   return `
     <div class="activity-card">
+      <div class="activity-photo">
+        ${photoUrl
+          ? `<img src="${window.SidekickCore.escapeHtml(photoUrl)}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';" /><span class="activity-photo-placeholder" style="display:none">${svgPin()}</span>`
+          : `<span class="activity-photo-placeholder">${svgPin()}</span>`}
+      </div>
       <div class="activity-time">
         ${svgClock()}
         <span>${timeText}</span>
@@ -127,6 +156,7 @@ async function fetchRouteFromOSRM(fromCoord, toCoord) {
 
 async function enrichItineraryWithLiveRoutes(itineraryData, email) {
   if (!itineraryData?.itinerary?.length) return;
+  if (String(window.SIDEKICK_CONFIG?.apiMode || "").toLowerCase() === "development") return;
   let changed = false;
 
   for (const day of itineraryData.itinerary) {
@@ -283,6 +313,8 @@ function attachAddActivityHandler(itineraryData, prefs, email, startDate) {
           activityObj.location = _selectedPlace.name || activityObj.location;
           activityObj.locationCoords = { lat: _selectedPlace.lat, lng: _selectedPlace.lng };
           activityObj.locationAddress = _selectedPlace.address || '';
+          activityObj.placeId = _selectedPlace.placeId || '';
+          activityObj.photoResource = _selectedPlace.photoResource || '';
         }
       }
     }catch(e){}
@@ -316,6 +348,15 @@ document.addEventListener("DOMContentLoaded", () => {
   const budgetSelect = document.getElementById('itinerary-budget');
   const buildBtn = document.getElementById('build-itinerary');
   const showBuilderBtn = document.getElementById('show-builder');
+  const placeSearchInput = document.getElementById("place-search");
+
+  if (placeSearchInput) {
+    placeSearchInput.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      searchPlacesForBuilder(placeSearchInput.value);
+    });
+  }
 
   function populatePlaces() {
     try {
@@ -391,7 +432,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     if (buildBtn) {
-      buildBtn.addEventListener('click', (e) => {
+      buildBtn.addEventListener('click', async (e) => {
         e.preventDefault();
         const selected = Array.from(preferredPlacesEl.querySelectorAll('.chip.selected')).map((b) => b.dataset.place);
         const startVal = startInput?.value ? new Date(startInput.value) : new Date();
@@ -404,7 +445,26 @@ document.addEventListener("DOMContentLoaded", () => {
         const summary = `Build itinerary starting ${startVal.toDateString()}\nBudget: ${budgetVal}\nPreferred places: ${selected.length ? selected.join(', ') : 'None'}\n\nProceed?`;
         if (!window.confirm(summary)) return;
 
-        const generated = window.SidekickCore.generateItinerary(tempPrefs, { startDate: startVal });
+        buildBtn.disabled = true;
+        buildBtn.textContent = "Verifying places...";
+        let generated;
+        try {
+          generated = await window.SidekickCore.apiRequest("/api/itinerary/generate", {
+            method: "POST",
+            body: JSON.stringify({
+              email,
+              message: `Plan a ${Math.max(1, selected.length || 3)} day trip to ${selected[0] || prefs?.preferredPlaces?.[0] || "my preferred destination"}. Budget: ${budgetVal}. Start date: ${startVal.toISOString().slice(0, 10)}.`,
+              selectedDestination: { name: selected[0] || prefs?.preferredPlaces?.[0] || "" },
+              profile: { ...tempPrefs, startDate: startVal.toISOString().slice(0, 10) },
+            }),
+          });
+        } catch (error) {
+          window.alert(error.message || "Verified itinerary generation failed.");
+          return;
+        } finally {
+          buildBtn.disabled = false;
+          buildBtn.textContent = "Build Itinerary";
+        }
         const itineraryData = { itinerary: generated.itinerary, meta: { ...generated.meta, startDate: startVal.toISOString() } };
 
         setItineraryForEmail(email, itineraryData);
@@ -424,4 +484,3 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 });
-

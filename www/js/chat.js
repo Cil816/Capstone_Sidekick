@@ -100,11 +100,12 @@ function parseSignals(text) {
   const dateMatch = raw.match(/\b(\d{4}-\d{2}-\d{2})\b/);
   const startDate = dateMatch ? dateMatch[1] : "";
 
-  const destinationMatch = raw.match(/\b(?:to|in|visit|for|destination)\s+([A-Za-z][A-Za-z\s.-]{2,40})/i);
+  const destinationMatch = raw.match(/\b(?:to|in|visit|destination)\s+([A-Za-z][A-Za-z\s.-]{2,40}?)(?=\s+(?:for|with|and|my|i|on)\b|[,.!?]|$)/i);
   const destination = destinationMatch ? String(destinationMatch[1]).trim() : "";
 
   const budget = normalizeBudget(raw);
-  const wantsGenerate = /(generate|create|build|make)\s+(an?\s+)?(itinerary|plan)|\bplan\s+my\s+trip\b|\bgenerate\s+itinerary\b/.test(lower);
+  const wantsGenerate = /(generate|create|build|make)\s+(an?\s+)?(itinerary|plan)|\bplan\s+my\s+trip\b|\bgenerate\s+itinerary\b/.test(lower)
+    || (Boolean(dayCount) && /\b(?:visit|travel|trip|go)\b/.test(lower));
   const wantsReset = /\b(reset|clear)\s+(ai\s+)?(memory|planner|plan)\b/.test(lower);
 
   const rememberMatch = raw.match(/^(?:remember|note)\s+(?:that\s+)?(.+)/i);
@@ -226,6 +227,26 @@ async function askSidekickBackend(history, prefs, state, userText) {
   return data;
 }
 
+async function generateItineraryWithBackend(prefs, state, userText) {
+  const session = window.SidekickCore.getAuthSession();
+  return window.SidekickCore.apiRequest("/api/itinerary/generate", {
+    method: "POST",
+    body: JSON.stringify({
+      email: session?.email || "",
+      message: userText,
+      selectedDestination: state.destination ? { name: state.destination } : null,
+      profile: {
+        ...prefs,
+        budget: state.budget || prefs?.budget || "",
+        startDate: state.startDate || "",
+        pace: state.pace || "",
+        mustSee: state.mustSee || [],
+        avoid: state.avoid || [],
+      },
+    }),
+  });
+}
+
 function fallbackReply(userText, state, prefs) {
   const base = window.SidekickCore.buildAssistantReply(userText, {
     interests: prefs?.interests || [],
@@ -274,6 +295,8 @@ function saveGeneratedItinerary(email, generated) {
 
 function applyAgentActions(email, actions) {
   const summaries = [];
+  const map = window.SidekickCore.getItineraryByEmail();
+  const itineraryData = map[email];
   for (const action of Array.isArray(actions) ? actions : []) {
     if (action?.type === "SHOW_PLACES" && Array.isArray(action.places)) {
       localStorage.setItem("sidekick.aiPlaces.v1", JSON.stringify(action.places.slice(0, 8)));
@@ -288,8 +311,6 @@ function applyAgentActions(email, actions) {
     }
 
     if (action?.type === "ADD_ITINERARY_ACTIVITY" && action.activity) {
-      const map = window.SidekickCore.getItineraryByEmail();
-      const itineraryData = map[email];
       const dayNumber = Math.max(1, Number(action.activity.dayNumber) || 1);
       const day = itineraryData?.itinerary?.find((entry) => Number(entry.dayNumber) === dayNumber);
       if (!day) {
@@ -309,13 +330,89 @@ function applyAgentActions(email, actions) {
         estimatedActivityCostPhp: 0,
         estimatedTransportCostPhp: 0,
         estimatedTotalCostPhp: 0,
+        placeId: String(action.activity.placeId || ""),
+        photoResource: String(action.activity.photoResource || ""),
         dueAt: Date.now(),
         iso: new Date().toISOString(),
       });
       window.SidekickCore.setItineraryByEmail(map);
       if (window.SidekickCore.syncRemindersFromItinerary) window.SidekickCore.syncRemindersFromItinerary(email);
       summaries.push(`Added ${action.activity.title} to Day ${dayNumber}.`);
+      continue;
     }
+
+    if (action?.type === "REMOVE_ITINERARY_ACTIVITY" && itineraryData?.itinerary) {
+      const pattern = new RegExp(String(action.match || "museum"), "i");
+      let removed = false;
+      for (const day of itineraryData.itinerary) {
+        const index = (day.activities || []).findIndex((activity) => pattern.test(`${activity.title} ${activity.location}`));
+        if (index >= 0) {
+          day.activities.splice(index, 1);
+          removed = true;
+          break;
+        }
+      }
+      if (removed) {
+        window.SidekickCore.setItineraryByEmail(map);
+        summaries.push("Removed the requested activity from your itinerary.");
+      }
+      continue;
+    }
+
+    if (action?.type === "REPLACE_ITINERARY_ACTIVITY" && itineraryData?.itinerary && action.activity) {
+      const pattern = new RegExp(String(action.match || "museum"), "i");
+      for (const day of itineraryData.itinerary) {
+        const index = (day.activities || []).findIndex((activity) => pattern.test(`${activity.title} ${activity.location}`));
+        if (index >= 0) {
+          day.activities[index] = {
+            ...day.activities[index],
+            title: String(action.activity.title || "Replacement activity"),
+            location: String(action.activity.location || ""),
+            locationAddress: String(action.activity.location || ""),
+            placeId: String(action.activity.placeId || ""),
+            photoResource: String(action.activity.photoResource || ""),
+            note: String(action.activity.note || "Replacement activity."),
+          };
+          window.SidekickCore.setItineraryByEmail(map);
+          summaries.push(`Replaced the activity with ${day.activities[index].title}.`);
+          break;
+        }
+      }
+      continue;
+    }
+
+    if (action?.type === "MOVE_ITINERARY_ACTIVITY" && itineraryData?.itinerary) {
+      const pattern = new RegExp(String(action.match || "museum|ramen"), "i");
+      let moved = null;
+      for (const day of itineraryData.itinerary) {
+        const index = (day.activities || []).findIndex((activity) => pattern.test(`${activity.title} ${activity.location}`));
+        if (index >= 0) {
+          moved = day.activities.splice(index, 1)[0];
+          break;
+        }
+      }
+      const target = itineraryData.itinerary.find((day) => Number(day.dayNumber) === Number(action.dayNumber || 3));
+      if (moved && target) {
+        target.activities = Array.isArray(target.activities) ? target.activities : [];
+        target.activities.push(moved);
+        window.SidekickCore.setItineraryByEmail(map);
+        summaries.push(`Moved ${moved.title} to Day ${target.dayNumber}.`);
+      }
+      continue;
+    }
+
+    if (action?.type === "RELAX_ITINERARY_DAY" && itineraryData?.itinerary) {
+      const target = itineraryData.itinerary.find((day) => Number(day.dayNumber) === Number(action.dayNumber || 2));
+      if (target && target.activities.length > 1) {
+        target.activities = target.activities.filter((_, index) => index % 2 === 0);
+        window.SidekickCore.setItineraryByEmail(map);
+        summaries.push(`Made Day ${target.dayNumber} less tiring.`);
+      }
+    }
+  }
+  if (itineraryData && summaries.length) {
+    window.SidekickCore.setItineraryByEmail(map);
+    document.dispatchEvent(new CustomEvent("sidekick:itinerary-updated", { detail: { email } }));
   }
   return summaries;
 }
@@ -474,18 +571,25 @@ async function sendMessage() {
         const actionSummary = applyAgentActions(session.email, backendReply.actions);
         if (actionSummary.length) reply = `${reply}\n\n${actionSummary.join("\n")}`;
 
-        if (backendReply.itinerary && Array.isArray(backendReply.itinerary)) {
+        if (merged.signals.wantsGenerate && !companionNeedsEssentials(companionState)) {
+          const generated = await generateItineraryWithBackend(prefs, companionState, userText);
+          if (!generated?.itinerary || !Array.isArray(generated.itinerary)) {
+            throw new Error("The itinerary service returned no itinerary.");
+          }
           saveGeneratedItinerary(session.email, {
-            itinerary: backendReply.itinerary,
+            itinerary: generated.itinerary,
             meta: {
-              ...(backendReply.meta || {}),
-              startDate: new Date().toISOString(),
-              source: backendReply.meta?.source || "sidekick-chat-ai",
+              ...(generated.meta || {}),
+              startDate: companionState.startDate || new Date().toISOString(),
+              source: generated.meta?.source || "sidekick-chat-ai",
             },
           });
+          reply = `Your verified ${generated.meta?.destination || companionState.destination} itinerary is ready. Open the Itinerary tab to view it.`;
         }
       } catch (e) {
-        reply = fallbackReply(userText, companionState, prefs);
+        reply = merged.signals.wantsGenerate
+          ? `I couldn't verify a complete itinerary right now. ${String(e?.message || "Please check your destination and try again.")}`
+          : fallbackReply(userText, companionState, prefs);
       }
     }
 
@@ -521,4 +625,3 @@ document.addEventListener("DOMContentLoaded", () => {
 window.sendMessage = sendMessage;
 window.handleKeyPress = handleKeyPress;
 window.clearChat = clearChat;
-

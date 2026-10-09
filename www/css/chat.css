@@ -5,6 +5,7 @@
     /* let parent provide the viewport height and avoid forcing 100vh which can cause overflow */
     min-height: 0;
     padding-bottom: 0;
+    min-height: calc(100dvh - var(--nav-height) - env(safe-area-inset-bottom));
 }
 
 .chat-header {
@@ -61,6 +62,7 @@
     display: flex;
     flex-direction: column;
     gap: 16px;
+    min-width: 0;
 }
 
 .message {
@@ -77,6 +79,7 @@
 
 .message-bubble {
     max-width: 75%;
+    overflow-wrap: anywhere;
     padding: 12px 16px;
     border-radius: 16px;
 }
@@ -164,6 +167,13 @@
 
 /* On larger screens keep input in-flow to avoid covering content */
 @media (min-width: 600px) {
+    .chat-screen {
+        max-width: 860px;
+        width: 100%;
+        margin: 0 auto;
+        min-height: calc(100dvh - var(--nav-height) - 24px);
+    }
+
     .chat-input-container {
         position: static;
         bottom: auto;
@@ -172,6 +182,23 @@
         border-top: 0;
         padding: 12px 0;
         background: transparent;
+    }
+
+    @media (max-width: 480px) {
+        .chat-header,
+        .chat-messages {
+            padding-left: 16px;
+            padding-right: 16px;
+        }
+
+        .message-bubble {
+            max-width: 88%;
+        }
+
+        .chat-input-container {
+            padding: 10px 12px;
+            gap: 8px;
+        }
     }
 
     .chat-messages {

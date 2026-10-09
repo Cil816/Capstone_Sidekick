@@ -2,7 +2,6 @@ const GOOGLE_MAPS_API_KEY = (window.SIDEKICK_CONFIG && window.SIDEKICK_CONFIG.go
 const SELECTED_DESTINATION_KEY = "sidekick.selectedDestination.v1";
 
 let _gmapsLoadPromise = null;
-let _placesService = null;
 let _modalMap = null;
 let _marker = null;
 let _directionsService = null;
@@ -102,25 +101,6 @@ function ensureGoogleMapsLoaded() {
     document.head.appendChild(script);
   });
   return _gmapsLoadPromise;
-}
-
-function ensurePlacesService() {
-  if (_placesService) return _placesService;
-  const holder = document.createElement("div");
-  _placesService = new google.maps.places.PlacesService(holder);
-  return _placesService;
-}
-
-function textSearchAsync(service, request) {
-  return new Promise((resolve) => {
-    service.textSearch(request, (results, status) => {
-      if (status === google.maps.places.PlacesServiceStatus.OK && Array.isArray(results)) {
-        resolve(results);
-      } else {
-        resolve([]);
-      }
-    });
-  });
 }
 
 function buildPreferenceKeywords(prefs, searchQuery = "") {
@@ -288,52 +268,8 @@ async function fetchPlacesFromGoogle(prefs, searchQuery = "") {
       return { recommended, popularDestinations, allPlaces };
     }
   } catch (backendError) {
-    // Fall back to the existing browser Google Maps Places service.
+    throw new Error(backendError?.message || "Google Places is currently unavailable.");
   }
-
-  await ensureGoogleMapsLoaded();
-  const service = ensurePlacesService();
-  const isMobile = window.matchMedia && window.matchMedia("(max-width: 768px)").matches;
-  const maxKeywordCount = IS_PERF_LITE ? 1 : isMobile ? 2 : 4;
-  const maxSeedCount = IS_PERF_LITE ? 1 : isMobile ? 2 : 3;
-  const limitedKeywords = keywords.slice(0, maxKeywordCount);
-  const limitedSeeds = seeds.slice(0, maxSeedCount);
-
-  const jobs = [];
-  for (const keyword of limitedKeywords) {
-    for (const seed of limitedSeeds) {
-      jobs.push(
-        textSearchAsync(service, {
-          query: `${keyword} in Philippines`,
-          location: new google.maps.LatLng(seed.lat, seed.lng),
-          radius: 250000,
-          region: "ph",
-        })
-      );
-    }
-  }
-
-  const results = await Promise.all(jobs.slice(0, IS_PERF_LITE ? 3 : jobs.length));
-  const allRaw = results.flat();
-
-  const dedup = new Map();
-  for (const g of allRaw) {
-    if (!g || !g.place_id || !g.geometry || !g.geometry.location) continue;
-    if (!dedup.has(g.place_id)) dedup.set(g.place_id, toDashboardPlace(g));
-  }
-
-  const allPlaces = Array.from(dedup.values()).filter((p) => p.lat && p.lng);
-  const recommended = allPlaces
-    .slice()
-    .sort((a, b) => preferenceScore(b, prefs) - preferenceScore(a, prefs))
-    .slice(0, IS_PERF_LITE ? 5 : 8);
-
-  const popularDestinations = allPlaces
-    .slice()
-    .sort((a, b) => (b.rating * 1000 + b.ratingCount) - (a.rating * 1000 + a.ratingCount))
-    .slice(0, IS_PERF_LITE ? 5 : 8);
-
-  return { recommended, popularDestinations, allPlaces };
 }
 
 function renderPlaceCard(place) {
@@ -486,7 +422,10 @@ async function showDestinationDetails(place, prefs, session) {
   } catch (err) {
     const mode = estimateModeByDistanceKm(120);
     const cost = estimateCostByDistance(120, prefs && prefs.budget ? prefs.budget : "Mid-Range");
-    mapEl.innerHTML = "Google Maps unavailable. Add your API key in dashboard.js to view live route map and destinations.";
+    const message = err && err.message === "No API"
+      ? "Interactive map is not configured. Add a browser-restricted Google Maps key in www/js/config.local.js."
+      : "Interactive map is unavailable right now. Place search and itinerary features can still be used.";
+    mapEl.innerHTML = `<div class="destination-map-message">${window.SidekickCore.escapeHtml(message)}</div>`;
     setText("destination-route-mode", mode);
     setText("destination-route-time", "about 3-5 hours");
     setText("destination-route-distance", "estimated");
@@ -507,37 +446,39 @@ async function showDestinationDetails(place, prefs, session) {
   }
 }
 
-function generateFocusedItinerary(place, prefs, session) {
-  if (!session || !session.email) return;
-
-  const currentPrefs = prefs || {};
-  const preferredPlaces = Array.isArray(currentPrefs.preferredPlaces) ? currentPrefs.preferredPlaces.slice() : [];
-  const boosted = Array.from(new Set([place.name, place.region, ...preferredPlaces]));
-  const tempPrefs = Object.assign({}, currentPrefs, { preferredPlaces: boosted });
-
-  const generated = window.SidekickCore.generateItinerary(tempPrefs, { startDate: new Date() });
-  if (generated && generated.itinerary && generated.itinerary[0] && generated.itinerary[0].activities && generated.itinerary[0].activities[0]) {
-    generated.itinerary[0].activities[0].title = `Start your trip at ${place.name}`;
-    generated.itinerary[0].activities[0].location = `${place.name}, ${place.region}`;
-    generated.itinerary[0].activities[0].note = `Focused destination plan based on your preferences and budget capability (${tempPrefs.budget || "Mid-Range"}).`;
-    generated.itinerary[0].activities[0].locationCoords = { lat: place.lat, lng: place.lng };
+async function generateFocusedItinerary(place, prefs, session) {
+  if (!session?.email || !place?.name) return;
+  const button = document.getElementById("destination-generate");
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Verifying itinerary...";
   }
-
-  const itineraryData = {
-    itinerary: generated.itinerary,
-    meta: { ...generated.meta, startDate: new Date().toISOString(), focusedPlace: place.name },
-  };
-
-  const byEmail = window.SidekickCore.getItineraryByEmail();
-  byEmail[session.email] = itineraryData;
-  window.SidekickCore.setItineraryByEmail(byEmail);
-
   try {
-    if (window.SidekickCore && window.SidekickCore.syncRemindersFromItinerary) window.SidekickCore.syncRemindersFromItinerary(session.email);
-    if (window.SidekickCore && window.SidekickCore.scheduleAllFor) window.SidekickCore.scheduleAllFor(session.email);
-  } catch (e) {}
-
-  window.location.href = "itinerary.html";
+    const response = await window.SidekickCore.apiRequest("/api/itinerary/generate", {
+      method: "POST",
+      body: JSON.stringify({
+        email: session.email,
+        message: `Plan a practical trip to ${place.name}. Use my saved preferences and suggest a balanced itinerary.`,
+        selectedDestination: { name: place.name, placeId: place.placeId, lat: place.lat, lng: place.lng },
+        profile: { ...(prefs || {}), preferredPlaces: [place.name, ...(prefs?.preferredPlaces || [])] },
+      }),
+    });
+    if (!Array.isArray(response.itinerary)) throw new Error("The itinerary service returned no itinerary.");
+    const byEmail = window.SidekickCore.getItineraryByEmail();
+    byEmail[session.email] = {
+      itinerary: response.itinerary,
+      meta: { ...(response.meta || {}), focusedPlace: place.name, startDate: new Date().toISOString() },
+    };
+    window.SidekickCore.setItineraryByEmail(byEmail);
+    window.location.href = "itinerary.html";
+  } catch (error) {
+    setSearchStatus(error.message || "Unable to generate a verified itinerary.");
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = "Generate itinerary for this place";
+    }
+  }
 }
 
 function attachCardHandlers(recPlaces, popPlaces, prefs, session) {
@@ -635,7 +576,7 @@ document.addEventListener("DOMContentLoaded", async () => {
               setSearchStatus("No places found. Try a different search.");
             }
           } catch (e) {
-            setSearchStatus("Unable to load places right now. Please try again.");
+            setSearchStatus(e?.message || "Unable to load places right now. Please try again.");
           }
         }, 380);
       } else if (!normalizeQuery(q)) {

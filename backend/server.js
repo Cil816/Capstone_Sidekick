@@ -15,6 +15,7 @@ const [serverName, configuredInstance] = configuredServer.split('\\', 2);
 const useWindowsAuthentication = (process.env.DB_AUTH || 'windows').toLowerCase() === 'windows';
 const rateLimits = new Map();
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const isDevelopmentMode = String(process.env.SIDEKICK_API_MODE || 'production').trim().toLowerCase() === 'development';
 
 const config = {
   ...(useWindowsAuthentication ? { driver: 'msnodesqlv8' } : {}),
@@ -60,6 +61,10 @@ function getMapsApiKey() {
   return String(process.env.GOOGLE_MAPS_API_KEY || '').trim();
 }
 
+function getAiModel() {
+  return String(process.env.GEMINI_MODEL || 'gemini-3.6-flash').trim();
+}
+
 function mapPlace(place) {
   const location = place.location || place.geometry?.location;
   const photo = place.photos?.[0];
@@ -72,12 +77,83 @@ function mapPlace(place) {
     lat: location?.latitude ?? location?.lat ?? place.lat ?? null,
     lng: location?.longitude ?? location?.lng ?? place.lng ?? null,
     rating: place.rating ?? null,
+    ratingCount: place.userRatingCount ?? place.ratingCount ?? null,
+    priceLevel: place.priceLevel ?? null,
+    openingHours: place.regularOpeningHours?.weekdayDescriptions || [],
     types: Array.isArray(place.types) ? place.types.slice(0, 6) : [],
     photoResource,
     photoAttribution: photoAttribution ? {
       name: photoAttribution.displayName || '',
       uri: photoAttribution.uri || '',
     } : null,
+  };
+}
+
+const developmentPlaceCatalog = [
+  { name: 'Tokyo National Museum', address: '13-9 Ueno Park, Taito City, Tokyo', category: 'museum', lat: 35.7188, lng: 139.7765, cost: 1000 },
+  { name: 'Toyota Automobile Museum', address: '41-100 Yokomakura, Nagakute, Aichi', category: 'cars', lat: 35.1736, lng: 137.0878, cost: 1200 },
+  { name: 'Shibuya Sky', address: '2-24-1 Shibuya, Tokyo', category: 'photography', lat: 35.6585, lng: 139.7013, cost: 2200 },
+  { name: 'Tsukiji Outer Market', address: '4-16-2 Tsukiji, Chuo City, Tokyo', category: 'restaurant', lat: 35.6655, lng: 139.7708, cost: 1800 },
+  { name: 'Asakusa Senso-ji', address: '2-3-1 Asakusa, Taito City, Tokyo', category: 'attraction', lat: 35.7148, lng: 139.7967, cost: 0 },
+  { name: 'teamLab Borderless', address: 'Azabudai Hills, Minato City, Tokyo', category: 'photography', lat: 35.6627, lng: 139.7396, cost: 3800 },
+  { name: 'Odaiba Seaside Park', address: '1-4 Daiba, Minato City, Tokyo', category: 'attraction', lat: 35.6295, lng: 139.7754, cost: 0 },
+  { name: 'Tokyo Ramen Street', address: '1-9-1 Marunouchi, Chiyoda City, Tokyo', category: 'restaurant', lat: 35.6812, lng: 139.7671, cost: 1400 },
+  { name: 'Shibuya Crossing', address: 'Shibuya City, Tokyo', category: 'photography', lat: 35.6595, lng: 139.7005, cost: 0 },
+];
+
+function developmentPlace(query, index = 0) {
+  const text = String(query || '').toLowerCase();
+  const namedMatch = developmentPlaceCatalog.find((place) => text.includes(place.name.toLowerCase()));
+  const match = namedMatch || developmentPlaceCatalog.find((place) => (
+    text.includes(place.category) ||
+    (text.includes('food') && place.category === 'restaurant') ||
+    (text.includes('photo') && place.category === 'photography') ||
+    (text.includes('car') && place.category === 'cars') ||
+    (text.includes('museum') && place.category === 'museum')
+  )) || developmentPlaceCatalog[index % developmentPlaceCatalog.length];
+  return {
+    placeId: `mock-place-${match.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
+    name: match.name,
+    address: match.address,
+    lat: match.lat,
+    lng: match.lng,
+    category: match.category,
+    types: [match.category],
+    rating: 4.5,
+    ratingCount: 120,
+    priceLevel: match.cost > 2500 ? 'PRICE_LEVEL_EXPENSIVE' : 'PRICE_LEVEL_MODERATE',
+    openingHours: ['Open daily (development sample)'],
+    photoResource: null,
+    photoAttribution: null,
+    isDevelopmentMock: true,
+    estimatedCostPhp: match.cost,
+  };
+}
+
+function developmentPlaces(query, limit = 8) {
+  const text = String(query || '').toLowerCase();
+  const matches = developmentPlaceCatalog.filter((place) => (
+    !text ||
+    text.includes(place.name.toLowerCase()) ||
+    text.includes(place.category) ||
+    (text.includes('food') && place.category === 'restaurant') ||
+    (text.includes('photo') && place.category === 'photography') ||
+    (text.includes('car') && place.category === 'cars') ||
+    (text.includes('museum') && place.category === 'museum')
+  ));
+  const source = matches.length ? matches : developmentPlaceCatalog;
+  return source.slice(0, limit).map((_, index) => developmentPlace(matches.length ? _.name : query, index));
+}
+
+function developmentRoute(from, to, travelMode = 'DRIVE') {
+  const latDistance = (Number(to.lat) - Number(from.lat)) * 111;
+  const lngDistance = (Number(to.lng) - Number(from.lng)) * 91;
+  const distanceKm = Math.max(0.4, Math.sqrt(latDistance ** 2 + lngDistance ** 2));
+  return {
+    distanceMeters: Math.round(distanceKm * 1000),
+    durationMinutes: Math.max(8, Math.round(distanceKm * 5)),
+    travelMode: String(travelMode || 'DRIVE').toUpperCase(),
+    isDevelopmentMock: true,
   };
 }
 
@@ -97,13 +173,14 @@ async function callGooglePlacesApi(path, payload) {
     headers: {
       'Content-Type': 'application/json',
       'X-Goog-Api-Key': apiKey,
-      'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.types,places.photos.name,places.photos.authorAttributions',
+      'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.priceLevel,places.regularOpeningHours.weekdayDescriptions,places.types,places.photos.name,places.photos.authorAttributions',
     },
     body: JSON.stringify(payload),
   });
   const data = await response.json();
   if (!response.ok) {
-    throw new Error('Google Maps is currently unavailable.');
+    const reason = data?.error?.message || data?.error?.status;
+    throw new Error(reason ? `Google Places request failed: ${reason}` : 'Google Maps is currently unavailable.');
   }
   return data;
 }
@@ -121,7 +198,10 @@ async function callGoogleRoutesApi(payload) {
     body: JSON.stringify(payload),
   });
   const data = await response.json();
-  if (!response.ok) throw new Error('Google Maps is currently unavailable.');
+  if (!response.ok) {
+    const reason = data?.error?.message || data?.error?.status;
+    throw new Error(reason ? `Google Routes request failed: ${reason}` : 'Google Maps is currently unavailable.');
+  }
   return data;
 }
 
@@ -335,7 +415,7 @@ async function callGeminiApi({ message, contextText, systemInstruction, response
     },
   };
 
-  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${apiKey}`, {
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(getAiModel())}:generateContent?key=${apiKey}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -438,7 +518,7 @@ const sidekickToolDeclarations = [
     description: 'Request adding a place to the user itinerary through the existing Sidekick UI.',
     parameters: {
       type: 'OBJECT',
-      properties: { name: { type: 'STRING' }, location: { type: 'STRING' }, dayNumber: { type: 'INTEGER' }, note: { type: 'STRING' } },
+      properties: {       name: { type: 'STRING' }, location: { type: 'STRING' }, placeId: { type: 'STRING' }, photoResource: { type: 'STRING' }, dayNumber: { type: 'INTEGER' }, note: { type: 'STRING' } },
       required: ['name', 'location', 'dayNumber'],
     },
   },
@@ -548,7 +628,14 @@ async function executeSidekickTool(name, args, email) {
       added: false,
       uiAction: {
         type: 'ADD_ITINERARY_ACTIVITY',
-        activity: { title: String(args.name), location: String(args.location), dayNumber: Math.max(1, Number(args.dayNumber) || 1), note: String(args.note || 'Added by Sidekick AI.') },
+        activity: {
+          title: String(args.name),
+          location: String(args.location),
+          placeId: String(args.placeId || ''),
+          photoResource: String(args.photoResource || ''),
+          dayNumber: Math.max(1, Number(args.dayNumber) || 1),
+          note: String(args.note || 'Added by Sidekick AI.'),
+        },
       },
     };
   }
@@ -557,8 +644,33 @@ async function executeSidekickTool(name, args, email) {
 
 async function generateAgentReply({ email, message, selectedDestination, history, profile }) {
   const currentProfile = await getUserProfileContext(email);
+  const effectiveProfile = {
+    ...currentProfile,
+    ...(profile || {}),
+    travelTypes: Array.isArray(profile?.travelTypes) && profile.travelTypes.length ? profile.travelTypes : currentProfile.travelTypes,
+    interests: Array.isArray(profile?.interests) && profile.interests.length ? profile.interests : currentProfile.interests,
+    preferredPlaces: Array.isArray(profile?.preferredPlaces) && profile.preferredPlaces.length ? profile.preferredPlaces : currentProfile.preferredPlaces,
+  };
   const lowerMessage = String(message || '').toLowerCase();
   const currentUser = await executeSidekickTool('getCurrentUser', {}, email);
+
+  if (isDevelopmentMode) {
+    const actions = [];
+    const replacingMuseum = /\breplace\b.*\b(cheaper|museum)\b/.test(lowerMessage);
+    if (/\bremove\b.*\bmuseum\b/.test(lowerMessage) && !replacingMuseum) actions.push({ type: 'REMOVE_ITINERARY_ACTIVITY', match: 'museum' });
+    if (replacingMuseum) actions.push({ type: 'REPLACE_ITINERARY_ACTIVITY', match: 'museum', activity: { title: 'Tokyo Ramen Street', location: '1-9-1 Marunouchi, Chiyoda City, Tokyo', placeId: 'mock-place-tokyo-ramen-street', dayNumber: 1, note: 'Cheaper development replacement.' } });
+    if (/\bmove\b.*\bday\s*3\b/.test(lowerMessage)) actions.push({ type: 'MOVE_ITINERARY_ACTIVITY', match: 'ramen|museum', dayNumber: 3 });
+    const relaxMatch = lowerMessage.match(/day\s*(\d+)[^.!?]{0,24}less tiring|less tiring[^.!?]{0,24}day\s*(\d+)|make day\s*(\d+)[^.!?]{0,24}relaxed/);
+    if (relaxMatch) actions.push({ type: 'RELAX_ITINERARY_DAY', dayNumber: Number(relaxMatch[1] || relaxMatch[2] || relaxMatch[3] || 2) });
+    if (/\badd\b.*\brestaurant|restaurant\b.*\bnear\b/.test(lowerMessage)) actions.push({ type: 'ADD_ITINERARY_ACTIVITY', activity: { title: 'Tokyo Ramen Street', location: '1-9-1 Marunouchi, Chiyoda City, Tokyo', placeId: 'mock-place-tokyo-ramen-street', dayNumber: 2, note: 'Development restaurant near the next activity.' } });
+    return {
+      reply: actions.length
+        ? 'I updated your development itinerary using the requested change. Open the Itinerary tab to review it.'
+        : `I captured your trip request for ${selectedDestination?.name || 'Tokyo'}. Your preferences include ${(effectiveProfile.interests || []).join(', ') || 'your saved interests'} and a ${profile?.budget || 'Mid-Range'} budget.`,
+      actions,
+      meta: { source: 'development-mock', isDevelopmentMock: true, preferences: effectiveProfile },
+    };
+  }
 
   if (/\b(name|email)\b/.test(lowerMessage) && /\b(my|i)\b/.test(lowerMessage)) {
     return { reply: `Your name is ${currentUser.name} and your email is ${currentUser.email}.`, meta: { source: 'sidekick-direct' } };
@@ -584,7 +696,7 @@ async function generateAgentReply({ email, message, selectedDestination, history
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const apiKey = getAiApiKey();
     if (!apiKey) throw new Error('AI_API_KEY is missing. Add your Gemini API key in backend/.env.');
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${apiKey}`, {
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(getAiModel())}:generateContent?key=${apiKey}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ contents, systemInstruction: { parts: [{ text: systemInstruction }] }, tools: [{ functionDeclarations: sidekickToolDeclarations }], generationConfig: { temperature: 0.5, maxOutputTokens: 900, responseMimeType: 'text/plain' } }),
     });
@@ -596,7 +708,7 @@ async function generateAgentReply({ email, message, selectedDestination, history
     if (!calls.length) {
       const reply = parts.map((part) => part.text || '').join('').trim();
       if (!reply) throw new Error('AI returned an empty response.');
-      return { reply: sanitizePlanText(reply), actions: uiActions, meta: { source: 'gemini-agent', model: 'gemini-3.6-flash' } };
+      return { reply: sanitizePlanText(reply), actions: uiActions, meta: { source: 'gemini-agent', model: getAiModel() } };
     }
     contents.push(candidate.content);
     const functionResponses = [];
@@ -680,6 +792,204 @@ async function generateItineraryFromAi({ email, message, selectedDestination, pr
   };
 }
 
+function routeDurationMinutes(route) {
+  const seconds = Number.parseFloat(String(route?.duration || '').replace('s', ''));
+  return Number.isFinite(seconds) ? Math.max(1, Math.round(seconds / 60)) : null;
+}
+
+async function findVerifiedPlaces(query, destination) {
+  if (isDevelopmentMode) return developmentPlaces(`${query} ${destination}`, 5);
+  const data = await callGooglePlacesApi('places:searchText', {
+    textQuery: `${String(query).trim()} in ${String(destination).trim()}`,
+    maxResultCount: 5,
+  });
+  return (data.places || [])
+    .map(mapPlace)
+    .filter((place) => place.placeId && Number.isFinite(place.lat) && Number.isFinite(place.lng));
+}
+
+async function calculateVerifiedRoute(from, to, travelMode = 'DRIVE') {
+  if (isDevelopmentMode) return developmentRoute(from, to, travelMode);
+  const data = await callGoogleRoutesApi({
+    origin: { location: { latLng: { latitude: from.lat, longitude: from.lng } } },
+    destination: { location: { latLng: { latitude: to.lat, longitude: to.lng } } },
+    travelMode: String(travelMode || 'DRIVE').toUpperCase(),
+    computeAlternativeRoutes: false,
+  });
+  const route = data.routes?.[0];
+  if (!route) throw new Error('No route was found between itinerary locations.');
+  return {
+    distanceMeters: Number(route.distanceMeters || 0),
+    durationMinutes: routeDurationMinutes(route),
+    travelMode: String(travelMode || 'DRIVE').toUpperCase(),
+  };
+}
+
+async function generateVerifiedItineraryFromAi({ email, message, selectedDestination, profile }) {
+  const userProfile = profile || (email ? await getUserProfileContext(email) : {});
+  const destination = selectedDestination?.name || selectedDestination?.destination || userProfile.preferredPlaces?.[0];
+  if (!destination) throw new Error('Please provide a destination before generating an itinerary.');
+
+  if (isDevelopmentMode) {
+    const request = String(message || '').toLowerCase();
+    const dayMatch = request.match(/\b(\d{1,2})\s*day/);
+    const durationDays = Math.max(1, Math.min(14, Number(dayMatch?.[1] || profile?.dayCount || 3)));
+    const activityQueriesByDay = [
+      ['Tokyo National Museum museum', 'Shibuya Sky photography'],
+      ['Toyota Automobile Museum cars', 'Tsukiji Outer Market restaurant'],
+      ['Asakusa Senso-ji attraction', 'teamLab Borderless photography'],
+      ['Tokyo Ramen Street restaurant', 'Odaiba Seaside Park attraction'],
+    ];
+    const activitiesByDay = Array.from({ length: durationDays }, (_, dayIndex) => {
+      const count = String(profile?.pace || '').toLowerCase() === 'relaxed' || request.includes('relaxed') ? 2 : 3;
+      const dayQueries = activityQueriesByDay[dayIndex % activityQueriesByDay.length];
+      return dayQueries.slice(0, count).map((query, activityIndex) => {
+        const place = developmentPlace(query, dayIndex + activityIndex);
+        const dueAt = Date.now() + dayIndex * 86400000 + activityIndex * 3600000;
+        return {
+          id: `mock-${dayIndex + 1}-${activityIndex + 1}`,
+          timeLabel: ['Morning', 'Afternoon', 'Evening'][activityIndex] || 'Flexible',
+          title: place.name,
+          location: place.address,
+          locationAddress: place.address,
+          placeId: place.placeId,
+          locationCoords: { lat: place.lat, lng: place.lng },
+          photoResource: null,
+          note: `Development itinerary activity matching ${place.category} and your preferences.`,
+          transportMode: 'MOCK_ROUTE',
+          travelMinutes: activityIndex ? developmentRoute(developmentPlace(dayQueries[activityIndex - 1]), place).durationMinutes : 0,
+          travelDistanceKm: activityIndex ? developmentRoute(developmentPlace(dayQueries[activityIndex - 1]), place).distanceMeters / 1000 : 0,
+          estimatedActivityCostPhp: place.estimatedCostPhp,
+          estimatedTransportCostPhp: activityIndex ? 180 : 0,
+          estimatedTotalCostPhp: place.estimatedCostPhp + (activityIndex ? 180 : 0),
+          dueAt,
+          iso: new Date(dueAt).toISOString(),
+        };
+      });
+    });
+    return {
+      itinerary: activitiesByDay.map((activities, index) => ({
+        dayNumber: index + 1,
+        dateLabel: `Day ${index + 1}`,
+        estimatedDayCostPhp: activities.reduce((sum, activity) => sum + activity.estimatedTotalCostPhp, 0),
+        estimatedDayCostLowPhp: activities.reduce((sum, activity) => sum + activity.estimatedTotalCostPhp, 0),
+        estimatedDayCostHighPhp: activities.reduce((sum, activity) => sum + activity.estimatedTotalCostPhp, 0),
+        activities,
+      })),
+      meta: {
+        destination,
+        source: 'development-mock',
+        generatedAt: new Date().toISOString(),
+        budget: profile?.budget || userProfile.budget || 'Mid-Range',
+        currency: 'PHP',
+        preferences: {
+          interests: userProfile.interests || [],
+          travelTypes: userProfile.travelTypes || [],
+          preferredPlaces: userProfile.preferredPlaces || [],
+        },
+        isDevelopmentMock: true,
+      },
+    };
+  }
+
+  const planningContext = [
+    'You are preparing a preliminary travel itinerary plan.',
+    `Destination: ${destination}`,
+    `Interests: ${(userProfile.interests || []).join(', ') || 'not provided'}`,
+    `Travel style: ${(userProfile.travelTypes || []).join(', ') || 'not provided'}`,
+    `Budget: ${userProfile.budget || 'not provided'}`,
+    `Request: ${message}`,
+  ].join('\n');
+  const preliminaryText = await callGeminiApi({
+    message,
+    contextText: planningContext,
+    systemInstruction: 'Return JSON only: {"destination":"...","durationDays":number,"days":[{"day":number,"theme":"...","activities":[{"searchQuery":"specific real place or category","category":"attraction|restaurant|cafe|museum|hotel|shopping|activity","durationMinutes":number,"estimatedCost":number,"notes":"..."}]}]}. Use 2-4 activities per day, group by nearby areas, and never invent place IDs, addresses, ratings, opening hours, or travel times.',
+    responseMimeType: 'application/json',
+  });
+  const preliminary = extractJsonObject(preliminaryText);
+  if (!preliminary?.days?.length) throw new Error('The AI returned an invalid preliminary itinerary.');
+
+  const requestedActivities = preliminary.days.flatMap((day) => (day.activities || []).slice(0, 4).map((activity) => ({
+    ...activity,
+    day: Number(day.day || 1),
+    theme: String(day.theme || ''),
+  }))).slice(0, 32);
+  const placeResults = await Promise.all(requestedActivities.map(async (activity) => ({
+    activity,
+    places: await findVerifiedPlaces(activity.searchQuery || activity.category, preliminary.destination || destination),
+  })));
+  const verifiedPlaces = Array.from(new Map(placeResults.flatMap((result) => result.places).map((place) => [place.placeId, place])).values());
+  if (!verifiedPlaces.length) throw new Error('Google Places could not verify any locations for this itinerary.');
+
+  const placeByQuery = new Map();
+  for (const result of placeResults) {
+    const place = result.places[0];
+    if (place) placeByQuery.set(`${result.activity.day}:${result.activity.searchQuery}`, place);
+  }
+  const routeData = [];
+  for (const day of preliminary.days) {
+    const dayPlaces = (day.activities || []).map((activity) => placeByQuery.get(`${Number(day.day || 1)}:${activity.searchQuery}`)).filter(Boolean);
+    for (let index = 1; index < dayPlaces.length; index += 1) {
+      const from = dayPlaces[index - 1];
+      const to = dayPlaces[index];
+      routeData.push({ day: Number(day.day || 1), from: from.placeId, to: to.placeId, route: await calculateVerifiedRoute(from, to, profile?.transportation || 'DRIVE') });
+    }
+  }
+
+  const finalText = await callGeminiApi({
+    message: JSON.stringify({ preliminary, verifiedPlaces, routeData }),
+    contextText: 'Create the final structured itinerary from the verified Google Places and Google Routes data below. Do not add any place that is not present in verifiedPlaces and do not change route durations or distances.',
+    systemInstruction: 'Return JSON only with {"trip":{"destination":"","startDate":"","endDate":"","durationDays":0,"budget":0,"currency":"PHP"},"days":[{"day":1,"date":"","theme":"","activities":[{"name":"","placeId":"","photoResource":"","address":"","startTime":"","endTime":"","durationMinutes":0,"category":"","estimatedCost":0,"notes":""}],"travel":[{"from":"","to":"","durationMinutes":0,"distanceMeters":0,"travelMode":""}]}]}. Copy placeId and photoResource exactly from verifiedPlaces. Use realistic schedules with meal breaks and no more than four activities per day.',
+    responseMimeType: 'application/json',
+  });
+  const finalPlan = extractJsonObject(finalText);
+  if (!finalPlan?.days?.length) throw new Error('The AI returned an invalid final itinerary.');
+
+  const verifiedById = new Map(verifiedPlaces.map((place) => [place.placeId, place]));
+  const itinerary = finalPlan.days.map((day, dayIndex) => ({
+    dayNumber: Number(day.day || dayIndex + 1),
+    dateLabel: day.date || `Day ${dayIndex + 1}`,
+    estimatedDayCostPhp: (day.activities || []).reduce((sum, activity) => sum + Number(activity.estimatedCost || 0), 0),
+    estimatedDayCostLowPhp: 0,
+    estimatedDayCostHighPhp: 0,
+    activities: (day.activities || []).map((activity, activityIndex) => {
+      const place = verifiedById.get(String(activity.placeId || ''));
+      if (!place) throw new Error('The final itinerary referenced an unverified place.');
+      const matchingRoute = (day.travel || [])[activityIndex - 1];
+      return {
+        id: `verified-${dayIndex + 1}-${activityIndex + 1}`,
+        timeLabel: String(activity.startTime || 'Flexible'),
+        title: place.name,
+        location: place.address,
+        placeId: place.placeId,
+        photoResource: place.photoResource || '',
+        locationCoords: { lat: place.lat, lng: place.lng },
+        note: String(activity.notes || ''),
+        transportMode: matchingRoute?.travelMode || 'DRIVE',
+        travelMinutes: Number(matchingRoute?.durationMinutes || 0),
+        travelDistanceKm: Number(matchingRoute?.distanceMeters || 0) / 1000,
+        estimatedActivityCostPhp: Number(activity.estimatedCost || 0),
+        estimatedTransportCostPhp: 0,
+        estimatedTotalCostPhp: Number(activity.estimatedCost || 0),
+        dueAt: Date.now() + dayIndex * 86400000 + activityIndex * 3600000,
+        iso: new Date(Date.now() + dayIndex * 86400000 + activityIndex * 3600000).toISOString(),
+      };
+    }),
+  }));
+
+  return {
+    itinerary,
+    meta: {
+      destination: finalPlan.trip?.destination || destination,
+      source: 'gemini-google-verified',
+      generatedAt: new Date().toISOString(),
+      budget: finalPlan.trip?.budget || userProfile.budget || null,
+      currency: finalPlan.trip?.currency || 'PHP',
+      verifiedPlaceCount: verifiedPlaces.length,
+    },
+  };
+}
+
 async function generateChatReply({ email, message, selectedDestination, history, profile }) {
   const userProfile = profile || (email ? await getUserProfileContext(email) : { travelTypes: [], interests: [], preferredPlaces: [] });
   const destinationName = selectedDestination?.name || selectedDestination?.destination || userProfile.preferredPlaces?.[0] || '';
@@ -707,7 +1017,7 @@ async function generateChatReply({ email, message, selectedDestination, history,
     return { reply: sanitizePlanText(reply) };
   }
 
-  const generated = await generateItineraryFromAi({ email, message, selectedDestination, profile: userProfile });
+  const generated = await generateVerifiedItineraryFromAi({ email, message, selectedDestination, profile: userProfile });
   return {
     reply: `${sanitizePlanText(reply)}\n\nI built a structured itinerary for ${generated.meta.destination || destinationName || 'your trip'}. Open the Itinerary tab to review it.`,
     itinerary: generated.itinerary,
@@ -1196,6 +1506,10 @@ app.post('/api/maps/places', async (req, res) => {
   }
 
   try {
+    if (isDevelopmentMode) {
+      const places = Array.from(new Map(safeQueries.flatMap((query) => developmentPlaces(query, 8)).map((place) => [place.placeId, place])).values()).slice(0, 40);
+      return sendJson(res, 200, { places, source: 'development-mock', isDevelopmentMock: true });
+    }
     const jobs = [];
     for (const query of safeQueries) {
       if (safeSeeds.length) {
@@ -1251,12 +1565,14 @@ app.post('/api/chat', async (req, res) => {
   }
 
   try {
+    const storedProfile = await getUserProfileContext(normalizedEmail);
     const userProfile = {
+      ...storedProfile,
       ...profile,
-      travelTypes: Array.isArray(profile.travelTypes) ? profile.travelTypes : [],
-      interests: Array.isArray(profile.interests) ? profile.interests : [],
-      preferredPlaces: Array.isArray(profile.preferredPlaces) ? profile.preferredPlaces : [],
-      budget: profile.budget || 'Mid-Range',
+      travelTypes: Array.isArray(profile.travelTypes) && profile.travelTypes.length ? profile.travelTypes : storedProfile.travelTypes,
+      interests: Array.isArray(profile.interests) && profile.interests.length ? profile.interests : storedProfile.interests,
+      preferredPlaces: Array.isArray(profile.preferredPlaces) && profile.preferredPlaces.length ? profile.preferredPlaces : storedProfile.preferredPlaces,
+      budget: profile.budget || storedProfile.budget || 'Mid-Range',
     };
 
     const response = await generateAgentReply({
@@ -1285,17 +1601,31 @@ app.post('/api/itinerary/generate', async (req, res) => {
   if (!userMessage) {
     return sendJson(res, 400, { error: 'Please describe the itinerary you want to generate.' });
   }
+  if (!normalizedEmail) {
+    return sendJson(res, 401, { error: 'Authentication is required to generate an itinerary.' });
+  }
 
   try {
+    const pool = await getPool();
+    const userResult = await pool.query`
+      SELECT user_id
+      FROM dbo.users
+      WHERE email = ${normalizedEmail} AND is_verified = 1
+    `;
+    if (!userResult.recordset.length) {
+      return sendJson(res, 401, { error: 'Authenticated user was not found.' });
+    }
+    const storedProfile = await getUserProfileContext(normalizedEmail);
     const userProfile = {
+      ...storedProfile,
       ...profile,
-      travelTypes: Array.isArray(profile.travelTypes) ? profile.travelTypes : [],
-      interests: Array.isArray(profile.interests) ? profile.interests : [],
-      preferredPlaces: Array.isArray(profile.preferredPlaces) ? profile.preferredPlaces : [],
+      travelTypes: Array.isArray(profile.travelTypes) && profile.travelTypes.length ? profile.travelTypes : storedProfile.travelTypes,
+      interests: Array.isArray(profile.interests) && profile.interests.length ? profile.interests : storedProfile.interests,
+      preferredPlaces: Array.isArray(profile.preferredPlaces) && profile.preferredPlaces.length ? profile.preferredPlaces : storedProfile.preferredPlaces,
       budget: profile.budget || 'Mid-Range',
     };
 
-    const generated = await generateItineraryFromAi({
+    const generated = await generateVerifiedItineraryFromAi({
       email: normalizedEmail,
       message: userMessage,
       selectedDestination,
@@ -1309,16 +1639,7 @@ app.post('/api/itinerary/generate', async (req, res) => {
     });
   } catch (error) {
     console.error('Itinerary generation error:', error.message);
-    return sendJson(res, 200, {
-      ok: true,
-      itinerary: createItineraryFallback(profile || { preferredPlaces: [] }, { dayCount: 3 }).itinerary,
-      meta: {
-        destination: selectedDestination?.name || selectedDestination?.destination || 'Philippines',
-        source: 'backend-fallback',
-        generatedAt: new Date().toISOString(),
-      },
-      fallback: true,
-    });
+    return sendJson(res, 503, { error: error.message || 'Verified itinerary generation is currently unavailable.' });
   }
 });
 
