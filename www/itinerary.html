@@ -11,23 +11,6 @@
     <div class="app-container">
         <div class="screen itinerary-screen">
             <div class="itinerary-header">
-                <div id="itinerary-builder" style="padding:12px 24px 8px; border-bottom:1px solid #F3F4F6; display:none; gap:8px;">
-                    <div class="itinerary-builder-fields">
-                        <label for="itinerary-start">Start date</label>
-                        <input id="itinerary-start" type="date" required />
-                        <label for="itinerary-end">End date</label>
-                        <input id="itinerary-end" type="date" required />
-                        <label style="font-size:14px;color:#374151">Budget</label>
-                        <select id="itinerary-budget">
-                            <option value="Budget-Friendly">Budget-Friendly</option>
-                            <option value="Mid-Range">Mid-Range</option>
-                            <option value="Luxury">Luxury</option>
-                            <option value="Ultra Luxury">Ultra Luxury</option>
-                        </select>
-                        <button id="build-itinerary" class="btn btn-primary">Build Itinerary</button>
-                    </div>
-                    <div id="preferred-places" style="margin-top:8px;display:flex;flex-wrap:wrap;gap:8px"></div>
-                </div>
                 <div class="header-top">
                     <a href="dashboard.html" class="back-btn">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -36,7 +19,9 @@
                     </a>
                     <h1>My Itinerary</h1>
                     <button id="show-builder" class="btn btn-outline" type="button">Customize</button>
-                    <button id="remove-all-itinerary" class="btn btn-ghost" style="margin-left:auto;padding:8px 10px">Remove All</button>
+                    <button id="remove-all-itinerary" class="btn btn-ghost" type="button" aria-label="Remove all itinerary activities" title="Remove all itinerary activities">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2m3 0-1 14H6L5 6m4 4v6m6-6v6"/></svg>
+                    </button>
                 </div>
                 <div class="itinerary-date">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -45,18 +30,38 @@
                         <line x1="8" y1="2" x2="8" y2="6"></line>
                         <line x1="3" y1="10" x2="21" y2="10"></line>
                     </svg>
-                    <span id="itinerary-date">Loading your dates...</span>
+                    <span id="itinerary-date">Choose your trip dates</span>
                 </div>
-                <div class="itinerary-place-search">
-                    <input id="place-search" placeholder="Search places" aria-label="Search places" />
-                    <div id="itinerary-map" class="itinerary-map" aria-label="Map of searched places"></div>
-                    <div id="map" class="itinerary-place-results" aria-live="polite"></div>
+                <div id="itinerary-builder" style="padding:12px 24px 8px; border-bottom:1px solid #F3F4F6; display:none; gap:8px;">
+                    <div class="itinerary-builder-fields">
+                        <div class="itinerary-field itinerary-field-destination">
+                            <label for="itinerary-destination">Destination</label>
+                            <input id="itinerary-destination" type="text" maxlength="180" placeholder="Search tourist places" required role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="itinerary-destination-suggestions" />
+                            <div id="itinerary-destination-suggestions" class="destination-suggestions" role="listbox" hidden></div>
+                            <div class="destination-suggestions-attribution" hidden><img src="https://maps.gstatic.com/mapfiles/api-3/images/google4.png" alt="Google" /></div>
+                        </div>
+                        <div class="itinerary-field"><label for="itinerary-origin">Starting location (optional)</label><input id="itinerary-origin" type="text" maxlength="180" placeholder="City or address for travel estimate" autocomplete="street-address" /></div>
+                        <div class="itinerary-field"><label for="itinerary-start">Start date</label><input id="itinerary-start" type="date" required /></div>
+                        <div class="itinerary-field"><label for="itinerary-end">End date</label><input id="itinerary-end" type="date" required /></div>
+                        <div class="itinerary-field"><label for="itinerary-budget">Total budget (PHP)</label><input id="itinerary-budget" type="number" min="1" step="1" inputmode="numeric" placeholder="Enter your budget" aria-label="Total trip budget in Philippine pesos" /></div>
+                        <div class="itinerary-field"><label for="itinerary-transportation">Travel mode</label><select id="itinerary-transportation"><option value="DRIVE">Driving</option><option value="TRANSIT">Public transit</option><option value="WALK">Walking</option><option value="BICYCLE">Bicycle</option></select></div>
+                        <button id="build-itinerary" class="btn btn-primary">Build Itinerary</button>
+                    </div>
                 </div>
+                <details id="itinerary-place-search" class="itinerary-place-search">
+                    <summary>Explore places</summary>
+                    <div class="itinerary-place-search-content">
+                        <input id="place-search" placeholder="Search places" aria-label="Search places" />
+                        <div id="itinerary-map" class="itinerary-map" aria-label="Map of searched places"></div>
+                        <div id="map" class="itinerary-place-results" aria-live="polite"></div>
+                    </div>
+                </details>
             </div>
             
+            <section id="itinerary-budget-summary" class="itinerary-budget-summary" aria-live="polite" hidden></section>
             <div class="itinerary-content" id="itinerary-content">
                 <!-- Empty by default. Users build an itinerary using the builder above. -->
-                <div id="no-itinerary-message" style="padding:24px;color:#6B7280">You don't have an itinerary yet. Use the builder above to create one.</div>
+                <div id="no-itinerary-message" style="padding:24px;color:#6B7280">Your itinerary will appear here.</div>
                 <button class="add-activity-btn" id="add-activity-btn" type="button" style="display:none">+ Add Activity</button>
             </div>
             

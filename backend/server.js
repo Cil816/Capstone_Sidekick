@@ -15,6 +15,8 @@ const [serverName, configuredInstance] = configuredServer.split('\\', 2);
 const useWindowsAuthentication = (process.env.DB_AUTH || 'windows').toLowerCase() === 'windows';
 const rateLimits = new Map();
 const routeCache = new Map();
+const placesSearchCache = new Map();
+const placesSearchInFlight = new Map();
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const isDevelopmentMode = String(process.env.SIDEKICK_API_MODE || 'production').trim().toLowerCase() === 'development';
 
@@ -63,7 +65,7 @@ function getMapsApiKey() {
 }
 
 function getAiModel() {
-  return String(process.env.GEMINI_MODEL || 'gemini-2.5-flash').trim();
+  return String(process.env.GEMINI_MODEL || 'gemini-3.8-flash').trim();
 }
 
 function mapPlace(place) {
@@ -169,21 +171,42 @@ function parseLocation(value) {
 async function callGooglePlacesApi(path, payload) {
   const apiKey = getMapsApiKey();
   if (!apiKey) throw new Error('Google Maps is not configured on the backend. Add GOOGLE_MAPS_API_KEY to backend/.env.');
-  const response = await fetch(`https://places.googleapis.com/v1/${path}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Goog-Api-Key': apiKey,
-      'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.priceLevel,places.regularOpeningHours.weekdayDescriptions,places.types,places.photos.name,places.photos.authorAttributions',
-    },
-    body: JSON.stringify(payload),
-  });
-  const data = await response.json();
-  if (!response.ok) {
-    const reason = data?.error?.message || data?.error?.status;
-    throw new Error(reason ? `Google Places request failed: ${reason}` : 'Google Maps is currently unavailable.');
+  const cacheKey = JSON.stringify([path, payload]);
+  const cached = placesSearchCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
+  if (cached) placesSearchCache.delete(cacheKey);
+  if (placesSearchInFlight.has(cacheKey)) return placesSearchInFlight.get(cacheKey);
+
+  const request = (async () => {
+    const response = await fetch('https://places.googleapis.com/v1/' + path, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Goog-Api-Key': apiKey,
+        'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.priceLevel,places.regularOpeningHours.weekdayDescriptions,places.types,places.photos.name,places.photos.authorAttributions',
+      },
+      body: JSON.stringify(payload),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      const reason = data?.error?.message || data?.error?.status;
+      throw new Error(reason ? 'Google Places request failed: ' + reason : 'Google Maps is currently unavailable.');
+    }
+    if (placesSearchCache.size >= 500) {
+      const now = Date.now();
+      for (const [key, entry] of placesSearchCache) {
+        if (entry.expiresAt <= now || placesSearchCache.size >= 450) placesSearchCache.delete(key);
+      }
+    }
+    placesSearchCache.set(cacheKey, { value: data, expiresAt: Date.now() + 6 * 60 * 60 * 1000 });
+    return data;
+  })();
+  placesSearchInFlight.set(cacheKey, request);
+  try {
+    return await request;
+  } finally {
+    placesSearchInFlight.delete(cacheKey);
   }
-  return data;
 }
 
 async function callGoogleRoutesApi(payload) {
@@ -395,7 +418,7 @@ function createItineraryFallback(userProfile, prompt) {
   };
 }
 
-async function callGeminiApi({ message, contextText, systemInstruction, responseMimeType = 'text/plain' }) {
+async function callGeminiApi({ message, contextText, systemInstruction, responseMimeType = 'text/plain', maxOutputTokens = 1200 }) {
   const apiKey = getAiApiKey();
   if (!apiKey) {
     throw new Error('AI_API_KEY is missing. Add your Gemini API key in backend/.env.');
@@ -410,20 +433,20 @@ async function callGeminiApi({ message, contextText, systemInstruction, response
     ],
     ...(systemInstruction ? { systemInstruction: { parts: [{ text: systemInstruction }] } } : {}),
     generationConfig: {
-      temperature: 0.6,
-      maxOutputTokens: 1200,
+      maxOutputTokens,
       responseMimeType,
     },
   };
 
-  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(getAiModel())}:generateContent?key=${apiKey}`, {
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(getAiModel())}:generateContent`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json' , 'x-goog-api-key': apiKey},
     body: JSON.stringify(payload),
   });
 
+  const errorPayload = response.ok ? null : await response.json().catch(() => ({}));
   if (response.status === 401) {
-    throw new Error('AI authentication failed. Check the API key in backend/.env.');
+    throw new Error(errorPayload?.error?.message || 'AI authentication failed. Check the API key in backend/.env.');
   }
 
   if (response.status === 429) {
@@ -431,7 +454,8 @@ async function callGeminiApi({ message, contextText, systemInstruction, response
   }
 
   if (!response.ok) {
-    throw new Error('The AI service is currently unavailable. Please try again later.');
+    const reason = errorPayload?.error?.message || errorPayload?.error?.status;
+    throw new Error(reason ? `Gemini request failed (${response.status}): ${reason}` : 'The AI service is currently unavailable. Please try again later.');
   }
 
   const data = await response.json();
@@ -442,6 +466,149 @@ async function callGeminiApi({ message, contextText, systemInstruction, response
   }
 
   return rawText.trim();
+}
+
+async function callGeminiSearchApi({ message, contextText = '', systemInstruction = '' }) {
+  const apiKey = getAiApiKey();
+  if (!apiKey) throw new Error('AI_API_KEY is missing. Add your Gemini API key in backend/.env.');
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(getAiModel())}:generateContent`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' , 'x-goog-api-key': apiKey},
+    body: JSON.stringify({
+      contents: [{ role: 'user', parts: [{ text: `${contextText}\n\n${message}` }] }],
+      ...(systemInstruction ? { systemInstruction: { parts: [{ text: systemInstruction }] } } : {}),
+      tools: [{ google_search: {} }],
+      generationConfig: { maxOutputTokens: 2400 },
+    }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const reason = data?.error?.message || data?.error?.status;
+    throw new Error(reason ? `Grounded price search failed: ${reason}` : 'Grounded price search is currently unavailable.');
+  }
+  const candidate = data?.candidates?.[0];
+  const text = candidate?.content?.parts?.map((part) => part.text || '').join('') || '';
+  const sources = (candidate?.groundingMetadata?.groundingChunks || [])
+    .map((chunk) => chunk.web)
+    .filter((web) => web?.uri && /^https?:\/\//i.test(web.uri))
+    .map((web) => ({ title: String(web.title || web.uri), url: web.uri }));
+  return {
+    text,
+    sources: Array.from(new Map(sources.map((source) => [source.url, source])).values()),
+    searchSuggestionHtml: String(candidate?.groundingMetadata?.searchEntryPoint?.renderedContent || ''),
+    searchedAt: new Date().toISOString(),
+  };
+}
+
+function normalizePriceBand(value) {
+  const lowPhp = Number(value?.lowPhp);
+  const highPhp = Number(value?.highPhp);
+  if (!Number.isFinite(lowPhp) || !Number.isFinite(highPhp) || lowPhp < 0 || highPhp < lowPhp || highPhp > 10000000) return null;
+  return { lowPhp: Math.round(lowPhp), highPhp: Math.round(highPhp) };
+}
+
+function normalizeSourcedPriceBand(value, allowedSources) {
+  const band = normalizePriceBand(value);
+  const matchedSourceUrls = Array.isArray(value?.sourceUrls)
+    ? Array.from(new Set(value.sourceUrls.map((url) => String(url || '')).filter((url) => allowedSources.has(url))))
+    : [];
+  if (!band || !allowedSources.size || !matchedSourceUrls.length) return null;
+  return { ...band, sourceUrls: matchedSourceUrls };
+}
+
+function addPriceBands(bands) {
+  const usable = bands.filter(Boolean);
+  if (!usable.length) return null;
+  return usable.reduce((sum, band) => ({
+    lowPhp: sum.lowPhp + band.lowPhp,
+    highPhp: sum.highPhp + band.highPhp,
+  }), { lowPhp: 0, highPhp: 0 });
+}
+
+function multiplyPriceBand(band, count) {
+  if (!band) return null;
+  return { lowPhp: band.lowPhp * count, highPhp: band.highPhp * count };
+}
+
+async function estimateVerifiedTripBudget({ itinerary, destination, startDate, endDate, budgetTier, budgetAmountPhp, origin, travelMode }) {
+  const places = itinerary.flatMap((day) => day.activities || []).map((activity) => ({
+    placeId: activity.placeId,
+    name: activity.title,
+    address: activity.location,
+    category: activity.category || 'activity',
+  }));
+  const days = itinerary.length;
+  const nights = Math.max(0, inclusiveDayCount(startDate, endDate) - 1);
+  const contextText = [
+    `Destination: ${destination}`,
+    `Dates: ${startDate} through ${endDate}`,
+    `Budget tier: ${budgetTier || 'User-entered budget'}`,
+    `User-entered total budget ceiling: ${Number.isFinite(Number(budgetAmountPhp)) && Number(budgetAmountPhp) > 0 ? `PHP ${Number(budgetAmountPhp).toLocaleString()}` : 'not provided'}`,
+    'Travel party: one adult',
+    `Origin: ${origin?.address || origin?.name || 'not provided'}`,
+    `Requested travel mode from origin: ${travelMode || 'not provided'}`,
+    `Places already selected and verified by Google Places: ${JSON.stringify(places)}`,
+    'Find current, source-backed prices. Prefer official attraction, accommodation, transport, and restaurant sources; use reputable current sources when official prices are unavailable. When a total budget ceiling is provided, choose a realistic lodging and meals estimate suitable for that ceiling and identify whether the researched total appears likely to fit. Do not force prices to fit the ceiling.',
+    'Only return numeric price ranges when search results support them. Never invent a venue price. Return null when a price cannot be verified. Keep currency in PHP and convert using a current source when a result lists another currency.',
+  ].join('\n');
+  const prompt = `Search the web now and return one JSON object only, without markdown, shaped as {"activityCosts":[{"placeId":"exact supplied placeId","lowPhp":null,"highPhp":null,"basis":"adult admission; null if not found","sourceUrls":[]}],"mealsPerPersonPerDay":{"lowPhp":null,"highPhp":null,"basis":"three meals; null if not supported","sourceUrls":[]},"localTransportPerPersonPerDay":{"lowPhp":null,"highPhp":null,"basis":"local trips; null if not supported","sourceUrls":[]},"lodgingPerNight":{"lowPhp":null,"highPhp":null,"basis":"one adult, one room, suitable for the entered total budget when provided; null if not supported","sourceUrls":[]},"originRoundTrip":{"lowPhp":null,"highPhp":null,"basis":"round trip for one adult using requested mode; null if origin missing or not verifiable","sourceUrls":[]}}. Return one activityCosts item per supplied place, preserving exact placeIds. For attractions, estimate adult admission. For food venues, use zero admission because meals are budgeted separately, unless a cover fee exists. For confirmed free admission, use 0 for both bounds. Every non-null band must include one or more exact URLs from the web search results in sourceUrls; otherwise return null for its lowPhp and highPhp. Never cite a URL that was not actually returned by Google Search.`;
+  const grounded = await callGeminiSearchApi({ message: prompt, contextText });
+  const parsed = extractJsonObject(grounded.text);
+  if (!parsed) throw new Error('Web price search returned data that could not be read.');
+
+  const allowedSources = new Set(grounded.sources.map((source) => source.url));
+  const activityCostByPlaceId = new Map();
+  for (const entry of Array.isArray(parsed.activityCosts) ? parsed.activityCosts : []) {
+    const placeId = String(entry?.placeId || '');
+    const band = normalizeSourcedPriceBand(entry, allowedSources);
+    if (placeId && band) activityCostByPlaceId.set(placeId, { ...band, basis: String(entry.basis || '') });
+  }
+  const activityBands = places.map((place) => activityCostByPlaceId.get(String(place.placeId))).filter(Boolean);
+  const activityTotal = addPriceBands(activityBands);
+  const mealsPerDay = normalizeSourcedPriceBand(parsed.mealsPerPersonPerDay, allowedSources);
+  const localTransportPerDay = normalizeSourcedPriceBand(parsed.localTransportPerPersonPerDay, allowedSources);
+  const lodgingPerNight = normalizeSourcedPriceBand(parsed.lodgingPerNight, allowedSources);
+  const originRoundTrip = origin ? normalizeSourcedPriceBand(parsed.originRoundTrip, allowedSources) : null;
+  const categories = [
+    { key: 'admissions', label: 'Activity admission', ...(activityTotal || {}), includedPlaces: activityBands.length, totalPlaces: places.length },
+    { key: 'meals', label: 'Meals (one adult)', ...(multiplyPriceBand(mealsPerDay, days) || {}), perDay: mealsPerDay },
+    { key: 'localTransport', label: 'Local transport (one adult)', ...(multiplyPriceBand(localTransportPerDay, days) || {}), perDay: localTransportPerDay },
+    { key: 'lodging', label: `Lodging (${nights} ${nights === 1 ? 'night' : 'nights'})`, ...(nights ? multiplyPriceBand(lodgingPerNight, nights) || {} : { lowPhp: 0, highPhp: 0 }), perNight: lodgingPerNight },
+    ...(origin ? [{ key: 'originTravel', label: 'Travel to and from destination', ...(originRoundTrip || {}), basis: String(parsed.originRoundTrip?.basis || '') }] : []),
+  ];
+  const requiredCategories = categories.filter((category) => category.key !== 'admissions' || category.totalPlaces > 0);
+  const complete = Boolean(origin) && requiredCategories.length > 0
+    && requiredCategories.every((category) => Number.isFinite(category.lowPhp) && Number.isFinite(category.highPhp))
+    && activityBands.length === places.length;
+  const total = complete ? addPriceBands(requiredCategories) : null;
+
+  return {
+    activityCosts: places.map((place) => {
+      const cost = activityCostByPlaceId.get(String(place.placeId || ''));
+      return cost ? {
+        placeId: place.placeId,
+        ...cost,
+        currency: 'PHP',
+        searchedAt: grounded.searchedAt,
+        sources: cost.sourceUrls.map((url) => grounded.sources.find((source) => source.url === url)).filter(Boolean),
+      } : { placeId: place.placeId, lowPhp: null, highPhp: null, sourceUrls: [] };
+    }),
+    tripBudget: {
+    status: complete ? 'complete-estimate' : 'partial-estimate',
+    currency: 'PHP',
+    travelerCount: 1,
+    startDate,
+    endDate,
+    searchedAt: grounded.searchedAt,
+    searchSuggestionHtml: grounded.searchSuggestionHtml,
+    totalLowPhp: total?.lowPhp ?? null,
+    totalHighPhp: total?.highPhp ?? null,
+    categories,
+    sources: grounded.sources.slice(0, 12),
+    missingActivityPriceCount: Math.max(0, places.length - activityBands.length),
+    originIncluded: Boolean(origin),
+    },
+  };
 }
 
 const sidekickToolDeclarations = [
@@ -690,25 +857,58 @@ async function generateAgentReply({ email, message, selectedDestination, history
     `Current preferences: ${JSON.stringify(currentProfile)}`,
     `Conversation history: ${(history || []).slice(-3).map((item) => `${item.role}: ${String(item.content || '').slice(0, 500)}`).join(' | ') || 'none'}`,
   ].join('\n');
-  const systemInstruction = 'Use Sidekick tools for current user data and mutations. Never claim a mutation succeeded unless its tool succeeds. Ask for confirmation before destructive deletion. Do not reveal credentials or internal tool details. For ordinary questions, answer directly and concisely.';
+  const systemInstruction = 'You are Sidekick, a friendly and practical Philippine travel companion. Sound natural and conversational, like a helpful person. Avoid canned greetings, repeated "How can I help?" questions, stiff phrases, and unnecessary recaps. Do not greet again in the middle of a conversation. If the user already named a destination, respond to it with useful, specific information instead of asking what they want to do. Ask at most one focused question when needed. Match answer length to the request: answer simple questions briefly, but give enough detail for planning, comparisons, budgets, and explanations. For itinerary requests, include specific places, scheduled times, estimated time at each stop, and route durations only when verified. Do not invent prices or route times; say when they are unavailable. Format answers with short paragraphs separated by blank lines, simple bullet lists for multiple options or steps, and **bold** sparingly for important places, times, or decisions. Avoid headings for short replies and never output raw JSON, Markdown fences, or decorative symbols. Use Sidekick tools for current user data and mutations. Never claim a mutation succeeded unless its tool succeeds. Ask for confirmation before destructive deletion. Do not reveal credentials or internal tool details.';
   const contents = [{ role: 'user', parts: [{ text: `${contextText}\n\nUser request:\n${message}` }] }];
   const uiActions = [];
 
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const apiKey = getAiApiKey();
     if (!apiKey) throw new Error('AI_API_KEY is missing. Add your Gemini API key in backend/.env.');
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(getAiModel())}:generateContent?key=${apiKey}`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contents, systemInstruction: { parts: [{ text: systemInstruction }] }, tools: [{ functionDeclarations: sidekickToolDeclarations }], generationConfig: { temperature: 0.5, maxOutputTokens: 900, responseMimeType: 'text/plain' } }),
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(getAiModel())}:generateContent`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+      body: JSON.stringify({ contents, systemInstruction: { parts: [{ text: systemInstruction }] }, tools: [{ functionDeclarations: sidekickToolDeclarations }], generationConfig: { maxOutputTokens: 2400, responseMimeType: 'text/plain' } }),
     });
-    if (!response.ok) throw new Error('The AI service is currently unavailable. Please try again later.');
-    const data = await response.json();
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const reason = data?.error?.message || data?.error?.status;
+      throw new Error(reason ? `Gemini request failed (${response.status}): ${reason}` : 'The AI service is currently unavailable. Please try again later.');
+    }
     const candidate = data?.candidates?.[0];
     const parts = candidate?.content?.parts || [];
     const calls = parts.filter((part) => part.functionCall?.name);
     if (!calls.length) {
-      const reply = parts.map((part) => part.text || '').join('').trim();
+      let reply = parts.map((part) => part.text || '').join('').trim();
       if (!reply) throw new Error('AI returned an empty response.');
+      const trimmedReply = reply.trim();
+      const looksCutOff = candidate?.finishReason === 'MAX_TOKENS'
+        || (trimmedReply.length >= 100 && /[\p{L}\p{N}]$/u.test(trimmedReply) && !/[.!?…][\]})"'’”]*$/u.test(trimmedReply));
+      if (looksCutOff) {
+        const continuationContents = [
+          ...contents,
+          candidate.content,
+          { role: 'user', parts: [{ text: `Your previous answer ended abruptly at: "${trimmedReply.slice(-180)}". Continue directly from those final words without repeating any earlier text, and finish the thought clearly. Keep the same level of detail.` }] },
+        ];
+        let continuation = '';
+        let continuationFinishReason = '';
+        try {
+          const continuationResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(getAiModel())}:generateContent`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+            body: JSON.stringify({ contents: continuationContents, systemInstruction: { parts: [{ text: systemInstruction }] }, generationConfig: { maxOutputTokens: 1200, responseMimeType: 'text/plain' } }),
+          });
+          const continuationData = await continuationResponse.json().catch(() => ({}));
+          const continuationCandidate = continuationData?.candidates?.[0];
+          if (continuationResponse.ok) {
+            continuation = (continuationCandidate?.content?.parts || []).map((part) => part.text || '').join('').trim();
+            continuationFinishReason = continuationCandidate?.finishReason || '';
+          }
+        } catch (error) {}
+        if (continuation) {
+          reply = `${trimmedReply} ${continuation}`;
+          if (continuationFinishReason === 'MAX_TOKENS') reply += '\n\nI may still have been cut off. Ask me to continue for the rest.';
+        } else {
+          reply = `${trimmedReply}\n\nI was interrupted before I could finish. Ask me to continue and I’ll pick up from here.`;
+        }
+      }
       return { reply: sanitizePlanText(reply), actions: uiActions, meta: { source: 'gemini-agent', model: getAiModel() } };
     }
     contents.push(candidate.content);
@@ -717,7 +917,16 @@ async function generateAgentReply({ email, message, selectedDestination, history
       let result;
       try { result = await executeSidekickTool(part.functionCall.name, part.functionCall.args || {}, email); } catch (error) { result = { error: error.message }; }
       if (result?.uiAction) uiActions.push(result.uiAction);
-      functionResponses.push({ functionResponse: { name: part.functionCall.name, response: result } });
+      const responseValue = result && typeof result === 'object' && !Array.isArray(result)
+        ? result
+        : { result: result ?? null };
+      functionResponses.push({
+        functionResponse: {
+          name: part.functionCall.name,
+          ...(part.functionCall.id ? { id: part.functionCall.id } : {}),
+          response: responseValue,
+        },
+      });
     }
     contents.push({ role: 'user', parts: functionResponses });
   }
@@ -904,7 +1113,7 @@ async function calculateVerifiedRoute(from, to, travelMode = 'DRIVE') {
   return calculateRoute({ origin: from, destination: to, travelMode });
 }
 
-async function generateVerifiedItineraryFromAi({ email, message, selectedDestination, profile }) {
+async function generateVerifiedItineraryFromAi({ email, message, selectedDestination, profile, origin }) {
   const userProfile = profile || (email ? await getUserProfileContext(email) : {});
   const destination = selectedDestination?.name || selectedDestination?.destination || userProfile.preferredPlaces?.[0];
   if (!destination) throw new Error('Please provide a destination before generating an itinerary.');
@@ -914,6 +1123,10 @@ async function generateVerifiedItineraryFromAi({ email, message, selectedDestina
     ? inclusiveDayCount(startDate, profile.endDate)
     : Math.max(1, Math.min(14, Number(profile?.durationDays || profile?.dayCount || String(message || '').match(/\b(\d{1,2})\s*day/i)?.[1] || 3)));
   const endDate = profile?.endDate || new Date(Date.parse(`${startDate}T00:00:00Z`) + (durationDays - 1) * 86400000).toISOString().slice(0, 10);
+  if (durationDays < 1 || durationDays > 14) throw new Error('Itineraries can cover between 1 and 14 days.');
+  const maxActivitiesPerDay = Math.max(2, Math.min(3, Math.floor(32 / durationDays)));
+  const requestedMode = String(profile?.transportation || '').toUpperCase();
+  const travelMode = ['DRIVE', 'TRANSIT', 'WALK', 'BICYCLE'].includes(requestedMode) ? requestedMode : 'DRIVE';
 
   if (isDevelopmentMode) {
     const request = String(message || '').toLowerCase();
@@ -983,7 +1196,7 @@ async function generateVerifiedItineraryFromAi({ email, message, selectedDestina
     `Destination: ${destination}`,
     `Interests: ${(userProfile.interests || []).join(', ') || 'not provided'}`,
     `Travel style: ${(userProfile.travelTypes || []).join(', ') || 'not provided'}`,
-    `Budget: ${userProfile.budget || 'not provided'}`,
+    `Budget: ${Number(profile?.budgetAmountPhp) > 0 ? `PHP ${Number(profile.budgetAmountPhp).toLocaleString()} total for the whole trip` : userProfile.budget || 'not provided'}`,
     `Dates: ${startDate} through ${endDate}, inclusive (${durationDays} days).`,
     `Pace: ${profile?.pace || 'not provided'}`,
     `Must-see: ${(profile?.mustSee || []).join(', ') || 'none'}`,
@@ -993,104 +1206,164 @@ async function generateVerifiedItineraryFromAi({ email, message, selectedDestina
   const preliminaryText = await callGeminiApi({
     message,
     contextText: planningContext,
-    systemInstruction: `Return JSON only: {"destination":"...","durationDays":${durationDays},"days":[{"day":1,"theme":"...","activities":[{"searchQuery":"specific real place or category","category":"attraction|restaurant|cafe|museum|hotel|shopping|activity","durationMinutes":90,"notes":"..."}]}]}. Return exactly ${durationDays} days from ${startDate} through ${endDate}. Use 2-4 activities per day, group by nearby areas, and never invent place IDs, addresses, ratings, opening hours, ticket prices, transportation fares, or travel times. Leave unverified prices unavailable.`,
+    systemInstruction: `Return JSON only: {"destination":"...","durationDays":${durationDays},"days":[{"day":1,"theme":"...","activities":[{"searchQuery":"specific real place or category","category":"attraction|restaurant|cafe|museum|hotel|shopping|activity","durationMinutes":90,"notes":"..."}]}]}. Return exactly ${durationDays} days from ${startDate} through ${endDate}, with 2-${maxActivitiesPerDay} activities per day. Keep activities within the selected destination area, avoid repeating places, and account for the user's budget and interests. Never invent place IDs, addresses, ratings, opening hours, ticket prices, transportation fares, or travel times. Leave unverified prices unavailable.`,
     responseMimeType: 'application/json',
+    maxOutputTokens: 3000,
   });
   const preliminary = extractJsonObject(preliminaryText);
   if (!preliminary?.days?.length) throw new Error('The AI returned an invalid preliminary itinerary.');
   if (preliminary.days.length !== durationDays) throw new Error(`The AI returned ${preliminary.days.length} days, but ${durationDays} days were requested.`);
 
-  const requestedActivities = preliminary.days.flatMap((day) => (day.activities || []).slice(0, 4).map((activity) => ({
+  const requestedActivities = preliminary.days.flatMap((day, dayIndex) => (day.activities || []).slice(0, maxActivitiesPerDay).map((activity, activityIndex) => ({
     ...activity,
-    day: Number(day.day || 1),
+    day: dayIndex + 1,
+    activityIndex,
+    sourceKey: `d${dayIndex + 1}a${activityIndex + 1}`,
     theme: String(day.theme || ''),
-  }))).slice(0, 32);
-  const placeResults = await Promise.all(requestedActivities.map(async (activity) => ({
-    activity,
-    places: await findVerifiedPlaces(activity.searchQuery || activity.category, preliminary.destination || destination),
   })));
+  const placeResults = await Promise.all(requestedActivities.map(async (activity) => {
+    try {
+      return { activity, places: await findVerifiedPlaces(activity.searchQuery || activity.category, destination) };
+    } catch (error) {
+      return { activity, places: [], lookupError: error.message };
+    }
+  }));
   const verifiedPlaces = Array.from(new Map(placeResults.flatMap((result) => result.places).map((place) => [place.placeId, place])).values());
   if (!verifiedPlaces.length) throw new Error('Google Places could not verify any locations for this itinerary.');
 
-  const placeByQuery = new Map();
-  for (const result of placeResults) {
-    const place = result.places[0];
-    if (place) placeByQuery.set(`${result.activity.day}:${result.activity.searchQuery}`, place);
-  }
-  const routeData = [];
-  for (const day of preliminary.days) {
-    const dayPlaces = (day.activities || []).map((activity) => placeByQuery.get(`${Number(day.day || 1)}:${activity.searchQuery}`)).filter(Boolean);
-    for (let index = 1; index < dayPlaces.length; index += 1) {
-      const from = dayPlaces[index - 1];
-      const to = dayPlaces[index];
-      try {
-        routeData.push({ day: Number(day.day || 1), from: from.placeId, to: to.placeId, route: await calculateVerifiedRoute(from, to, profile?.transportation || 'DRIVE') });
-      } catch (error) {
-        routeData.push({ day: Number(day.day || 1), from: from.placeId, to: to.placeId, route: null, unavailableReason: error.message });
-      }
-    }
-  }
+  const candidateSets = placeResults.map(({ activity, places }) => ({
+    sourceKey: activity.sourceKey,
+    day: activity.day,
+    searchQuery: activity.searchQuery,
+    category: activity.category,
+    candidates: places.slice(0, 3).map((place) => ({
+      placeId: place.placeId, name: place.name, address: place.address,
+      lat: place.lat, lng: place.lng, rating: place.rating,
+      ratingCount: place.ratingCount, types: place.types,
+    })),
+  }));
+  const candidateSetsByKey = new Map(candidateSets.map((item) => [item.sourceKey, item]));
 
   const finalText = await callGeminiApi({
-    message: JSON.stringify({ preliminary, verifiedPlaces, routeData }),
-    contextText: 'Create the final structured itinerary from the verified Google Places and Google Routes data below. Do not add any place that is not present in verifiedPlaces and do not change route durations or distances.',
-    systemInstruction: `Return JSON only with {"trip":{"destination":"","startDate":"${startDate}","endDate":"${endDate}","durationDays":${durationDays},"budget":"","currency":"PHP"},"days":[{"day":1,"date":"","theme":"","activities":[{"name":"","placeId":"","photoResource":"","address":"","startTime":"","endTime":"","durationMinutes":0,"category":"","estimatedCost":null,"notes":""}],"travel":[{"from":"","to":"","durationMinutes":0,"distanceMeters":0,"travelMode":""}]}]}. Return exactly ${durationDays} days. Copy placeId and photoResource exactly from verifiedPlaces and route values exactly from routeData. Do not invent prices or any factual place/route data.`,
+    message: JSON.stringify({ preliminary, candidateSets }),
+    contextText: `Create the final structured itinerary only from the Google Places candidates grouped under each sourceKey for the user's selected destination: ${destination}. A candidate can only be used for its own sourceKey. Group each day geographically, prefer better-rated relevant candidates when ratings are available, avoid duplicates, and do not invent or infer business hours, prices, addresses, or travel times. Route times will be calculated separately from the final chosen stop order.`,
+    systemInstruction: `Return JSON only with {"trip":{"destination":"","startDate":"${startDate}","endDate":"${endDate}","durationDays":${durationDays},"budget":"","currency":"PHP"},"days":[{"day":1,"theme":"","activities":[{"sourceKey":"d1a1","placeId":"exact candidate id","durationMinutes":90,"category":"attraction|restaurant|cafe|museum|hotel|shopping|activity","notes":""}]}]}. Return exactly ${durationDays} days and 1-${maxActivitiesPerDay} activities per day. Every placeId must be one of the candidates listed under that activity's sourceKey. Return no cost or schedule times; the app will add route-aware timing and researched costs. Do not include unsupported factual claims.`,
     responseMimeType: 'application/json',
+    maxOutputTokens: 5000,
   });
   const finalPlan = extractJsonObject(finalText);
   if (!finalPlan?.days?.length) throw new Error('The AI returned an invalid final itinerary.');
   if (finalPlan.days.length !== durationDays) throw new Error(`The AI returned ${finalPlan.days.length} final days, but ${durationDays} days were requested.`);
 
   const verifiedById = new Map(verifiedPlaces.map((place) => [place.placeId, place]));
-  const itinerary = finalPlan.days.map((day, dayIndex) => ({
-    dayNumber: dayIndex + 1,
-    dateLabel: labelDate(new Date(Date.parse(`${startDate}T00:00:00Z`) + dayIndex * 86400000).toISOString()),
-    estimatedDayCostPhp: null,
-    estimatedDayCostLowPhp: null,
-    estimatedDayCostHighPhp: null,
-    activities: (day.activities || []).map((activity, activityIndex) => {
-      const place = verifiedById.get(String(activity.placeId || ''));
-      if (!place) throw new Error('The final itinerary referenced an unverified place.');
-      const previousActivity = (day.activities || [])[activityIndex - 1];
-      const routeEntry = previousActivity
-        ? routeData.find((entry) => entry.day === dayIndex + 1 && entry.from === String(previousActivity.placeId || '') && entry.to === place.placeId)
-        : null;
-      const matchingRoute = routeEntry?.route;
-      const dueAt = Date.parse(`${startDate}T09:00:00Z`) + dayIndex * 86400000 + activityIndex * 3600000;
-      return {
+  const usedPlaces = new Set();
+  const selectedDays = finalPlan.days.map((day, dayIndex) => {
+    const selected = [];
+    for (const activity of (Array.isArray(day.activities) ? day.activities : []).slice(0, maxActivitiesPerDay)) {
+      const candidateSet = candidateSetsByKey.get(String(activity.sourceKey || ''));
+      if (candidateSet?.day !== dayIndex + 1) continue;
+      const candidates = candidateSet.candidates;
+      const requestedId = String(activity.placeId || '');
+      const place = candidates.find((candidate) => candidate.placeId === requestedId && !usedPlaces.has(candidate.placeId))
+        || candidates.find((candidate) => !usedPlaces.has(candidate.placeId));
+      if (!place || !verifiedById.has(place.placeId)) continue;
+      usedPlaces.add(place.placeId);
+      selected.push({ activity, place });
+    }
+    if (!selected.length) {
+      const fallback = candidateSets.find((set) => set.day === dayIndex + 1 && set.candidates.some((place) => !usedPlaces.has(place.placeId)));
+      const place = fallback?.candidates.find((candidate) => !usedPlaces.has(candidate.placeId));
+      if (place) {
+        usedPlaces.add(place.placeId);
+        selected.push({ activity: { durationMinutes: 90, category: fallback.category, notes: '' }, place });
+      }
+    }
+    if (!selected.length) throw new Error(`Google Places could not verify activities for day ${dayIndex + 1}.`);
+    return selected;
+  });
+
+  const routePairs = selectedDays.flatMap((activities, dayIndex) => activities.slice(1).map((entry, index) => ({
+    day: dayIndex + 1,
+    from: activities[index].place,
+    to: entry.place,
+  })));
+  const routeResults = await Promise.all(routePairs.map(async (pair) => {
+    try {
+      const route = await calculateVerifiedRoute(pair.from, pair.to, travelMode);
+      return { ...pair, route, unavailableReason: '' };
+    } catch (error) {
+      return { ...pair, route: null, unavailableReason: 'Route time unavailable; schedule uses a 30-minute transfer buffer.' };
+    }
+  }));
+  const routeByEdge = new Map(routeResults.map((entry) => [`${entry.day}:${entry.from.placeId}:${entry.to.placeId}`, entry]));
+  const formatScheduleTime = (minutes) => {
+    const hour24 = Math.floor(minutes / 60) % 24;
+    const suffix = hour24 >= 12 ? 'PM' : 'AM';
+    return `${hour24 % 12 || 12}:${String(minutes % 60).padStart(2, '0')} ${suffix}`;
+  };
+  const itinerary = selectedDays.map((activities, dayIndex) => {
+    let scheduleMinute = 9 * 60;
+    const scheduledActivities = activities.map(({ activity, place }, activityIndex) => {
+      const previous = activityIndex ? activities[activityIndex - 1].place : null;
+      const routeEntry = previous ? routeByEdge.get(`${dayIndex + 1}:${previous.placeId}:${place.placeId}`) : null;
+      if (previous) scheduleMinute += (routeEntry?.route?.durationMinutes || 30) + 15;
+      const dueAt = Date.parse(`${startDate}T00:00:00Z`) + dayIndex * 86400000 + scheduleMinute * 60000;
+      const durationMinutes = Math.max(30, Math.min(240, Math.round(Number(activity.durationMinutes) || 90)));
+      const result = {
         id: `verified-${dayIndex + 1}-${activityIndex + 1}`,
-        timeLabel: String(activity.startTime || 'Flexible'),
+        timeLabel: formatScheduleTime(scheduleMinute),
+        durationMinutes,
         title: place.name,
         location: place.address,
+        category: String(activity.category || ''),
         placeId: place.placeId,
         photoResource: place.photoResource || '',
         locationCoords: { lat: place.lat, lng: place.lng },
         note: String(activity.notes || ''),
         routeStatus: routeEntry?.unavailableReason || '',
-        transportMode: matchingRoute?.travelMode || 'Route unavailable',
-        travelMinutes: matchingRoute?.durationMinutes ?? null,
-        travelDistanceKm: matchingRoute ? matchingRoute.distanceMeters / 1000 : null,
+        transportMode: routeEntry?.route?.travelMode || travelMode,
+        travelMinutes: routeEntry?.route?.durationMinutes ?? null,
+        travelDistanceKm: routeEntry?.route ? routeEntry.route.distanceMeters / 1000 : null,
         estimatedActivityCostPhp: null,
         estimatedTransportCostPhp: null,
         estimatedTotalCostPhp: null,
         dueAt,
         iso: new Date(dueAt).toISOString(),
       };
-    }),
-  }));
+      scheduleMinute += durationMinutes;
+      return result;
+    });
+    return {
+      dayNumber: dayIndex + 1,
+      dateLabel: labelDate(new Date(Date.parse(`${startDate}T00:00:00Z`) + dayIndex * 86400000).toISOString()),
+      estimatedDayCostPhp: null,
+      estimatedDayCostLowPhp: null,
+      estimatedDayCostHighPhp: null,
+      activities: scheduledActivities,
+    };
+  });
 
   return {
     itinerary,
     meta: {
-      destination: finalPlan.trip?.destination || destination,
+      destination,
       startDate,
       endDate,
       durationDays,
       source: 'gemini-google-verified',
       generatedAt: new Date().toISOString(),
       budget: finalPlan.trip?.budget || userProfile.budget || null,
+      budgetAmountPhp: Number(profile?.budgetAmountPhp) > 0 ? Number(profile.budgetAmountPhp) : null,
       currency: finalPlan.trip?.currency || 'PHP',
       verifiedPlaceCount: verifiedPlaces.length,
+      origin: origin ? {
+        name: String(origin.name || '').slice(0, 120),
+        address: String(origin.address || '').slice(0, 240),
+        placeId: String(origin.placeId || '').slice(0, 160),
+        lat: Number.isFinite(Number(origin.lat)) ? Number(origin.lat) : null,
+        lng: Number.isFinite(Number(origin.lng)) ? Number(origin.lng) : null,
+      } : null,
+      travelMode,
     },
   };
 }
@@ -1108,7 +1381,7 @@ async function generateChatReply({ email, message, selectedDestination, history,
     `Conversation history: ${(history || []).slice(-6).map((item) => `${item.role}: ${item.content}`).join(' | ') || 'none'}`,
   ].join('\n');
 
-  const systemInstruction = `You are Sidekick AI, a helpful Philippine travel planner. Answer in concise, natural language. If the user asks to generate an itinerary, propose a realistic plan and say that the app can create it. Keep the answer practical, friendly, and specific to Philippine destinations, food, beaches, attractions, and transportation. Do not reveal API keys or internal implementation details.`;
+  const systemInstruction = `You are Sidekick AI, a helpful Philippine travel planner. Match the answer length to the request: simple questions can be brief, while travel planning, budgets, comparisons, and explanations should include enough specific detail to be useful. For itinerary information, use verified places, scheduled times, estimated visit durations, and route durations only when available. Do not invent prices or travel times; state clearly when information is unavailable. Keep the answer practical, friendly, and specific to Philippine destinations, food, beaches, attractions, and transportation. Do not reveal API keys or internal implementation details.`;
 
   let reply = '';
   try {
@@ -1641,6 +1914,113 @@ app.post('/api/maps/places', async (req, res) => {
   }
 });
 
+app.post('/api/maps/place-suggestions', async (req, res) => {
+  const input = String(req.body?.input || '').trim().slice(0, 160);
+  const suppliedSessionToken = String(req.body?.sessionToken || '');
+  const sessionToken = /^[A-Za-z0-9_-]{1,36}$/.test(suppliedSessionToken) ? suppliedSessionToken : '';
+  if (input.length < 2) return sendJson(res, 200, { suggestions: [] });
+  try {
+    if (isDevelopmentMode) {
+      const needle = input.toLowerCase();
+      const matches = developmentPlaceCatalog.filter((place) => (
+        place.name.toLowerCase().includes(needle) || place.address.toLowerCase().includes(needle)
+      )).slice(0, 5);
+      const suggestions = matches.map((match) => {
+        const place = developmentPlace(match.name);
+        return ({
+        placeId: place.placeId,
+        text: `${place.name}, ${place.address}`,
+        name: place.name,
+        secondaryText: place.address,
+        types: place.types || [],
+        isDevelopmentMock: true,
+      });
+      });
+      return sendJson(res, 200, { suggestions, isDevelopmentMock: true });
+    }
+    const apiKey = getMapsApiKey();
+    if (!apiKey) throw new Error('Google Maps is not configured on the backend.');
+    const response = await fetch('https://places.googleapis.com/v1/places:autocomplete', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Goog-Api-Key': apiKey,
+        'X-Goog-FieldMask': 'suggestions.placePrediction.placeId,suggestions.placePrediction.text,suggestions.placePrediction.structuredFormat,suggestions.placePrediction.types',
+      },
+      body: JSON.stringify({
+        input,
+        ...(sessionToken ? { sessionToken } : {}),
+        includedRegionCodes: ['PH'],
+        includedPrimaryTypes: ['tourist_attraction', 'landmark', 'national_park', 'museum', 'park'],
+        languageCode: 'en',
+        regionCode: 'PH',
+        includeQueryPredictions: false,
+      }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const reason = data?.error?.message || data?.error?.status;
+      throw new Error(reason ? `Google place suggestions failed: ${reason}` : 'Google place suggestions are unavailable.');
+    }
+    const touristTypeOrder = ['tourist_attraction', 'landmark', 'national_park', 'museum', 'park'];
+    const suggestions = (data.suggestions || []).map((item, index) => {
+      const prediction = item.placePrediction;
+      if (!prediction?.placeId) return null;
+      const types = Array.isArray(prediction.types) ? prediction.types : [];
+      const mainText = prediction.structuredFormat?.mainText?.text || prediction.text?.text || '';
+      const secondaryText = prediction.structuredFormat?.secondaryText?.text || '';
+      const rank = touristTypeOrder.findIndex((type) => types.includes(type));
+      return {
+        placeId: prediction.placeId,
+        text: prediction.text?.text || [mainText, secondaryText].filter(Boolean).join(', '),
+        name: mainText,
+        secondaryText,
+        types,
+        touristRank: rank < 0 ? touristTypeOrder.length : rank,
+        originalRank: index,
+      };
+    }).filter(Boolean).sort((a, b) => a.touristRank - b.touristRank || a.originalRank - b.originalRank)
+      .slice(0, 5).map(({ touristRank, originalRank, ...suggestion }) => suggestion);
+    return sendJson(res, 200, { suggestions });
+  } catch (error) {
+    return sendJson(res, 503, { error: error.message || 'Google place suggestions are unavailable.' });
+  }
+});
+
+app.post('/api/maps/place-details', async (req, res) => {
+  const placeId = String(req.body?.placeId || '').trim();
+  const suppliedSessionToken = String(req.body?.sessionToken || '');
+  const sessionToken = /^[A-Za-z0-9_-]{1,36}$/.test(suppliedSessionToken) ? suppliedSessionToken : '';
+  if (!/^[A-Za-z0-9_-]{4,200}$/.test(placeId)) {
+    return sendJson(res, 400, { error: 'A valid place ID is required.' });
+  }
+  try {
+    if (isDevelopmentMode) {
+      const match = developmentPlaceCatalog.find((place) => `mock-place-${place.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}` === placeId);
+      if (!match) return sendJson(res, 404, { error: 'That sample place was not found.' });
+      return sendJson(res, 200, { place: developmentPlace(match.name), isDevelopmentMock: true });
+    }
+    const apiKey = getMapsApiKey();
+    if (!apiKey) throw new Error('Google Maps is not configured on the backend.');
+    const detailsUrl = new URL(`https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}`);
+    if (sessionToken) detailsUrl.searchParams.set('sessionToken', sessionToken);
+    const response = await fetch(detailsUrl, {
+      headers: {
+        'X-Goog-Api-Key': apiKey,
+        'X-Goog-FieldMask': 'id,formattedAddress,location,types,photos.name,photos.authorAttributions',
+      },
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const reason = data?.error?.message || data?.error?.status;
+      throw new Error(reason ? `Google place details failed: ${reason}` : 'Google place details are unavailable.');
+    }
+    return sendJson(res, 200, { place: mapPlace(data) });
+  } catch (error) {
+    return sendJson(res, 503, { error: error.message || 'Google place details are unavailable.' });
+  }
+});
+
 app.post('/api/maps/route', async (req, res) => {
   const { origin, destination, travelMode = 'DRIVE' } = req.body || {};
   try {
@@ -1713,7 +2093,7 @@ app.post('/api/chat', async (req, res) => {
 });
 
 app.post('/api/itinerary/generate', async (req, res) => {
-  const { email, message = '', selectedDestination, profile = {} } = req.body || {};
+  const { email, message = '', selectedDestination, profile = {}, origin = null } = req.body || {};
   const normalizedEmail = normalizeEmail(email);
   const userMessage = String(message || '').trim();
 
@@ -1749,6 +2129,10 @@ app.post('/api/itinerary/generate', async (req, res) => {
       message: userMessage,
       selectedDestination,
       profile: userProfile,
+      origin: origin && (origin.address || origin.name) ? {
+        name: String(origin.name || '').slice(0, 120),
+        address: String(origin.address || origin.name || '').slice(0, 240),
+      } : null,
     });
 
     return sendJson(res, 200, {
@@ -1759,6 +2143,55 @@ app.post('/api/itinerary/generate', async (req, res) => {
   } catch (error) {
     console.error('Itinerary generation error:', error.message);
     return sendJson(res, 503, { error: error.message || 'Verified itinerary generation is currently unavailable.' });
+  }
+});
+
+app.post('/api/itinerary/estimate-budget', async (req, res) => {
+  const { email, itinerary, destination, startDate, endDate, budgetTier, budgetAmountPhp, origin = null, travelMode = 'DRIVE' } = req.body || {};
+  const normalizedEmail = normalizeEmail(email);
+  if (!normalizedEmail) return sendJson(res, 401, { error: 'Authentication is required to estimate a trip budget.' });
+  if (!Array.isArray(itinerary) || itinerary.length < 1 || itinerary.length > 14) {
+    return sendJson(res, 400, { error: 'The itinerary must contain between 1 and 14 days.' });
+  }
+  if (!dateOnly(startDate) || !dateOnly(endDate) || inclusiveDayCount(startDate, endDate) !== itinerary.length) {
+    return sendJson(res, 400, { error: 'Valid trip dates matching the itinerary length are required.' });
+  }
+  const safeItinerary = itinerary.map((day) => ({
+    activities: (Array.isArray(day?.activities) ? day.activities : []).slice(0, 8).map((activity) => ({
+      placeId: String(activity?.placeId || '').slice(0, 180),
+      title: String(activity?.title || '').slice(0, 180),
+      location: String(activity?.location || '').slice(0, 240),
+      category: String(activity?.category || 'activity').slice(0, 80),
+    })),
+  }));
+  if (safeItinerary.reduce((count, day) => count + day.activities.length, 0) > 40) {
+    return sendJson(res, 400, { error: 'The itinerary contains too many activities to price at once.' });
+  }
+  try {
+    const pool = await getPool();
+    const userResult = await pool.query`
+      SELECT user_id
+      FROM dbo.users
+      WHERE email = ${normalizedEmail} AND is_verified = 1
+    `;
+    if (!userResult.recordset.length) return sendJson(res, 401, { error: 'Authenticated user was not found.' });
+    const estimate = await estimateVerifiedTripBudget({
+      itinerary: safeItinerary,
+      destination: String(destination || '').slice(0, 180),
+      startDate,
+      endDate,
+      budgetTier: String(budgetTier || 'Mid-Range').slice(0, 60),
+      budgetAmountPhp: Number.isFinite(Number(budgetAmountPhp)) && Number(budgetAmountPhp) > 0 ? Number(budgetAmountPhp) : null,
+      origin: origin && (origin.address || origin.name) ? {
+        address: String(origin.address || '').slice(0, 240),
+        name: String(origin.name || '').slice(0, 120),
+      } : null,
+      travelMode: String(travelMode || 'DRIVE').slice(0, 40),
+    });
+    return sendJson(res, 200, { ok: true, ...estimate });
+  } catch (error) {
+    console.error('Trip cost research error:', error.message);
+    return sendJson(res, 503, { error: error.message || 'Live trip cost research is currently unavailable.' });
   }
 });
 

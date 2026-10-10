@@ -21,8 +21,9 @@
                         <circle cx="11" cy="11" r="8"></circle>
                         <path d="m21 21-4.35-4.35"></path>
                     </svg>
-                    <input type="text" id="destination-search" placeholder="Search destinations...">
+                    <input type="text" id="destination-search" placeholder="Search destinations..." autocomplete="off" aria-autocomplete="list" aria-controls="destination-search-suggestions" aria-expanded="false">
                 </div>
+                <div id="destination-search-suggestions" class="destination-search-suggestions" role="listbox" aria-label="Destination suggestions" hidden></div>
                 <p id="destination-search-status" class="destination-search-status" aria-live="polite"></p>
             </div>
             
@@ -56,7 +57,11 @@
                     <div id="destination-tags" class="destination-tags"></div>
                     <div class="destination-route-controls">
                         <label for="destination-origin">Starting location</label>
-                        <input id="destination-origin" type="text" placeholder="Enter your starting city or address" autocomplete="street-address" />
+                        <div class="destination-origin-search">
+                            <input id="destination-origin" type="text" placeholder="Search starting location" autocomplete="off" aria-autocomplete="list" aria-controls="destination-origin-results" aria-describedby="destination-origin-status" />
+                        </div>
+                        <div id="destination-origin-status" class="destination-origin-status" role="status" aria-live="polite"></div>
+                        <div id="destination-origin-results" class="destination-origin-results" role="listbox" aria-label="Starting location suggestions" hidden></div>
                         <label for="destination-travel-mode">Travel mode</label>
                         <select id="destination-travel-mode">
                             <option value="DRIVE">Driving</option>
@@ -73,16 +78,8 @@
                             <strong id="destination-route-mode">Calculating...</strong>
                         </div>
                         <div class="meta-card">
-                            <span class="meta-label">Travel time</span>
-                            <strong id="destination-route-time">Calculating...</strong>
-                        </div>
-                        <div class="meta-card">
                             <span class="meta-label">Distance</span>
                             <strong id="destination-route-distance">Calculating...</strong>
-                        </div>
-                        <div class="meta-card">
-                            <span class="meta-label">Verified fare / budget data</span>
-                            <strong id="destination-route-cost">Calculating...</strong>
                         </div>
                     </div>
                     <div id="destination-route-error" class="destination-route-error" role="status" aria-live="polite" hidden>

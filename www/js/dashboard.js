@@ -4,8 +4,12 @@ const SELECTED_DESTINATION_KEY = "sidekick.selectedDestination.v1";
 let _gmapsLoadPromise = null;
 let _modalMap = null;
 let _marker = null;
+let _originMarker = null;
 let _routePolyline = null;
 let _selectedPlace = null;
+let _selectedOriginPlace = null;
+let _originSearchTimer = null;
+let _originSearchRequestId = 0;
 const IS_PERF_LITE = Boolean(window.SidekickCore && window.SidekickCore.isPerfLiteMode && window.SidekickCore.isPerfLiteMode());
 
 function svgPin() {
@@ -104,14 +108,6 @@ function buildPreferenceKeywords(prefs, searchQuery = "") {
   return Array.from(new Set(base)).slice(0, 4);
 }
 
-function getPhilippinesSeedLocations() {
-  return [
-    { lat: 14.5995, lng: 120.9842, name: "Manila" },
-    { lat: 10.3157, lng: 123.8854, name: "Cebu" },
-    { lat: 7.1907, lng: 125.4553, name: "Davao" },
-  ];
-}
-
 function normalizeRegion(rawAddress) {
   const addr = String(rawAddress || "");
   if (!addr) return "Philippines";
@@ -123,13 +119,20 @@ function normalizeRegion(rawAddress) {
 function extractTags(types) {
   const map = {
     tourist_attraction: "Tourist Attraction",
+    landmark: "Historical Sites",
     museum: "Historical Sites",
     church: "Historical Sites",
+    historical_landmark: "Historical Sites",
     park: "Nature & Wildlife",
     natural_feature: "Nature & Wildlife",
     beach: "Beaches",
+    national_park: "Nature & Wildlife",
+    hiking_area: "Hiking",
+    campground: "Nature & Wildlife",
     lodging: "Relaxation",
     restaurant: "Local Cuisine",
+    food: "Local Cuisine",
+    bar: "Nightlife",
     shopping_mall: "Shopping",
     point_of_interest: "Point of Interest",
   };
@@ -173,6 +176,7 @@ function toBackendDashboardPlace(place) {
     lat: place.lat == null ? Number.NaN : Number(place.lat),
     lng: place.lng == null ? Number.NaN : Number(place.lng),
     tags: extractTags(place.types),
+    types: Array.isArray(place.types) ? place.types : [],
     rating: Number(place.rating || 0),
     ratingCount: Number(place.ratingCount || 0),
     photoUrl,
@@ -191,48 +195,76 @@ function renderPhotoAttribution(place) {
 }
 
 function preferenceScore(place, prefs) {
-  const text = `${place.name} ${place.region} ${(place.tags || []).join(" ")}`.toLowerCase();
-  let score = (place.rating || 0) * 1.8 + Math.min(3, (place.ratingCount || 0) / 2000);
+  const text = (place.name + " " + place.region + " " + (place.tags || []).join(" ")).toLowerCase();
+  const types = new Set((place.types || []).map((type) => String(type).toLowerCase()));
+  const rating = Math.max(0, Math.min(5, Number(place.rating) || 0));
+  const reviewCount = Math.max(0, Number(place.ratingCount) || 0);
+  const qualityRating = reviewCount
+    ? (rating * reviewCount + 4.2 * 25) / (reviewCount + 25)
+    : rating * 0.8;
+  let score = qualityRating + Math.log10(reviewCount + 1) * 0.35;
 
-  const interests = (prefs?.interests || []).map((x) => String(x).toLowerCase());
-  const travelTypes = (prefs?.travelTypes || []).map((x) => String(x).toLowerCase());
+  const interestSignals = {
+    "beaches": { words: ["beach", "island", "coast", "surf", "snorkel", "diving"], types: ["beach", "island", "surfing_school"] },
+    "hiking": { words: ["hiking", "trail", "mountain", "falls", "volcano", "trek"], types: ["hiking_area", "mountain_peak", "national_park", "waterfall"] },
+    "historical sites": { words: ["historical", "history", "heritage", "museum", "landmark", "church", "fort"], types: ["museum", "church", "historical_landmark", "landmark"] },
+    "local cuisine": { words: ["food", "restaurant", "market", "cuisine", "food walk"], types: ["restaurant", "food", "market", "meal_takeaway"] },
+    "nightlife": { words: ["nightlife", "bar", "club", "entertainment", "night market"], types: ["bar", "night_club"] },
+    "shopping": { words: ["shopping", "market", "mall", "souvenir"], types: ["shopping_mall", "market"] },
+    "photography": { words: ["scenic", "viewpoint", "photography", "landscape", "photo", "lookout"], types: ["observation_deck", "scenic_spot"] },
+    "nature & wildlife": { words: ["nature", "wildlife", "park", "forest", "river", "falls", "island", "garden"], types: ["park", "national_park", "natural_feature", "wildlife_park", "zoo", "aquarium"] },
+    "mountains": { words: ["mountain", "hill", "hiking", "volcano", "terrace", "peak"], types: ["mountain_peak", "hiking_area"] },
+    "water sports": { words: ["water sports", "beach", "surf", "diving", "snorkel", "island", "falls", "waterfall"], types: ["beach", "surfing_school", "marina"] },
+  };
+  const typeSignals = {
+    "food tour": ["local cuisine"],
+    adventure: ["hiking", "water sports", "mountains"],
+    cultural: ["historical sites"],
+    "beach & relaxation": ["beaches", "nature & wildlife"],
+    "nature & wildlife": ["nature & wildlife", "hiking", "mountains"],
+    "city exploration": ["historical sites", "shopping", "local cuisine"],
+  };
+  const matchesSignal = (key) => {
+    const signal = interestSignals[key];
+    return Boolean(signal && (
+      (place.tags || []).some((tag) => String(tag).toLowerCase() === key)
+      || signal.types.some((type) => types.has(type))
+      || signal.words.some((word) => text.includes(word))
+    ));
+  };
 
-  for (const i of interests) {
-    if (text.includes(i)) score += 3;
+  for (const interest of prefs?.interests || []) {
+    const key = String(interest).toLowerCase();
+    if (matchesSignal(key)) score += 4;
   }
-  for (const t of travelTypes) {
-    if (text.includes(t)) score += 2;
+  for (const travelType of prefs?.travelTypes || []) {
+    const relatedInterests = typeSignals[String(travelType).toLowerCase()] || [];
+    if (relatedInterests.some(matchesSignal)) score += 2.5;
   }
 
+  if (["tourist_attraction", "landmark", "national_park", "museum", "monument"].some((type) => types.has(type))) score += 1.25;
   return score;
+}
+
+function getPhilippinesSeedLocations() {
+  return [{ lat: 14.5995, lng: 120.9842 }, { lat: 10.3157, lng: 123.8854 }, { lat: 7.1907, lng: 125.4553 }];
 }
 
 async function fetchPlacesFromGoogle(prefs, searchQuery = "") {
   const keywords = buildPreferenceKeywords(prefs, searchQuery);
   const seeds = getPhilippinesSeedLocations();
-
-  try {
-    const data = await window.SidekickCore.apiRequest("/api/maps/places", {
-      method: "POST",
-      body: JSON.stringify({ queries: keywords, seeds }),
-    });
-    const allPlaces = (data.places || []).map(toBackendDashboardPlace)
-      .map((place) => ({ ...place, isDevelopmentMock: Boolean(data.isDevelopmentMock) }))
-      .filter((place) => Number.isFinite(place.lat) && Number.isFinite(place.lng));
-    if (allPlaces.length) {
-      const recommended = allPlaces
-        .slice()
-        .sort((a, b) => preferenceScore(b, prefs) - preferenceScore(a, prefs))
-        .slice(0, IS_PERF_LITE ? 5 : 8);
-      const popularDestinations = allPlaces
-        .slice()
-        .sort((a, b) => b.rating - a.rating)
-        .slice(0, IS_PERF_LITE ? 5 : 8);
-      return { recommended, popularDestinations, allPlaces };
-    }
-  } catch (backendError) {
-    throw new Error(backendError?.message || "Google Places is currently unavailable.");
+  const data = await window.SidekickCore.apiRequest("/api/maps/places", {
+    method: "POST", body: JSON.stringify({ queries: keywords, seeds }),
+  });
+  const allPlaces = (data.places || []).map(toBackendDashboardPlace)
+    .map((place) => ({ ...place, isDevelopmentMock: Boolean(data.isDevelopmentMock) }))
+    .filter((place) => Number.isFinite(place.lat) && Number.isFinite(place.lng));
+  if (allPlaces.length) {
+    const recommended = allPlaces.slice().sort((a, b) => preferenceScore(b, prefs) - preferenceScore(a, prefs)).slice(0, IS_PERF_LITE ? 5 : 8);
+    const popularDestinations = allPlaces.slice().sort((a, b) => b.rating - a.rating).slice(0, IS_PERF_LITE ? 5 : 8);
+    return { recommended, popularDestinations, allPlaces };
   }
+  return { recommended: [], popularDestinations: [], allPlaces: [] };
 }
 
 function renderPlaceCard(place) {
@@ -315,10 +347,8 @@ async function showDestinationDetails(place, prefs, session) {
 
   setText("destination-title", place.name);
   setText("destination-subtitle", `${place.region}, Philippines${place.isDevelopmentMock ? " • Development sample" : ""}`);
-  setText("destination-route-mode", "Enter an origin and calculate a route.");
-  setText("destination-route-time", "Unavailable");
+  setText("destination-route-mode", "Not calculated");
   setText("destination-route-distance", "Unavailable");
-  setText("destination-route-cost", "Unavailable (no verified fare data)");
   const routeError = document.getElementById("destination-route-error");
   if (routeError) routeError.hidden = true;
 
@@ -334,6 +364,22 @@ async function showDestinationDetails(place, prefs, session) {
   if (!mapEl) return;
   const originInput = document.getElementById("destination-origin");
   if (originInput) originInput.value = "";
+  _selectedOriginPlace = null;
+  if (_originMarker) {
+    _originMarker.setMap(null);
+    _originMarker = null;
+  }
+  const originStatus = document.getElementById("destination-origin-status");
+  const originResults = document.getElementById("destination-origin-results");
+  _originSearchRequestId += 1;
+  clearTimeout(_originSearchTimer);
+  if (originStatus) originStatus.textContent = "";
+  if (originResults) {
+    originResults.replaceChildren();
+    originResults.hidden = true;
+  }
+  const routeButton = document.getElementById("destination-calculate-route");
+  if (routeButton) routeButton.disabled = true;
 
   if (_routePolyline) {
     _routePolyline.setMap(null);
@@ -346,7 +392,7 @@ async function showDestinationDetails(place, prefs, session) {
       throw new Error("This destination has no coordinates for mapping.");
     }
     _modalMap = new google.maps.Map(mapEl, { center: destinationPosition, zoom: 8, disableDefaultUI: true });
-    _marker = new google.maps.Marker({ map: _modalMap, position: destinationPosition, title: place.name });
+    _marker = new google.maps.Marker({ map: _modalMap, position: destinationPosition, title: place.name, label: { text: "B", color: "#fff" } });
     requestAnimationFrame(() => google.maps.event.trigger(_modalMap, "resize"));
   } catch (err) {
     const message = err && err.message === "No API"
@@ -355,9 +401,107 @@ async function showDestinationDetails(place, prefs, session) {
     mapEl.innerHTML = `<div class="destination-map-message">${window.SidekickCore.escapeHtml(message)}</div>`;
   }
 
-  const routeButton = document.getElementById("destination-calculate-route");
   if (routeButton) {
     routeButton.onclick = () => calculateDestinationRoute(place);
+  }
+  if (originInput) {
+    originInput.oninput = () => {
+      _selectedOriginPlace = null;
+      delete originInput.dataset.verifiedOrigin;
+      if (_originMarker) {
+        _originMarker.setMap(null);
+        _originMarker = null;
+      }
+      if (_modalMap && Number.isFinite(Number(place.lat)) && Number.isFinite(Number(place.lng))) {
+        _modalMap.panTo({ lat: Number(place.lat), lng: Number(place.lng) });
+        _modalMap.setZoom(8);
+      }
+      if (routeButton) routeButton.disabled = true;
+      setText("destination-route-mode", "Not calculated");
+      setText("destination-route-distance", "Unavailable");
+      if (originResults) {
+        originResults.replaceChildren();
+        originResults.hidden = true;
+      }
+      if (originStatus) originStatus.textContent = "";
+      const query = originInput.value.trim();
+      const requestId = ++_originSearchRequestId;
+      clearTimeout(_originSearchTimer);
+      if (query.length < 2) return;
+
+      _originSearchTimer = setTimeout(async () => {
+        if (originStatus) originStatus.textContent = "Searching…";
+        try {
+          const response = await window.SidekickCore.apiRequest("/api/maps/places", {
+            method: "POST",
+            body: JSON.stringify({ queries: [query] }),
+          });
+          if (requestId !== _originSearchRequestId) return;
+          const matches = (response.places || [])
+            .filter((candidate) => candidate.lat != null && candidate.lng != null && Number.isFinite(Number(candidate.lat)) && Number.isFinite(Number(candidate.lng)))
+            .slice(0, 8);
+          if (!matches.length) {
+            if (originStatus) originStatus.textContent = "No matching places found.";
+            return;
+          }
+          if (originResults) {
+            matches.forEach((candidate) => {
+              const resultButton = document.createElement("button");
+              resultButton.type = "button";
+              resultButton.className = "destination-origin-result";
+              resultButton.setAttribute("role", "option");
+              resultButton.setAttribute("aria-selected", "false");
+              resultButton.innerHTML = `<strong>${window.SidekickCore.escapeHtml(candidate.name || "Unknown place")}</strong><span>${window.SidekickCore.escapeHtml(candidate.address || "Address unavailable")}</span>`;
+              resultButton.addEventListener("click", () => {
+                _selectedOriginPlace = candidate;
+                originInput.value = candidate.address || candidate.name || query;
+                if (routeButton) routeButton.disabled = false;
+                if (originStatus) originStatus.textContent = `✓ ${candidate.name || candidate.address}${candidate.address ? ` — ${candidate.address}` : ""}`;
+                originResults.replaceChildren();
+                originResults.hidden = true;
+
+                if (_modalMap) {
+                  const originPosition = { lat: Number(candidate.lat), lng: Number(candidate.lng) };
+                  if (_originMarker) _originMarker.setMap(null);
+                  _originMarker = new google.maps.Marker({
+                    map: _modalMap,
+                    position: originPosition,
+                    title: `Starting location: ${candidate.name || candidate.address}`,
+                    label: { text: "A", color: "#fff" },
+                  });
+                  const destinationPosition = { lat: Number(place.lat), lng: Number(place.lng) };
+                  if (originPosition.lat === destinationPosition.lat && originPosition.lng === destinationPosition.lng) {
+                    _modalMap.panTo(originPosition);
+                    _modalMap.setZoom(13);
+                  } else {
+                    const bounds = new google.maps.LatLngBounds();
+                    bounds.extend(originPosition);
+                    bounds.extend(destinationPosition);
+                    _modalMap.fitBounds(bounds, 48);
+                  }
+                }
+              });
+              originResults.appendChild(resultButton);
+            });
+            originResults.hidden = false;
+          }
+          if (originStatus) originStatus.textContent = "";
+        } catch (error) {
+          if (requestId === _originSearchRequestId && originStatus) {
+            originStatus.textContent = error.message || "Location search failed.";
+          }
+        }
+      }, 300);
+    };
+    originInput.onfocus = () => {
+      if (_selectedOriginPlace || !originInput.value.trim() || !originResults?.childElementCount) return;
+      originResults.hidden = false;
+    };
+    originInput.onkeydown = (event) => {
+      if (event.key === "Escape" && originResults) {
+        originResults.hidden = true;
+      }
+    };
   }
   const generateBtn = document.getElementById("destination-generate");
   if (generateBtn) {
@@ -365,36 +509,28 @@ async function showDestinationDetails(place, prefs, session) {
   }
 
   async function calculateDestinationRoute(place) {
-    const originInput = document.getElementById("destination-origin");
     const modeSelect = document.getElementById("destination-travel-mode");
-    const origin = String(originInput?.value || "").trim();
+    const origin = _selectedOriginPlace;
     const travelMode = modeSelect?.value || "DRIVE";
     if (!origin) {
-      setText("destination-route-mode", "Enter your starting location to calculate this route.");
-      setText("destination-route-time", "Unavailable");
-      setText("destination-route-distance", "Unavailable");
-      if (routeError) routeError.hidden = true;
       return;
     }
     const button = document.getElementById("destination-calculate-route");
     if (button) button.disabled = true;
     setText("destination-route-mode", "Calculating route...");
-    setText("destination-route-time", "Calculating...");
     setText("destination-route-distance", "Calculating...");
-    setText("destination-route-cost", "Unavailable (fare data is not provided by Routes API)");
     if (routeError) routeError.hidden = true;
     try {
       const response = await window.SidekickCore.apiRequest("/api/maps/route", {
         method: "POST",
         body: JSON.stringify({
-          origin: { address: origin },
+          origin: { placeId: origin.placeId, lat: origin.lat, lng: origin.lng, address: origin.address, name: origin.name },
           destination: { placeId: place.placeId, lat: place.lat, lng: place.lng, address: place.address, name: place.name },
           travelMode,
         }),
       });
       const route = response.route;
       setText("destination-route-mode", `${route.travelMode}${response.isDevelopmentMock ? " (development estimate)" : ""}`);
-      setText("destination-route-time", `${route.durationMinutes} min`);
       setText("destination-route-distance", `${(route.distanceMeters / 1000).toFixed(1)} km`);
       if (route.encodedPolyline && _modalMap && google.maps.geometry?.encoding) {
         if (_routePolyline) _routePolyline.setMap(null);
@@ -406,9 +542,7 @@ async function showDestinationDetails(place, prefs, session) {
       }
     } catch (error) {
       setText("destination-route-mode", "Route unavailable");
-      setText("destination-route-time", "Unavailable");
       setText("destination-route-distance", "Unavailable");
-      setText("destination-route-cost", "Unavailable");
       if (routeError) {
         routeError.hidden = false;
         setText("destination-route-error-message", "The route could not be retrieved. Check your Google Routes API setup and try again.");
@@ -443,10 +577,18 @@ async function generateFocusedItinerary(place, prefs, session) {
         email: session.email,
         message: `Plan a practical trip to ${place.name}. Use my saved preferences and suggest a balanced itinerary.`,
         selectedDestination: { name: place.name, placeId: place.placeId, lat: place.lat, lng: place.lng },
+        origin: _selectedOriginPlace ? {
+          name: _selectedOriginPlace.name,
+          address: _selectedOriginPlace.address,
+          placeId: _selectedOriginPlace.placeId,
+          lat: _selectedOriginPlace.lat,
+          lng: _selectedOriginPlace.lng,
+        } : null,
         profile: {
           ...(prefs || {}),
           preferredPlaces: [place.name, ...(prefs?.preferredPlaces || [])],
           startDate: new Date().toISOString().slice(0, 10),
+          transportation: document.getElementById("destination-travel-mode")?.value || "DRIVE",
         },
       }),
     });
@@ -492,25 +634,15 @@ function renderDestinationLists(recommended, popular, query, prefs, session) {
   const recommendedRow = document.getElementById("recommended-row");
   const destinationsGrid = document.getElementById("destinations-grid");
   if (!recommendedRow || !destinationsGrid) return;
-
   const q = normalizeQuery(query);
   const rec = recommended.filter((p) => placeMatches(p, q)).slice(0, IS_PERF_LITE ? 4 : 6);
   const pop = popular.filter((p) => placeMatches(p, q)).slice(0, IS_PERF_LITE ? 4 : 6);
-
   recommendedRow.innerHTML = rec.map(renderPlaceCard).join("");
   destinationsGrid.innerHTML = pop.map(renderDestinationCard).join("");
-
   if (!IS_PERF_LITE) {
-    [...recommendedRow.children].forEach((child, idx) => {
-      child.style.animationDelay = `${idx * 40}ms`;
-      child.style.animation = "cardIn 420ms ease both";
-    });
-    [...destinationsGrid.children].forEach((child, idx) => {
-      child.style.animationDelay = `${idx * 35}ms`;
-      child.style.animation = "cardIn 420ms ease both";
-    });
+    [...recommendedRow.children].forEach((child, idx) => { child.style.animationDelay = (idx * 40) + "ms"; child.style.animation = "cardIn 420ms ease both"; });
+    [...destinationsGrid.children].forEach((child, idx) => { child.style.animationDelay = (idx * 35) + "ms"; child.style.animation = "cardIn 420ms ease both"; });
   }
-
   attachCardHandlers(rec, pop, prefs, session);
 }
 
@@ -522,6 +654,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   const nameEl = document.getElementById("user-name");
   const searchInput = document.getElementById("destination-search");
+  const searchSuggestions = document.getElementById("destination-search-suggestions");
   const closeBtn = document.getElementById("destination-close");
   const modal = document.getElementById("destination-modal");
 
@@ -529,51 +662,126 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   let recommended = [];
   let popular = [];
+  const recommendedRow = document.getElementById("recommended-row");
+  const destinationsGrid = document.getElementById("destinations-grid");
+  [recommendedRow, destinationsGrid].forEach((container) => {
+    if (!container) return;
+    container.setAttribute("aria-busy", "true");
+    container.innerHTML = '<p class="dashboard-loading">Loading destinations…</p>';
+  });
 
-  // Render local recommendations first for faster first paint on mobile.
   const initial = window.SidekickCore.buildDashboardRecommendations(prefs);
   recommended = initial.recommended;
   popular = initial.popularDestinations;
-  renderDestinationLists(recommended, popular, "", prefs, session);
-
   try {
     const model = await fetchPlacesFromGoogle(prefs, "");
     if (model.recommended.length) recommended = model.recommended;
     if (model.popularDestinations.length) popular = model.popularDestinations;
-  } catch (e) {
-    // Keep local recommendations already rendered.
+  } catch (error) {
+    // Show local results only after the initial Places request has settled.
   }
-
   renderDestinationLists(recommended, popular, "", prefs, session);
-
-  let searchTimer = null;
-  if (searchInput) {
-    searchInput.addEventListener("input", () => {
-      const q = searchInput.value || "";
-      clearTimeout(searchTimer);
-      renderDestinationLists(recommended, popular, q, prefs, session);
-
-      if (normalizeQuery(q).length >= 3) {
-        setSearchStatus("Searching places...");
-        searchTimer = setTimeout(async () => {
-          try {
-            const dynamic = await fetchPlacesFromGoogle(prefs, q);
-            if (dynamic.recommended.length || dynamic.popularDestinations.length) {
-              recommended = dynamic.recommended;
-              popular = dynamic.popularDestinations;
-              renderDestinationLists(recommended, popular, q, prefs, session);
-              setSearchStatus("");
-            } else {
-              setSearchStatus("No places found. Try a different search.");
-            }
-          } catch (e) {
-            setSearchStatus(e?.message || "Unable to load places right now. Please try again.");
-          }
-        }, 380);
-      } else if (!normalizeQuery(q)) {
-        setSearchStatus("");
+  let suggestionTimer = null;
+  let suggestionRequestId = 0;
+  let placeSuggestionSessionToken = null;
+  let activeSuggestionIndex = -1;
+  const closeSuggestions = () => {
+    if (searchSuggestions) searchSuggestions.hidden = true;
+    if (searchInput) {
+      searchInput.setAttribute("aria-expanded", "false");
+      searchInput.removeAttribute("aria-activedescendant");
+    }
+    activeSuggestionIndex = -1;
+  };
+  const selectSuggestion = async (suggestion) => {
+    if (!suggestion?.placeId) return;
+    const requestId = ++suggestionRequestId;
+    const sessionToken = placeSuggestionSessionToken;
+    placeSuggestionSessionToken = null;
+    clearTimeout(suggestionTimer);
+    closeSuggestions();
+    searchInput.value = suggestion.name || suggestion.text || "";
+    setSearchStatus("Loading destination…");
+    try {
+      const data = await window.SidekickCore.apiRequest("/api/maps/place-details", {
+        method: "POST", body: JSON.stringify({ placeId: suggestion.placeId, sessionToken }),
+      });
+      if (requestId !== suggestionRequestId) return;
+      const place = toBackendDashboardPlace({ ...(data.place || {}), name: suggestion.name || data.place?.name });
+      if (!place.name || !Number.isFinite(place.lat) || !Number.isFinite(place.lng)) throw new Error("Destination details are unavailable right now.");
+      setSearchStatus("");
+      await showDestinationDetails(place, prefs, session);
+    } catch (error) {
+      if (requestId === suggestionRequestId) {
+        const message = error?.message || "Unable to load this destination.";
+        setSearchStatus(message === "The server request failed."
+          ? "Could not load this place. Restart the backend server and try again."
+          : message);
       }
+    }
+  };
+  if (searchInput && searchSuggestions) {
+    searchInput.addEventListener("input", () => {
+      const query = searchInput.value.trim();
+      const requestId = ++suggestionRequestId;
+      activeSuggestionIndex = -1;
+      clearTimeout(suggestionTimer);
+      searchSuggestions.replaceChildren();
+      closeSuggestions();
+      if (query.length < 2) { placeSuggestionSessionToken = null; setSearchStatus(""); return; }
+      if (!placeSuggestionSessionToken) {
+        placeSuggestionSessionToken = window.crypto?.randomUUID?.()
+          || (Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 14));
+      }
+      const sessionToken = placeSuggestionSessionToken;
+      setSearchStatus("Searching destinations…");
+      suggestionTimer = setTimeout(async () => {
+        try {
+          const data = await window.SidekickCore.apiRequest("/api/maps/place-suggestions", {
+            method: "POST", body: JSON.stringify({ input: query, sessionToken }),
+          });
+          if (requestId !== suggestionRequestId || searchInput.value.trim() !== query) return;
+          const suggestions = (data.suggestions || []).filter((item) => item?.placeId && item?.name).slice(0, 6);
+          suggestions.forEach((suggestion, index) => {
+            const option = document.createElement("button");
+            option.type = "button";
+            option.className = "destination-search-suggestion";
+            option.id = "destination-search-suggestion-" + index;
+            option.setAttribute("role", "option");
+            option.setAttribute("aria-selected", "false");
+            option.textContent = suggestion.name;
+            option.addEventListener("mousedown", (event) => event.preventDefault());
+            option.addEventListener("click", () => { void selectSuggestion(suggestion); });
+            searchSuggestions.appendChild(option);
+          });
+          searchSuggestions.hidden = suggestions.length === 0;
+          searchInput.setAttribute("aria-expanded", String(suggestions.length > 0));
+          setSearchStatus(suggestions.length ? "" : "No destinations found.");
+        } catch (error) {
+          if (requestId !== suggestionRequestId) return;
+          closeSuggestions();
+          setSearchStatus(error?.message || "Unable to load destination suggestions.");
+        }
+      }, 320);
     });
+    searchInput.addEventListener("keydown", (event) => {
+      if (searchSuggestions.hidden) return;
+      const options = Array.from(searchSuggestions.querySelectorAll(".destination-search-suggestion"));
+      if (event.key === "ArrowDown" && options.length) activeSuggestionIndex = (activeSuggestionIndex + 1) % options.length;
+      else if (event.key === "ArrowUp" && options.length) activeSuggestionIndex = (activeSuggestionIndex - 1 + options.length) % options.length;
+      else if (event.key === "Enter" && options.length) { event.preventDefault(); options[Math.max(0, activeSuggestionIndex)].click(); return; }
+      else if (event.key === "Escape") { closeSuggestions(); return; }
+      else return;
+      event.preventDefault();
+      options.forEach((option, index) => {
+        const active = index === activeSuggestionIndex;
+        option.setAttribute("aria-selected", String(active));
+        option.classList.toggle("active", active);
+      });
+      searchInput.setAttribute("aria-activedescendant", options[activeSuggestionIndex]?.id || "");
+    });
+    searchInput.addEventListener("blur", () => setTimeout(closeSuggestions, 120));
+    document.addEventListener("click", (event) => { if (!event.target.closest(".search-section")) closeSuggestions(); });
   }
 
   if (closeBtn) closeBtn.addEventListener("click", closeModal);
