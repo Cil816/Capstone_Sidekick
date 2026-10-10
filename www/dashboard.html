@@ -54,6 +54,18 @@
                     <div id="destination-image" class="destination-image" aria-label="Destination photo"></div>
                     <p id="destination-subtitle" class="destination-subtitle"></p>
                     <div id="destination-tags" class="destination-tags"></div>
+                    <div class="destination-route-controls">
+                        <label for="destination-origin">Starting location</label>
+                        <input id="destination-origin" type="text" placeholder="Enter your starting city or address" autocomplete="street-address" />
+                        <label for="destination-travel-mode">Travel mode</label>
+                        <select id="destination-travel-mode">
+                            <option value="DRIVE">Driving</option>
+                            <option value="TRANSIT">Public transit</option>
+                            <option value="WALK">Walking</option>
+                            <option value="BICYCLE">Bicycling</option>
+                        </select>
+                        <button id="destination-calculate-route" class="btn btn-outline" type="button">Calculate route</button>
+                    </div>
                     <div id="destination-map" class="destination-map">Map loading...</div>
                     <div class="destination-meta-grid">
                         <div class="meta-card">
@@ -69,9 +81,16 @@
                             <strong id="destination-route-distance">Calculating...</strong>
                         </div>
                         <div class="meta-card">
-                            <span class="meta-label">Estimated budget</span>
+                            <span class="meta-label">Verified fare / budget data</span>
                             <strong id="destination-route-cost">Calculating...</strong>
                         </div>
+                    </div>
+                    <div id="destination-route-error" class="destination-route-error" role="status" aria-live="polite" hidden>
+                        <p id="destination-route-error-message"></p>
+                        <details>
+                            <summary>Technical details</summary>
+                            <pre id="destination-route-error-details"></pre>
+                        </details>
                     </div>
                     <div class="destination-actions">
                         <button id="destination-generate" class="btn btn-primary" type="button">Generate itinerary for this place</button>

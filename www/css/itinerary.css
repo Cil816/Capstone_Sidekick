@@ -11,6 +11,7 @@
 
 .header-top {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 16px;
     margin-bottom: 16px;
@@ -21,6 +22,7 @@
     font-size: 18px;
     font-weight: 500;
     color: #2C3E50;
+    flex: 1 1 auto;
 }
 
 .itinerary-date {
@@ -202,7 +204,33 @@
     margin-bottom: calc(var(--bottom-overlay-height, var(--nav-height)) + env(safe-area-inset-bottom) + 14px);
 }
 
-/* Google Maps place search + map container styles */
+/* Place search and interactive Google map */
+.itinerary-builder-fields {
+    display: grid;
+    grid-template-columns: auto minmax(130px, 1fr) auto minmax(130px, 1fr) auto minmax(140px, 1fr) auto auto;
+    align-items: center;
+    gap: 8px;
+}
+
+.itinerary-builder-fields label {
+    color: #374151;
+    font-size: 14px;
+}
+
+.itinerary-builder-fields input[type="date"],
+.itinerary-builder-fields select {
+    padding: 8px;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    background: #fff;
+}
+
+.itinerary-builder-fields input,
+.itinerary-builder-fields select {
+    min-width: 0;
+    max-width: 100%;
+}
+
 #place-search {
     width: 100%;
     padding: 10px 12px;
@@ -211,16 +239,45 @@
     font-size: 14px;
 }
 
-#map {
+.itinerary-place-search {
+    display: grid;
+    gap: 8px;
+    margin: 12px 0;
+}
+
+.itinerary-map {
     width: 100%;
-    height: 160px;
-    border-radius: 8px;
+    height: 240px;
+    border: 1px solid #E5E7EB;
+    border-radius: 10px;
     background: #F8FAFC;
+    overflow: hidden;
+}
+
+.itinerary-place-results {
+    width: 100%;
+    max-height: 220px;
+    border-radius: 8px;
     overflow: auto;
-    padding: 8px;
     display: flex;
     flex-direction: column;
     gap: 6px;
+}
+
+.itinerary-map-message {
+    min-height: 100%;
+    display: grid;
+    place-items: center;
+    padding: 14px;
+    color: #6b7280;
+    text-align: center;
+    font-size: 13px;
+}
+
+.place-search-source {
+    padding: 4px 6px;
+    color: #8a5a00;
+    font-size: 11px;
 }
 
 .map-place-result {
@@ -288,8 +345,13 @@
     background: #f0fbfc;
 }
 
+@media (max-width: 760px) {
+    .itinerary-builder-fields { grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr); }
+}
+
 @media (max-width: 420px) {
-    #map { height: 120px; }
+    .itinerary-builder-fields { grid-template-columns: 1fr 1fr; }
+    .itinerary-map { height: 190px; }
 }
 
 /* Polished itinerary surface */

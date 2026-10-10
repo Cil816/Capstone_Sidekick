@@ -28,7 +28,7 @@ SMTP_USER=your_smtp_username
 SMTP_PASSWORD=your_smtp_password
 SMTP_FROM=no-reply@example.com
 AI_API_KEY=your_gemini_api_key
-GEMINI_MODEL=gemini-3.6-flash
+GEMINI_MODEL=gemini-2.5-flash
 GOOGLE_MAPS_API_KEY=your_google_maps_key
 ```
 

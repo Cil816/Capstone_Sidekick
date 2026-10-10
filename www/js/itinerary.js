@@ -1,20 +1,162 @@
 // Selected place storage for the Places API (New) search results.
 let _selectedPlace = null;
+let _itineraryMap = null;
+let _itineraryMapMarkers = [];
+let _itineraryMapLoadPromise = null;
+
+function loadGoogleMapsForItinerary() {
+  if (window.google?.maps) return Promise.resolve();
+  if (_itineraryMapLoadPromise) return _itineraryMapLoadPromise;
+  const apiKey = String(window.SIDEKICK_CONFIG?.googleMapsApiKey || "").trim();
+  if (!apiKey) return Promise.reject(new Error("Google Maps JavaScript key is not configured."));
+  _itineraryMapLoadPromise = new Promise((resolve, reject) => {
+    const existing = document.querySelector('script[data-sidekick-maps="1"]');
+    if (existing) {
+      existing.addEventListener("load", resolve, { once: true });
+      existing.addEventListener("error", () => reject(new Error("Google Maps failed to load.")), { once: true });
+      return;
+    }
+    window.gm_authFailure = () => {
+      const map = document.getElementById("itinerary-map");
+      if (map) map.innerHTML = '<div class="itinerary-map-message">Google Maps could not authenticate this key. Check its website restrictions, billing, and Maps JavaScript API configuration.</div>';
+    };
+    const script = document.createElement("script");
+    script.dataset.sidekickMaps = "1";
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}`;
+    script.async = true;
+    script.defer = true;
+    script.onload = resolve;
+    script.onerror = () => reject(new Error("Google Maps failed to load. Check the browser key, billing, and Maps JavaScript API configuration."));
+    document.head.appendChild(script);
+  });
+  return _itineraryMapLoadPromise;
+}
+
+async function initializeItineraryMap() {
+  const mapEl = document.getElementById("itinerary-map");
+  if (!mapEl || String(window.SIDEKICK_CONFIG?.apiMode || "").toLowerCase() === "development") {
+    if (mapEl) mapEl.innerHTML = '<div class="itinerary-map-message">Development map preview is unavailable; mock place search and coordinates remain available.</div>';
+    return;
+  }
+  try {
+    await loadGoogleMapsForItinerary();
+    if (!_itineraryMap) {
+      _itineraryMap = new google.maps.Map(mapEl, {
+        center: { lat: 14.5995, lng: 120.9842 },
+        zoom: 6,
+        mapTypeControl: false,
+        streetViewControl: false,
+      });
+    } else {
+      google.maps.event.trigger(_itineraryMap, "resize");
+    }
+  } catch (error) {
+    mapEl.innerHTML = `<div class="itinerary-map-message">${window.SidekickCore.escapeHtml(error.message || "The map is unavailable.")}</div>`;
+  }
+}
+
+function displayPlaceOnItineraryMap(place) {
+  if (!_itineraryMap || !hasPlaceCoordinates(place)) return;
+  const position = { lat: Number(place.lat), lng: Number(place.lng) };
+  _itineraryMap.setCenter(position);
+  _itineraryMap.setZoom(15);
+  requestAnimationFrame(() => google.maps.event.trigger(_itineraryMap, "resize"));
+}
+
+function displayPlacesOnItineraryMap(places) {
+  if (!_itineraryMap) return;
+  _itineraryMapMarkers.forEach((marker) => marker.setMap(null));
+  _itineraryMapMarkers = [];
+  const validPlaces = places.filter(hasPlaceCoordinates);
+  if (!validPlaces.length) return;
+  const bounds = new google.maps.LatLngBounds();
+  validPlaces.forEach((place) => {
+    const position = { lat: Number(place.lat), lng: Number(place.lng) };
+    const marker = new google.maps.Marker({ map: _itineraryMap, position, title: place.name || "Place result" });
+    marker.addListener("click", () => {
+      _selectedPlace = place;
+      document.dispatchEvent(new CustomEvent("sidekick:selected-place", { detail: place }));
+    });
+    _itineraryMapMarkers.push(marker);
+    bounds.extend(position);
+  });
+  if (validPlaces.length === 1) {
+    _itineraryMap.setCenter(bounds.getCenter());
+    _itineraryMap.setZoom(15);
+  } else {
+    _itineraryMap.fitBounds(bounds);
+  }
+}
+
+function hasPlaceCoordinates(place) {
+  const { lat, lng } = place || {};
+  return lat !== null && lat !== undefined && lat !== ""
+    && lng !== null && lng !== undefined && lng !== ""
+    && Number.isFinite(Number(lat)) && Number.isFinite(Number(lng))
+    && Number(lat) >= -90 && Number(lat) <= 90
+    && Number(lng) >= -180 && Number(lng) <= 180;
+}
+
+function formatDateInput(date) {
+  const localDate = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return localDate.toISOString().slice(0, 10);
+}
+
+function parseItineraryDate(value) {
+  const text = String(value || "");
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+    const [year, month, day] = text.split("-").map(Number);
+    const date = new Date(year, month - 1, day);
+    if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) return new Date(Number.NaN);
+    return date;
+  }
+  const timestamp = new Date(text);
+  return Number.isFinite(timestamp.getTime())
+    ? new Date(timestamp.getFullYear(), timestamp.getMonth(), timestamp.getDate())
+    : new Date(Number.NaN);
+}
+
+function itineraryDates(startValue, endValue) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(startValue || "")) || !/^\d{4}-\d{2}-\d{2}$/.test(String(endValue || ""))) {
+    throw new Error("Select both a valid start date and a valid end date.");
+  }
+  const start = parseItineraryDate(startValue);
+  const end = parseItineraryDate(endValue);
+  if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime())) throw new Error("Enter valid trip dates.");
+  if (end < start) throw new Error("End date must be on or after the start date.");
+  const durationDays = Math.floor((Date.UTC(end.getFullYear(), end.getMonth(), end.getDate()) - Date.UTC(start.getFullYear(), start.getMonth(), start.getDate())) / 86400000) + 1;
+  return { start, end, durationDays };
+}
 
 async function searchPlacesForBuilder(query) {
   const mapEl = document.getElementById("map");
-  if (!mapEl || !String(query || "").trim()) return;
-  mapEl.textContent = "Searching verified Google Maps places...";
+  if (!mapEl) return;
+  if (!String(query || "").trim()) {
+    mapEl.textContent = "Enter a place name to search.";
+    displayPlacesOnItineraryMap([]);
+    return;
+  }
+  mapEl.textContent = "Searching places...";
   try {
     const data = await window.SidekickCore.apiRequest("/api/maps/places", {
       method: "POST",
       body: JSON.stringify({ queries: [String(query).trim()] }),
     });
+    if (String(window.SIDEKICK_CONFIG?.apiMode || "").toLowerCase() !== "development" && !_itineraryMap) {
+      await initializeItineraryMap();
+    }
     const places = Array.isArray(data.places) ? data.places.slice(0, 8) : [];
     mapEl.innerHTML = "";
+    displayPlacesOnItineraryMap(places);
     if (!places.length) {
-      mapEl.textContent = "No verified places found.";
+      mapEl.textContent = data.isDevelopmentMock ? "No development places matched that search." : "No places found.";
       return;
+    }
+    if (data.isDevelopmentMock) {
+      const note = document.createElement("small");
+      note.className = "place-search-source";
+      note.textContent = "Development sample places (not Google results)";
+      mapEl.appendChild(note);
     }
     places.forEach((place) => {
       const button = document.createElement("button");
@@ -36,6 +178,7 @@ async function searchPlacesForBuilder(query) {
       if (image) image.addEventListener("error", () => image.replaceWith(createPhotoPlaceholder()));
       button.addEventListener("click", () => {
         _selectedPlace = place;
+        displayPlaceOnItineraryMap(place);
         document.dispatchEvent(new CustomEvent("sidekick:selected-place", { detail: place }));
         mapEl.querySelectorAll(".map-place-result").forEach((item) => item.classList.remove("selected"));
         button.classList.add("selected");
@@ -85,9 +228,9 @@ function renderActivity(activity) {
   const timeText = activity?.dueAt ? new Date(Number(activity.dueAt)).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : window.SidekickCore.escapeHtml(activity.timeLabel || '');
   const hasRouteMeta = typeof activity?.travelMinutes === 'number' || typeof activity?.estimatedTotalCostPhp === 'number';
   const mode = window.SidekickCore.escapeHtml(activity?.transportMode || 'Suggested transport');
-  const distance = typeof activity?.travelDistanceKm === 'number' ? `${Math.round(activity.travelDistanceKm)} km` : 'distance n/a';
+  const distance = typeof activity?.travelDistanceKm === 'number' ? `${activity.travelDistanceKm.toFixed(1)} km` : 'distance unavailable';
   const mins = typeof activity?.travelMinutes === 'number' ? `${Math.round(activity.travelMinutes)} min` : 'time n/a';
-  const cost = typeof activity?.estimatedTotalCostPhp === 'number' ? `PHP ${Number(activity.estimatedTotalCostPhp).toLocaleString()}` : 'cost n/a';
+  const cost = typeof activity?.estimatedTotalCostPhp === 'number' ? `PHP ${Number(activity.estimatedTotalCostPhp).toLocaleString()}` : 'fare unavailable';
   const photoUrl = getPlacePhotoUrl(activity);
   return `
     <div class="activity-card">
@@ -105,7 +248,7 @@ function renderActivity(activity) {
         ${svgPin()}
         <span>${window.SidekickCore.escapeHtml(activity.location)}</span>
       </div>
-      ${hasRouteMeta ? `<div class="activity-route-meta">${mode} • ${distance} • ${mins} • ~${cost}</div>` : ''}
+      ${hasRouteMeta || activity.routeStatus ? `<div class="activity-route-meta">${mode} • ${distance} • ${mins}${typeof activity?.estimatedTotalCostPhp === 'number' ? ` • ~${cost}` : ''}${activity.routeStatus ? ` • ${window.SidekickCore.escapeHtml(activity.routeStatus)}` : ''}</div>` : ''}
       ${activity.note ? `<div class="activity-note">${window.SidekickCore.escapeHtml(activity.note)}</div>` : ""}
     </div>
   `;
@@ -124,36 +267,6 @@ function lookupPlaceByActivity(activity) {
   return { lat: match.lat, lng: match.lng };
 }
 
-function modeFromDistanceKm(km) {
-  if (km <= 8) return 'Walk / Tricycle';
-  if (km <= 35) return 'Jeepney / Grab';
-  if (km <= 180) return 'Bus / Van';
-  if (km <= 480) return 'Bus + Ferry';
-  return 'Flight + Local Transfer';
-}
-
-function transportCostFromDistanceKm(km) {
-  if (km <= 8) return 80;
-  if (km <= 35) return Math.round(90 + km * 25);
-  if (km <= 180) return Math.round(120 + km * 4.8);
-  if (km <= 480) return Math.round(350 + km * 3.9);
-  return Math.round(1800 + km * 5.2);
-}
-
-async function fetchRouteFromOSRM(fromCoord, toCoord) {
-  if (!fromCoord || !toCoord) return null;
-  const url = `https://router.project-osrm.org/route/v1/driving/${fromCoord.lng},${fromCoord.lat};${toCoord.lng},${toCoord.lat}?overview=false`;
-  const res = await fetch(url);
-  if (!res.ok) return null;
-  const data = await res.json();
-  const route = data?.routes?.[0];
-  if (!route) return null;
-  return {
-    distanceKm: route.distance / 1000,
-    minutes: route.duration / 60,
-  };
-}
-
 async function enrichItineraryWithLiveRoutes(itineraryData, email) {
   if (!itineraryData?.itinerary?.length) return;
   if (String(window.SIDEKICK_CONFIG?.apiMode || "").toLowerCase() === "development") return;
@@ -169,45 +282,40 @@ async function enrichItineraryWithLiveRoutes(itineraryData, email) {
       const fromCoord = lookupPlaceByActivity(prev);
       const toCoord = lookupPlaceByActivity(current);
 
-      if (prev && fromCoord && toCoord) {
+      if (prev && fromCoord && toCoord && !(Number.isFinite(current.travelMinutes) && Number.isFinite(current.travelDistanceKm))) {
         try {
-          const route = await fetchRouteFromOSRM(fromCoord, toCoord);
-          if (route) {
-            const km = Math.max(1, Math.round(route.distanceKm));
-            const mins = Math.max(5, Math.round(route.minutes));
-            const mode = modeFromDistanceKm(km);
-            const transportCost = transportCostFromDistanceKm(km);
-            const activityCost = Number(current.estimatedActivityCostPhp || 0);
-            current.travelDistanceKm = km;
-            current.travelMinutes = mins;
-            current.transportMode = mode;
-            current.estimatedTransportCostPhp = transportCost;
-            current.estimatedTotalCostPhp = transportCost + activityCost;
-            changed = true;
-          }
-        } catch (e) {
-          // ignore single-route failures and keep generated estimates
+          const response = await window.SidekickCore.apiRequest("/api/maps/route", {
+            method: "POST",
+            body: JSON.stringify({ origin: fromCoord, destination: toCoord, travelMode: "DRIVE" }),
+          });
+          const route = response.route;
+          current.travelDistanceKm = route.distanceMeters / 1000;
+          current.travelMinutes = route.durationMinutes;
+          current.transportMode = route.travelMode;
+          current.routeStatus = response.isDevelopmentMock ? "Development route estimate" : "";
+          changed = true;
+        } catch (error) {
+          current.travelDistanceKm = null;
+          current.travelMinutes = null;
+          current.transportMode = "Route unavailable";
+          current.routeStatus = error.message || "Route information could not be retrieved.";
+          changed = true;
         }
       }
 
-      dayTotal += Number(current.estimatedTotalCostPhp || 0);
+      if (typeof current.estimatedTotalCostPhp === 'number') dayTotal += current.estimatedTotalCostPhp;
     }
 
-    if (dayTotal > 0) {
-      day.estimatedDayCostPhp = dayTotal;
-      day.estimatedDayCostLowPhp = Math.round(dayTotal * 0.9);
-      day.estimatedDayCostHighPhp = Math.round(dayTotal * 1.15);
-      changed = true;
-    }
+    if (dayTotal > 0 && itineraryData.meta?.isDevelopmentMock) day.estimatedDayCostPhp = dayTotal;
   }
 
   if (changed) {
     setItineraryForEmail(email, itineraryData);
-    renderItinerary(itineraryData.itinerary);
+    renderItinerary(itineraryData.itinerary, Boolean(itineraryData.meta?.isDevelopmentMock));
   }
 }
 
-function renderItinerary(itinerary) {
+function renderItinerary(itinerary, isDevelopmentMock = false) {
   const container = document.getElementById("itinerary-content");
   if (!container) return;
 
@@ -223,7 +331,7 @@ function renderItinerary(itinerary) {
           <div class="day-info">
             <h2>Day ${day.dayNumber}</h2>
             <p>${window.SidekickCore.escapeHtml(day.dateLabel)}</p>
-            ${typeof day.estimatedDayCostPhp === 'number' ? `<p style="font-size:12px;color:#0f766e;margin-top:4px;">Estimated daily budget: PHP ${Number(day.estimatedDayCostLowPhp || day.estimatedDayCostPhp).toLocaleString()} - PHP ${Number(day.estimatedDayCostHighPhp || day.estimatedDayCostPhp).toLocaleString()}</p>` : ''}
+            ${typeof day.estimatedDayCostPhp === 'number' ? `<p style="font-size:12px;color:#0f766e;margin-top:4px;">${isDevelopmentMock ? 'Development sample budget' : 'Estimated daily budget'}: PHP ${Number(day.estimatedDayCostLowPhp ?? day.estimatedDayCostPhp).toLocaleString()} - PHP ${Number(day.estimatedDayCostHighPhp ?? day.estimatedDayCostPhp).toLocaleString()}</p>` : ''}
           </div>
         </div>
         <div class="activities-list">
@@ -257,9 +365,19 @@ function updateHeaderDate(prefs, itineraryData) {
   const dateEl = document.getElementById("itinerary-date");
   if (!dateEl) return;
 
-  const startDate = new Date(itineraryData?.meta?.startDate || Date.now());
+  let startDate = itineraryData?.meta?.startDate
+    ? parseItineraryDate(itineraryData.meta.startDate)
+    : new Date();
   const dayCount = Math.max(1, Number(itineraryData?.itinerary?.length || 1));
-  const range = window.SidekickCore.formatDateRange(startDate, dayCount);
+  if (!Number.isFinite(startDate.getTime())) startDate = new Date();
+  let endDate = itineraryData?.meta?.endDate
+    ? parseItineraryDate(itineraryData.meta.endDate)
+    : new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate() + dayCount - 1);
+  if (!Number.isFinite(endDate.getTime()) || endDate < startDate) {
+    endDate = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate() + dayCount - 1);
+  }
+  const format = { month: "short", day: "numeric", year: "numeric" };
+  const range = `${startDate.toLocaleDateString([], format)} - ${endDate.toLocaleDateString([], format)}`;
   const extra = dayCount === 1 ? "Day" : "Days";
   dateEl.textContent = `${range} • ${dayCount} ${extra}`;
 }
@@ -307,7 +425,8 @@ function attachAddActivityHandler(itineraryData, prefs, email, startDate) {
     };
     // Offer to attach coordinates from selected place (if available)
     try{
-      if (typeof _selectedPlace === 'object' && _selectedPlace) {
+      if (typeof _selectedPlace === 'object' && _selectedPlace &&
+          Number.isFinite(Number(_selectedPlace.lat)) && Number.isFinite(Number(_selectedPlace.lng))) {
         const attach = confirm('Attach coordinates from the selected place to this activity?');
         if (attach) {
           activityObj.location = _selectedPlace.name || activityObj.location;
@@ -323,7 +442,7 @@ function attachAddActivityHandler(itineraryData, prefs, email, startDate) {
 
     setItineraryForEmail(email, itineraryData);
     updateHeaderDate(prefs, itineraryData);
-    renderItinerary(itineraryData.itinerary);
+    renderItinerary(itineraryData.itinerary, Boolean(itineraryData.meta?.isDevelopmentMock));
     try {
       if (window.SidekickCore && window.SidekickCore.syncRemindersFromItinerary) {
         window.SidekickCore.syncRemindersFromItinerary(email);
@@ -345,6 +464,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const builderEl = document.getElementById('itinerary-builder');
   const preferredPlacesEl = document.getElementById('preferred-places');
   const startInput = document.getElementById('itinerary-start');
+  const endInput = document.getElementById('itinerary-end');
   const budgetSelect = document.getElementById('itinerary-budget');
   const buildBtn = document.getElementById('build-itinerary');
   const showBuilderBtn = document.getElementById('show-builder');
@@ -378,7 +498,24 @@ document.addEventListener("DOMContentLoaded", () => {
   function showBuilder(show = true) {
     if (!builderEl) return;
     builderEl.style.display = show ? 'block' : 'none';
+    if (show) {
+      initializeItineraryMap().then(() => {
+        if (_itineraryMap) requestAnimationFrame(() => google.maps.event.trigger(_itineraryMap, "resize"));
+      });
+      if (startInput?.value && endInput) {
+        endInput.min = startInput.value;
+        if (!endInput.value || endInput.value < startInput.value) endInput.value = startInput.value;
+      }
+    }
   }
+
+  if (startInput && endInput) {
+    startInput.addEventListener('change', () => {
+      endInput.min = startInput.value;
+      if (!endInput.value || endInput.value < startInput.value) endInput.value = startInput.value;
+    });
+  }
+  if (showBuilderBtn) showBuilderBtn.addEventListener('click', () => showBuilder(true));
 
   const removeAllBtn = document.getElementById('remove-all-itinerary');
   if (removeAllBtn) {
@@ -409,9 +546,25 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // If user already has an itinerary, show it; otherwise show the builder so user opts in.
   if (existing?.itinerary) {
-    const startDate = existing?.meta?.startDate ? new Date(existing.meta.startDate) : new Date();
+    let startDate = existing?.meta?.startDate ? parseItineraryDate(existing.meta.startDate) : new Date();
+    if (!Number.isFinite(startDate.getTime())) startDate = new Date();
+    let endDate = existing?.meta?.endDate
+      ? parseItineraryDate(existing.meta.endDate)
+      : new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate() + Math.max(0, existing.itinerary.length - 1));
+    if (!Number.isFinite(endDate.getTime()) || endDate < startDate) {
+      endDate = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate() + Math.max(0, existing.itinerary.length - 1));
+    }
+    if (!existing.meta?.endDate || !Number.isFinite(parseItineraryDate(existing.meta.endDate).getTime())) {
+      existing.meta = { ...(existing.meta || {}), startDate: formatDateInput(startDate), endDate: formatDateInput(endDate) };
+      setItineraryForEmail(email, existing);
+    }
+    if (startInput) startInput.value = formatDateInput(startDate);
+    if (endInput) {
+      endInput.min = formatDateInput(startDate);
+      endInput.value = formatDateInput(endDate);
+    }
     updateHeaderDate(prefs, existing);
-    renderItinerary(existing.itinerary);
+    renderItinerary(existing.itinerary, Boolean(existing.meta?.isDevelopmentMock));
     enrichItineraryWithLiveRoutes(existing, email);
     // show add activity button for existing itineraries
     const addBtn = document.getElementById('add-activity-btn');
@@ -423,26 +576,36 @@ document.addEventListener("DOMContentLoaded", () => {
     populatePlaces();
     // prefill start date to today
     const today = new Date();
-    if (startInput) startInput.value = today.toISOString().slice(0,10);
+    const todayValue = formatDateInput(today);
+    if (startInput) startInput.value = todayValue;
+    if (endInput) {
+      endInput.min = todayValue;
+      const defaultEnd = new Date(today);
+      defaultEnd.setDate(defaultEnd.getDate() + 2);
+      endInput.value = formatDateInput(defaultEnd);
+    }
     if (budgetSelect) budgetSelect.value = prefs?.budget || 'Mid-Range';
     showBuilder(true);
-
-    if (showBuilderBtn) {
-      showBuilderBtn.addEventListener('click', () => showBuilder(true));
-    }
 
     if (buildBtn) {
       buildBtn.addEventListener('click', async (e) => {
         e.preventDefault();
         const selected = Array.from(preferredPlacesEl.querySelectorAll('.chip.selected')).map((b) => b.dataset.place);
-        const startVal = startInput?.value ? new Date(startInput.value) : new Date();
+        let tripDates;
+        try {
+          tripDates = itineraryDates(startInput?.value, endInput?.value);
+        } catch (error) {
+          window.alert(error.message);
+          return;
+        }
+        const { start: startVal, end: endVal, durationDays } = tripDates;
         const budgetVal = budgetSelect?.value || prefs?.budget || 'Mid-Range';
 
         // merge into a temporary prefs object for itinerary generation
         const tempPrefs = Object.assign({}, prefs, { preferredPlaces: selected, budget: budgetVal });
 
         // Confirm with user before building
-        const summary = `Build itinerary starting ${startVal.toDateString()}\nBudget: ${budgetVal}\nPreferred places: ${selected.length ? selected.join(', ') : 'None'}\n\nProceed?`;
+        const summary = `Build a ${durationDays}-day itinerary from ${startVal.toDateString()} through ${endVal.toDateString()}?\nBudget: ${budgetVal}\nPreferred places: ${selected.length ? selected.join(', ') : 'None'}`;
         if (!window.confirm(summary)) return;
 
         buildBtn.disabled = true;
@@ -453,9 +616,9 @@ document.addEventListener("DOMContentLoaded", () => {
             method: "POST",
             body: JSON.stringify({
               email,
-              message: `Plan a ${Math.max(1, selected.length || 3)} day trip to ${selected[0] || prefs?.preferredPlaces?.[0] || "my preferred destination"}. Budget: ${budgetVal}. Start date: ${startVal.toISOString().slice(0, 10)}.`,
+              message: `Plan a ${durationDays}-day trip to ${selected[0] || prefs?.preferredPlaces?.[0] || "my preferred destination"}. Budget: ${budgetVal}. Start date: ${formatDateInput(startVal)}. End date: ${formatDateInput(endVal)}.`,
               selectedDestination: { name: selected[0] || prefs?.preferredPlaces?.[0] || "" },
-              profile: { ...tempPrefs, startDate: startVal.toISOString().slice(0, 10) },
+              profile: { ...tempPrefs, startDate: formatDateInput(startVal), endDate: formatDateInput(endVal), durationDays },
             }),
           });
         } catch (error) {
@@ -465,11 +628,11 @@ document.addEventListener("DOMContentLoaded", () => {
           buildBtn.disabled = false;
           buildBtn.textContent = "Build Itinerary";
         }
-        const itineraryData = { itinerary: generated.itinerary, meta: { ...generated.meta, startDate: startVal.toISOString() } };
+        const itineraryData = { itinerary: generated.itinerary, meta: { ...generated.meta, startDate: formatDateInput(startVal), endDate: formatDateInput(endVal), durationDays } };
 
         setItineraryForEmail(email, itineraryData);
         updateHeaderDate(tempPrefs, itineraryData);
-        renderItinerary(itineraryData.itinerary);
+        renderItinerary(itineraryData.itinerary, Boolean(itineraryData.meta?.isDevelopmentMock));
         enrichItineraryWithLiveRoutes(itineraryData, email);
         // show add activity button and attach handler
         const addBtn = document.getElementById('add-activity-btn');
@@ -483,4 +646,5 @@ document.addEventListener("DOMContentLoaded", () => {
       });
     }
   }
+  initializeItineraryMap();
 });

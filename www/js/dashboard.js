@@ -4,8 +4,7 @@ const SELECTED_DESTINATION_KEY = "sidekick.selectedDestination.v1";
 let _gmapsLoadPromise = null;
 let _modalMap = null;
 let _marker = null;
-let _directionsService = null;
-let _directionsRenderer = null;
+let _routePolyline = null;
 let _selectedPlace = null;
 const IS_PERF_LITE = Boolean(window.SidekickCore && window.SidekickCore.isPerfLiteMode && window.SidekickCore.isPerfLiteMode());
 
@@ -28,31 +27,6 @@ function placeMatches(place, query) {
   return text.includes(query);
 }
 
-function budgetMultiplier(budget) {
-  if (budget === "Budget-Friendly") return 0.85;
-  if (budget === "Luxury") return 1.35;
-  if (budget === "Ultra Luxury") return 1.8;
-  return 1;
-}
-
-function estimateModeByDistanceKm(distanceKm) {
-  if (distanceKm <= 8) return "Walk / Tricycle";
-  if (distanceKm <= 35) return "Jeepney / Grab";
-  if (distanceKm <= 180) return "Bus / Van";
-  if (distanceKm <= 480) return "Bus + Ferry";
-  return "Flight + Local Transfer";
-}
-
-function estimateCostByDistance(distanceKm, budget) {
-  let base;
-  if (distanceKm <= 8) base = 80;
-  else if (distanceKm <= 35) base = 90 + distanceKm * 25;
-  else if (distanceKm <= 180) base = 120 + distanceKm * 4.8;
-  else if (distanceKm <= 480) base = 350 + distanceKm * 3.9;
-  else base = 1800 + distanceKm * 5.2;
-  return Math.round(base * budgetMultiplier(budget));
-}
-
 function setText(id, text) {
   const el = document.getElementById(id);
   if (el) el.textContent = text;
@@ -61,24 +35,6 @@ function setText(id, text) {
 function setSearchStatus(text = "") {
   const status = document.getElementById("destination-search-status");
   if (status) status.textContent = text;
-}
-
-function getDefaultOriginCoord() {
-  return { lat: 14.5995, lng: 120.9842, label: "Manila" };
-}
-
-function getCurrentLocationCoord() {
-  return new Promise((resolve) => {
-    if (!navigator.geolocation) {
-      resolve(getDefaultOriginCoord());
-      return;
-    }
-    navigator.geolocation.getCurrentPosition(
-      (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude, label: "Your current location" }),
-      () => resolve(getDefaultOriginCoord()),
-      { timeout: 3500, maximumAge: 600000 }
-    );
-  });
 }
 
 function ensureGoogleMapsLoaded() {
@@ -93,7 +49,11 @@ function ensureGoogleMapsLoaded() {
       return;
     }
     const script = document.createElement("script");
-    script.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_MAPS_API_KEY}&libraries=places`;
+    window.gm_authFailure = () => {
+      const map = document.getElementById("destination-map");
+      if (map) map.innerHTML = '<div class="destination-map-message">Google Maps could not authenticate this key. Check its website restrictions, billing, and Maps JavaScript API configuration.</div>';
+    };
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_MAPS_API_KEY}&libraries=geometry`;
     script.async = true;
     script.defer = true;
     script.onload = () => resolve();
@@ -210,13 +170,14 @@ function toBackendDashboardPlace(place) {
     name: place.name || "Unknown Place",
     region: normalizeRegion(place.address),
     address: place.address || "Philippines",
-    lat: Number(place.lat),
-    lng: Number(place.lng),
+    lat: place.lat == null ? Number.NaN : Number(place.lat),
+    lng: place.lng == null ? Number.NaN : Number(place.lng),
     tags: extractTags(place.types),
     rating: Number(place.rating || 0),
-    ratingCount: 0,
+    ratingCount: Number(place.ratingCount || 0),
     photoUrl,
     photoAttribution: place.photoAttribution || null,
+    isDevelopmentMock: Boolean(place.isDevelopmentMock),
   };
 }
 
@@ -255,7 +216,9 @@ async function fetchPlacesFromGoogle(prefs, searchQuery = "") {
       method: "POST",
       body: JSON.stringify({ queries: keywords, seeds }),
     });
-    const allPlaces = (data.places || []).map(toBackendDashboardPlace).filter((place) => place.lat && place.lng);
+    const allPlaces = (data.places || []).map(toBackendDashboardPlace)
+      .map((place) => ({ ...place, isDevelopmentMock: Boolean(data.isDevelopmentMock) }))
+      .filter((place) => Number.isFinite(place.lat) && Number.isFinite(place.lng));
     if (allPlaces.length) {
       const recommended = allPlaces
         .slice()
@@ -275,6 +238,7 @@ async function fetchPlacesFromGoogle(prefs, searchQuery = "") {
 function renderPlaceCard(place) {
   const safeName = window.SidekickCore.escapeHtml(place.name);
   const safeRegion = window.SidekickCore.escapeHtml(place.region);
+  const mockLabel = place.isDevelopmentMock ? '<small class="development-place-label">Development sample</small>' : '';
   const imgPart = place.photoUrl
     ? `<img src="${place.photoUrl}" alt="${safeName}" loading="lazy" />`
     : svgPin();
@@ -284,6 +248,7 @@ function renderPlaceCard(place) {
       <div class="place-info">
         <h3>${safeName}</h3>
         <p>${safeRegion}</p>
+        ${mockLabel}
       </div>
     </div>
   `;
@@ -292,6 +257,7 @@ function renderPlaceCard(place) {
 function renderDestinationCard(place) {
   const safeName = window.SidekickCore.escapeHtml(place.name);
   const safeRegion = window.SidekickCore.escapeHtml(place.region);
+  const mockLabel = place.isDevelopmentMock ? '<small class="development-place-label">Development sample</small>' : '';
   const imgPart = place.photoUrl
     ? `<img src="${place.photoUrl}" alt="${safeName}" loading="lazy" />`
     : svgPin();
@@ -301,6 +267,7 @@ function renderDestinationCard(place) {
       <div class="destination-info">
         <h3>${safeName}</h3>
         <p>${safeRegion}</p>
+        ${mockLabel}
       </div>
     </div>
   `;
@@ -347,11 +314,13 @@ async function showDestinationDetails(place, prefs, session) {
   }
 
   setText("destination-title", place.name);
-  setText("destination-subtitle", `${place.region}, Philippines`);
-  setText("destination-route-mode", "Calculating...");
-  setText("destination-route-time", "Calculating...");
-  setText("destination-route-distance", "Calculating...");
-  setText("destination-route-cost", "Calculating...");
+  setText("destination-subtitle", `${place.region}, Philippines${place.isDevelopmentMock ? " • Development sample" : ""}`);
+  setText("destination-route-mode", "Enter an origin and calculate a route.");
+  setText("destination-route-time", "Unavailable");
+  setText("destination-route-distance", "Unavailable");
+  setText("destination-route-cost", "Unavailable (no verified fare data)");
+  const routeError = document.getElementById("destination-route-error");
+  if (routeError) routeError.hidden = true;
 
   const tagsEl = document.getElementById("destination-tags");
   if (tagsEl) {
@@ -363,78 +332,92 @@ async function showDestinationDetails(place, prefs, session) {
 
   const mapEl = document.getElementById("destination-map");
   if (!mapEl) return;
-  mapEl.textContent = "Loading map...";
+  const originInput = document.getElementById("destination-origin");
+  if (originInput) originInput.value = "";
 
-  const origin = await getCurrentLocationCoord();
-
+  if (_routePolyline) {
+    _routePolyline.setMap(null);
+    _routePolyline = null;
+  }
   try {
     await ensureGoogleMapsLoaded();
-
-    _modalMap = new google.maps.Map(mapEl, {
-      center: { lat: place.lat, lng: place.lng },
-      zoom: 8,
-      disableDefaultUI: true,
-    });
-
-    _marker = new google.maps.Marker({
-      map: _modalMap,
-      position: { lat: place.lat, lng: place.lng },
-      title: place.name,
-    });
-
-    try {
-      _directionsService = new google.maps.DirectionsService();
-      _directionsRenderer = new google.maps.DirectionsRenderer({
-        map: _modalMap,
-        suppressMarkers: false,
-        preserveViewport: false,
-        polylineOptions: { strokeColor: "#2c91b0", strokeWeight: 5 },
-      });
-
-      const result = await _directionsService.route({
-        origin: { lat: origin.lat, lng: origin.lng },
-        destination: { lat: place.lat, lng: place.lng },
-        travelMode: google.maps.TravelMode.DRIVING,
-      });
-
-      _directionsRenderer.setDirections(result);
-
-      const leg = result.routes && result.routes[0] && result.routes[0].legs && result.routes[0].legs[0];
-      if (leg) {
-        const distanceKm = Math.max(1, Math.round((leg.distance && leg.distance.value ? leg.distance.value : 0) / 1000));
-        const durationMin = Math.max(5, Math.round((leg.duration && leg.duration.value ? leg.duration.value : 0) / 60));
-        const mode = estimateModeByDistanceKm(distanceKm);
-        const cost = estimateCostByDistance(distanceKm, prefs && prefs.budget ? prefs.budget : "Mid-Range");
-
-        setText("destination-route-mode", `${mode} (${origin.label} to ${place.name})`);
-        setText("destination-route-time", `${durationMin} min`);
-        setText("destination-route-distance", `${distanceKm} km`);
-        setText("destination-route-cost", `~PHP ${cost.toLocaleString()}`);
-      }
-    } catch (routeError) {
-      const mode = estimateModeByDistanceKm(120);
-      const cost = estimateCostByDistance(120, prefs && prefs.budget ? prefs.budget : "Mid-Range");
-      setText("destination-route-mode", mode);
-      setText("destination-route-time", "about 3-5 hours");
-      setText("destination-route-distance", "estimated");
-      setText("destination-route-cost", `~PHP ${cost.toLocaleString()}`);
+    const destinationPosition = { lat: Number(place.lat), lng: Number(place.lng) };
+    if (!Number.isFinite(destinationPosition.lat) || !Number.isFinite(destinationPosition.lng)) {
+      throw new Error("This destination has no coordinates for mapping.");
     }
+    _modalMap = new google.maps.Map(mapEl, { center: destinationPosition, zoom: 8, disableDefaultUI: true });
+    _marker = new google.maps.Marker({ map: _modalMap, position: destinationPosition, title: place.name });
+    requestAnimationFrame(() => google.maps.event.trigger(_modalMap, "resize"));
   } catch (err) {
-    const mode = estimateModeByDistanceKm(120);
-    const cost = estimateCostByDistance(120, prefs && prefs.budget ? prefs.budget : "Mid-Range");
     const message = err && err.message === "No API"
       ? "Interactive map is not configured. Add a browser-restricted Google Maps key in www/js/config.local.js."
-      : "Interactive map is unavailable right now. Place search and itinerary features can still be used.";
+      : err.message || "Interactive map is unavailable right now.";
     mapEl.innerHTML = `<div class="destination-map-message">${window.SidekickCore.escapeHtml(message)}</div>`;
-    setText("destination-route-mode", mode);
-    setText("destination-route-time", "about 3-5 hours");
-    setText("destination-route-distance", "estimated");
-    setText("destination-route-cost", `~PHP ${cost.toLocaleString()}`);
   }
 
+  const routeButton = document.getElementById("destination-calculate-route");
+  if (routeButton) {
+    routeButton.onclick = () => calculateDestinationRoute(place);
+  }
   const generateBtn = document.getElementById("destination-generate");
   if (generateBtn) {
     generateBtn.onclick = () => generateFocusedItinerary(place, prefs, session);
+  }
+
+  async function calculateDestinationRoute(place) {
+    const originInput = document.getElementById("destination-origin");
+    const modeSelect = document.getElementById("destination-travel-mode");
+    const origin = String(originInput?.value || "").trim();
+    const travelMode = modeSelect?.value || "DRIVE";
+    if (!origin) {
+      setText("destination-route-mode", "Enter your starting location to calculate this route.");
+      setText("destination-route-time", "Unavailable");
+      setText("destination-route-distance", "Unavailable");
+      if (routeError) routeError.hidden = true;
+      return;
+    }
+    const button = document.getElementById("destination-calculate-route");
+    if (button) button.disabled = true;
+    setText("destination-route-mode", "Calculating route...");
+    setText("destination-route-time", "Calculating...");
+    setText("destination-route-distance", "Calculating...");
+    setText("destination-route-cost", "Unavailable (fare data is not provided by Routes API)");
+    if (routeError) routeError.hidden = true;
+    try {
+      const response = await window.SidekickCore.apiRequest("/api/maps/route", {
+        method: "POST",
+        body: JSON.stringify({
+          origin: { address: origin },
+          destination: { placeId: place.placeId, lat: place.lat, lng: place.lng, address: place.address, name: place.name },
+          travelMode,
+        }),
+      });
+      const route = response.route;
+      setText("destination-route-mode", `${route.travelMode}${response.isDevelopmentMock ? " (development estimate)" : ""}`);
+      setText("destination-route-time", `${route.durationMinutes} min`);
+      setText("destination-route-distance", `${(route.distanceMeters / 1000).toFixed(1)} km`);
+      if (route.encodedPolyline && _modalMap && google.maps.geometry?.encoding) {
+        if (_routePolyline) _routePolyline.setMap(null);
+        const path = google.maps.geometry.encoding.decodePath(route.encodedPolyline);
+        _routePolyline = new google.maps.Polyline({ map: _modalMap, path, strokeColor: "#2c91b0", strokeWeight: 5 });
+        const bounds = new google.maps.LatLngBounds();
+        path.forEach((point) => bounds.extend(point));
+        _modalMap.fitBounds(bounds);
+      }
+    } catch (error) {
+      setText("destination-route-mode", "Route unavailable");
+      setText("destination-route-time", "Unavailable");
+      setText("destination-route-distance", "Unavailable");
+      setText("destination-route-cost", "Unavailable");
+      if (routeError) {
+        routeError.hidden = false;
+        setText("destination-route-error-message", "The route could not be retrieved. Check your Google Routes API setup and try again.");
+        setText("destination-route-error-details", error.message || "No additional error details were provided.");
+        routeError.querySelector("details")?.removeAttribute("open");
+      }
+    } finally {
+      if (button) button.disabled = false;
+    }
   }
 
   const askAiBtn = document.getElementById("destination-ask-ai");
@@ -460,14 +443,22 @@ async function generateFocusedItinerary(place, prefs, session) {
         email: session.email,
         message: `Plan a practical trip to ${place.name}. Use my saved preferences and suggest a balanced itinerary.`,
         selectedDestination: { name: place.name, placeId: place.placeId, lat: place.lat, lng: place.lng },
-        profile: { ...(prefs || {}), preferredPlaces: [place.name, ...(prefs?.preferredPlaces || [])] },
+        profile: {
+          ...(prefs || {}),
+          preferredPlaces: [place.name, ...(prefs?.preferredPlaces || [])],
+          startDate: new Date().toISOString().slice(0, 10),
+        },
       }),
     });
     if (!Array.isArray(response.itinerary)) throw new Error("The itinerary service returned no itinerary.");
     const byEmail = window.SidekickCore.getItineraryByEmail();
     byEmail[session.email] = {
       itinerary: response.itinerary,
-      meta: { ...(response.meta || {}), focusedPlace: place.name, startDate: new Date().toISOString() },
+      meta: {
+        ...(response.meta || {}),
+        focusedPlace: place.name,
+        startDate: response.meta?.startDate || new Date().toISOString(),
+      },
     };
     window.SidekickCore.setItineraryByEmail(byEmail);
     window.location.href = "itinerary.html";

@@ -229,6 +229,10 @@ async function askSidekickBackend(history, prefs, state, userText) {
 
 async function generateItineraryWithBackend(prefs, state, userText) {
   const session = window.SidekickCore.getAuthSession();
+  const startDate = state.startDate || new Date().toISOString().slice(0, 10);
+  const end = new Date(`${startDate}T00:00:00`);
+  end.setDate(end.getDate() + Math.max(1, Number(state.dayCount) || 3) - 1);
+  const localEnd = new Date(end.getTime() - end.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
   return window.SidekickCore.apiRequest("/api/itinerary/generate", {
     method: "POST",
     body: JSON.stringify({
@@ -238,7 +242,9 @@ async function generateItineraryWithBackend(prefs, state, userText) {
       profile: {
         ...prefs,
         budget: state.budget || prefs?.budget || "",
-        startDate: state.startDate || "",
+        startDate,
+        endDate: localEnd,
+        durationDays: Math.max(1, Number(state.dayCount) || 3),
         pace: state.pace || "",
         mustSee: state.mustSee || [],
         avoid: state.avoid || [],
@@ -282,7 +288,7 @@ function saveGeneratedItinerary(email, generated) {
     meta: {
       ...generated.meta,
       source: "sidekick-companion",
-      startDate: new Date().toISOString(),
+      startDate: generated.meta?.startDate || new Date().toISOString(),
     },
   };
   window.SidekickCore.setItineraryByEmail(byEmail);

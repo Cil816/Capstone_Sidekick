@@ -12,9 +12,11 @@
         <div class="screen itinerary-screen">
             <div class="itinerary-header">
                 <div id="itinerary-builder" style="padding:12px 24px 8px; border-bottom:1px solid #F3F4F6; display:none; gap:8px;">
-                    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-                        <label style="font-size:14px;color:#374151">Start date</label>
-                        <input id="itinerary-start" type="date" />
+                    <div class="itinerary-builder-fields">
+                        <label for="itinerary-start">Start date</label>
+                        <input id="itinerary-start" type="date" required />
+                        <label for="itinerary-end">End date</label>
+                        <input id="itinerary-end" type="date" required />
                         <label style="font-size:14px;color:#374151">Budget</label>
                         <select id="itinerary-budget">
                             <option value="Budget-Friendly">Budget-Friendly</option>
@@ -23,12 +25,6 @@
                             <option value="Ultra Luxury">Ultra Luxury</option>
                         </select>
                         <button id="build-itinerary" class="btn btn-primary">Build Itinerary</button>
-                        <button id="show-builder" class="btn btn-outline" type="button">Customize</button>
-                    </div>
-                    <div style="margin-top:8px; display:flex; gap:8px; flex-direction:column;">
-                        <input id="place-search" placeholder="Search places" style="padding:10px;border-radius:10px;border:1px solid #E5E7EB;" />
-                        <div id="map" style="height:160px;border-radius:8px;overflow:hidden;border:1px solid #E5E7EB"></div>
-                        <small style="color:#6b7280">Tip: select a place on the map to attach coordinates to added activities.</small>
                     </div>
                     <div id="preferred-places" style="margin-top:8px;display:flex;flex-wrap:wrap;gap:8px"></div>
                 </div>
@@ -39,6 +35,7 @@
                         </svg>
                     </a>
                     <h1>My Itinerary</h1>
+                    <button id="show-builder" class="btn btn-outline" type="button">Customize</button>
                     <button id="remove-all-itinerary" class="btn btn-ghost" style="margin-left:auto;padding:8px 10px">Remove All</button>
                 </div>
                 <div class="itinerary-date">
@@ -49,6 +46,11 @@
                         <line x1="3" y1="10" x2="21" y2="10"></line>
                     </svg>
                     <span id="itinerary-date">Loading your dates...</span>
+                </div>
+                <div class="itinerary-place-search">
+                    <input id="place-search" placeholder="Search places" aria-label="Search places" />
+                    <div id="itinerary-map" class="itinerary-map" aria-label="Map of searched places"></div>
+                    <div id="map" class="itinerary-place-results" aria-live="polite"></div>
                 </div>
             </div>
             

@@ -14,6 +14,7 @@ const configuredServer = process.env.DB_SERVER || 'localhost\\SQLEXPRESS';
 const [serverName, configuredInstance] = configuredServer.split('\\', 2);
 const useWindowsAuthentication = (process.env.DB_AUTH || 'windows').toLowerCase() === 'windows';
 const rateLimits = new Map();
+const routeCache = new Map();
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const isDevelopmentMode = String(process.env.SIDEKICK_API_MODE || 'production').trim().toLowerCase() === 'development';
 
@@ -62,7 +63,7 @@ function getMapsApiKey() {
 }
 
 function getAiModel() {
-  return String(process.env.GEMINI_MODEL || 'gemini-3.6-flash').trim();
+  return String(process.env.GEMINI_MODEL || 'gemini-2.5-flash').trim();
 }
 
 function mapPlace(place) {
@@ -173,7 +174,7 @@ async function callGooglePlacesApi(path, payload) {
     headers: {
       'Content-Type': 'application/json',
       'X-Goog-Api-Key': apiKey,
-      'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.priceLevel,places.regularOpeningHours.weekdayDescriptions,places.types,places.photos.name,places.photos.authorAttributions',
+      'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.priceLevel,places.regularOpeningHours.weekdayDescriptions,places.types,places.photos.name,places.photos.authorAttributions',
     },
     body: JSON.stringify(payload),
   });
@@ -193,7 +194,7 @@ async function callGoogleRoutesApi(payload) {
     headers: {
       'Content-Type': 'application/json',
       'X-Goog-Api-Key': apiKey,
-      'X-Goog-FieldMask': 'routes.legs.startLocation,routes.legs.endLocation,routes.legs.distanceMeters,routes.legs.duration,routes.legs.localizedValues',
+      'X-Goog-FieldMask': 'routes.distanceMeters,routes.duration,routes.polyline.encodedPolyline,routes.legs.startLocation,routes.legs.endLocation,routes.legs.distanceMeters,routes.legs.duration',
     },
     body: JSON.stringify(payload),
   });
@@ -793,8 +794,99 @@ async function generateItineraryFromAi({ email, message, selectedDestination, pr
 }
 
 function routeDurationMinutes(route) {
-  const seconds = Number.parseFloat(String(route?.duration || '').replace('s', ''));
+  const routeSeconds = Number.parseFloat(String(route?.duration || '').replace('s', ''));
+  const legs = Array.isArray(route?.legs) ? route.legs : [];
+  const seconds = Number.isFinite(routeSeconds)
+    ? routeSeconds
+    : legs.reduce((total, leg) => total + (Number.parseFloat(String(leg.duration || '').replace('s', '')) || 0), 0);
   return Number.isFinite(seconds) ? Math.max(1, Math.round(seconds / 60)) : null;
+}
+
+function dateOnly(value) {
+  const text = String(value || '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return null;
+  const date = new Date(`${text}T00:00:00Z`);
+  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === text ? date : null;
+}
+
+function inclusiveDayCount(startValue, endValue) {
+  const start = dateOnly(startValue);
+  const end = dateOnly(endValue);
+  if (!start || !end || end < start) throw new Error('A valid start date and an end date on or after it are required.');
+  return Math.floor((end.getTime() - start.getTime()) / 86400000) + 1;
+}
+
+function labelDate(value) {
+  const date = dateOnly(value);
+  return date ? date.toLocaleDateString('en-US', { timeZone: 'UTC', weekday: 'short', month: 'short', day: 'numeric' }) : '';
+}
+
+function routeCacheKey(origin, destination, travelMode) {
+  return JSON.stringify([origin, destination, String(travelMode || 'DRIVE').toUpperCase()]);
+}
+
+function hasRouteCoordinates(value) {
+  const { lat, lng } = value || {};
+  return lat !== null && lat !== undefined && lat !== ''
+    && lng !== null && lng !== undefined && lng !== ''
+    && Number.isFinite(Number(lat)) && Number.isFinite(Number(lng))
+    && Number(lat) >= -90 && Number(lat) <= 90
+    && Number(lng) >= -180 && Number(lng) <= 180;
+}
+
+async function calculateRoute({ origin, destination, travelMode = 'DRIVE' }) {
+  const mode = String(travelMode || 'DRIVE').toUpperCase();
+  const allowedModes = new Set(['DRIVE', 'WALK', 'BICYCLE', 'TRANSIT', 'TWO_WHEELER']);
+  if (!allowedModes.has(mode)) throw new Error('Choose a supported travel mode.');
+  if (!origin || !destination) throw new Error('Origin and destination are required to calculate a route.');
+  const key = routeCacheKey(origin, destination, mode);
+  const cached = routeCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
+
+  let result;
+  if (isDevelopmentMode) {
+    const knownCoords = (value) => {
+      if (hasRouteCoordinates(value)) return { lat: Number(value.lat), lng: Number(value.lng) };
+      const name = String(value?.name || value?.address || '').toLowerCase();
+      if (name.includes('manila')) return { lat: 14.5995, lng: 120.9842 };
+      if (name.includes('cebu')) return { lat: 10.3157, lng: 123.8854 };
+      if (name.includes('davao')) return { lat: 7.1907, lng: 125.4553 };
+      const mock = developmentPlace(name);
+      return { lat: mock.lat, lng: mock.lng };
+    };
+    result = developmentRoute(knownCoords(origin), knownCoords(destination), mode);
+  } else {
+    const toWaypoint = (value) => {
+      if (value.placeId) return { placeId: String(value.placeId) };
+      if (hasRouteCoordinates(value)) {
+        return { location: { latLng: { latitude: Number(value.lat), longitude: Number(value.lng) } } };
+      }
+      if (value.address || value.name) return { address: String(value.address || value.name) };
+      throw new Error('Provide an address, place ID, or coordinates for both route endpoints.');
+    };
+    const data = await callGoogleRoutesApi({
+      origin: toWaypoint(origin),
+      destination: toWaypoint(destination),
+      travelMode: mode,
+      computeAlternativeRoutes: false,
+    });
+    const route = data.routes?.[0];
+    if (!route) throw new Error('No route was found for the selected origin, destination, and travel mode.');
+    const legs = Array.isArray(route.legs) ? route.legs : [];
+    const distanceMeters = Number(route.distanceMeters ?? legs.reduce((sum, leg) => sum + Number(leg.distanceMeters || 0), 0));
+    const durationMinutes = routeDurationMinutes(route);
+    if (!(distanceMeters > 0) || !durationMinutes) throw new Error('The Routes API returned incomplete distance or duration data.');
+    result = {
+      distanceMeters,
+      durationMinutes,
+      travelMode: mode,
+      encodedPolyline: route.polyline?.encodedPolyline || null,
+      source: 'google-routes',
+    };
+  }
+  if (routeCache.size >= 500) routeCache.delete(routeCache.keys().next().value);
+  routeCache.set(key, { value: result, expiresAt: Date.now() + 10 * 60 * 1000 });
+  return result;
 }
 
 async function findVerifiedPlaces(query, destination) {
@@ -809,31 +901,22 @@ async function findVerifiedPlaces(query, destination) {
 }
 
 async function calculateVerifiedRoute(from, to, travelMode = 'DRIVE') {
-  if (isDevelopmentMode) return developmentRoute(from, to, travelMode);
-  const data = await callGoogleRoutesApi({
-    origin: { location: { latLng: { latitude: from.lat, longitude: from.lng } } },
-    destination: { location: { latLng: { latitude: to.lat, longitude: to.lng } } },
-    travelMode: String(travelMode || 'DRIVE').toUpperCase(),
-    computeAlternativeRoutes: false,
-  });
-  const route = data.routes?.[0];
-  if (!route) throw new Error('No route was found between itinerary locations.');
-  return {
-    distanceMeters: Number(route.distanceMeters || 0),
-    durationMinutes: routeDurationMinutes(route),
-    travelMode: String(travelMode || 'DRIVE').toUpperCase(),
-  };
+  return calculateRoute({ origin: from, destination: to, travelMode });
 }
 
 async function generateVerifiedItineraryFromAi({ email, message, selectedDestination, profile }) {
   const userProfile = profile || (email ? await getUserProfileContext(email) : {});
   const destination = selectedDestination?.name || selectedDestination?.destination || userProfile.preferredPlaces?.[0];
   if (!destination) throw new Error('Please provide a destination before generating an itinerary.');
+  const startDate = profile?.startDate || new Date().toISOString().slice(0, 10);
+  if (!dateOnly(startDate)) throw new Error('A valid trip start date is required.');
+  const durationDays = profile?.endDate
+    ? inclusiveDayCount(startDate, profile.endDate)
+    : Math.max(1, Math.min(14, Number(profile?.durationDays || profile?.dayCount || String(message || '').match(/\b(\d{1,2})\s*day/i)?.[1] || 3)));
+  const endDate = profile?.endDate || new Date(Date.parse(`${startDate}T00:00:00Z`) + (durationDays - 1) * 86400000).toISOString().slice(0, 10);
 
   if (isDevelopmentMode) {
     const request = String(message || '').toLowerCase();
-    const dayMatch = request.match(/\b(\d{1,2})\s*day/);
-    const durationDays = Math.max(1, Math.min(14, Number(dayMatch?.[1] || profile?.dayCount || 3)));
     const activityQueriesByDay = [
       ['Tokyo National Museum museum', 'Shibuya Sky photography'],
       ['Toyota Automobile Museum cars', 'Tsukiji Outer Market restaurant'],
@@ -845,7 +928,7 @@ async function generateVerifiedItineraryFromAi({ email, message, selectedDestina
       const dayQueries = activityQueriesByDay[dayIndex % activityQueriesByDay.length];
       return dayQueries.slice(0, count).map((query, activityIndex) => {
         const place = developmentPlace(query, dayIndex + activityIndex);
-        const dueAt = Date.now() + dayIndex * 86400000 + activityIndex * 3600000;
+        const dueAt = Date.parse(`${startDate}T09:00:00Z`) + dayIndex * 86400000 + activityIndex * 3600000;
         return {
           id: `mock-${dayIndex + 1}-${activityIndex + 1}`,
           timeLabel: ['Morning', 'Afternoon', 'Evening'][activityIndex] || 'Flexible',
@@ -870,7 +953,7 @@ async function generateVerifiedItineraryFromAi({ email, message, selectedDestina
     return {
       itinerary: activitiesByDay.map((activities, index) => ({
         dayNumber: index + 1,
-        dateLabel: `Day ${index + 1}`,
+        dateLabel: labelDate(new Date(Date.parse(`${startDate}T00:00:00Z`) + index * 86400000).toISOString()),
         estimatedDayCostPhp: activities.reduce((sum, activity) => sum + activity.estimatedTotalCostPhp, 0),
         estimatedDayCostLowPhp: activities.reduce((sum, activity) => sum + activity.estimatedTotalCostPhp, 0),
         estimatedDayCostHighPhp: activities.reduce((sum, activity) => sum + activity.estimatedTotalCostPhp, 0),
@@ -878,6 +961,9 @@ async function generateVerifiedItineraryFromAi({ email, message, selectedDestina
       })),
       meta: {
         destination,
+        startDate,
+        endDate,
+        durationDays,
         source: 'development-mock',
         generatedAt: new Date().toISOString(),
         budget: profile?.budget || userProfile.budget || 'Mid-Range',
@@ -898,16 +984,21 @@ async function generateVerifiedItineraryFromAi({ email, message, selectedDestina
     `Interests: ${(userProfile.interests || []).join(', ') || 'not provided'}`,
     `Travel style: ${(userProfile.travelTypes || []).join(', ') || 'not provided'}`,
     `Budget: ${userProfile.budget || 'not provided'}`,
+    `Dates: ${startDate} through ${endDate}, inclusive (${durationDays} days).`,
+    `Pace: ${profile?.pace || 'not provided'}`,
+    `Must-see: ${(profile?.mustSee || []).join(', ') || 'none'}`,
+    `Avoid: ${(profile?.avoid || []).join(', ') || 'none'}`,
     `Request: ${message}`,
   ].join('\n');
   const preliminaryText = await callGeminiApi({
     message,
     contextText: planningContext,
-    systemInstruction: 'Return JSON only: {"destination":"...","durationDays":number,"days":[{"day":number,"theme":"...","activities":[{"searchQuery":"specific real place or category","category":"attraction|restaurant|cafe|museum|hotel|shopping|activity","durationMinutes":number,"estimatedCost":number,"notes":"..."}]}]}. Use 2-4 activities per day, group by nearby areas, and never invent place IDs, addresses, ratings, opening hours, or travel times.',
+    systemInstruction: `Return JSON only: {"destination":"...","durationDays":${durationDays},"days":[{"day":1,"theme":"...","activities":[{"searchQuery":"specific real place or category","category":"attraction|restaurant|cafe|museum|hotel|shopping|activity","durationMinutes":90,"notes":"..."}]}]}. Return exactly ${durationDays} days from ${startDate} through ${endDate}. Use 2-4 activities per day, group by nearby areas, and never invent place IDs, addresses, ratings, opening hours, ticket prices, transportation fares, or travel times. Leave unverified prices unavailable.`,
     responseMimeType: 'application/json',
   });
   const preliminary = extractJsonObject(preliminaryText);
   if (!preliminary?.days?.length) throw new Error('The AI returned an invalid preliminary itinerary.');
+  if (preliminary.days.length !== durationDays) throw new Error(`The AI returned ${preliminary.days.length} days, but ${durationDays} days were requested.`);
 
   const requestedActivities = preliminary.days.flatMap((day) => (day.activities || []).slice(0, 4).map((activity) => ({
     ...activity,
@@ -932,30 +1023,40 @@ async function generateVerifiedItineraryFromAi({ email, message, selectedDestina
     for (let index = 1; index < dayPlaces.length; index += 1) {
       const from = dayPlaces[index - 1];
       const to = dayPlaces[index];
-      routeData.push({ day: Number(day.day || 1), from: from.placeId, to: to.placeId, route: await calculateVerifiedRoute(from, to, profile?.transportation || 'DRIVE') });
+      try {
+        routeData.push({ day: Number(day.day || 1), from: from.placeId, to: to.placeId, route: await calculateVerifiedRoute(from, to, profile?.transportation || 'DRIVE') });
+      } catch (error) {
+        routeData.push({ day: Number(day.day || 1), from: from.placeId, to: to.placeId, route: null, unavailableReason: error.message });
+      }
     }
   }
 
   const finalText = await callGeminiApi({
     message: JSON.stringify({ preliminary, verifiedPlaces, routeData }),
     contextText: 'Create the final structured itinerary from the verified Google Places and Google Routes data below. Do not add any place that is not present in verifiedPlaces and do not change route durations or distances.',
-    systemInstruction: 'Return JSON only with {"trip":{"destination":"","startDate":"","endDate":"","durationDays":0,"budget":0,"currency":"PHP"},"days":[{"day":1,"date":"","theme":"","activities":[{"name":"","placeId":"","photoResource":"","address":"","startTime":"","endTime":"","durationMinutes":0,"category":"","estimatedCost":0,"notes":""}],"travel":[{"from":"","to":"","durationMinutes":0,"distanceMeters":0,"travelMode":""}]}]}. Copy placeId and photoResource exactly from verifiedPlaces. Use realistic schedules with meal breaks and no more than four activities per day.',
+    systemInstruction: `Return JSON only with {"trip":{"destination":"","startDate":"${startDate}","endDate":"${endDate}","durationDays":${durationDays},"budget":"","currency":"PHP"},"days":[{"day":1,"date":"","theme":"","activities":[{"name":"","placeId":"","photoResource":"","address":"","startTime":"","endTime":"","durationMinutes":0,"category":"","estimatedCost":null,"notes":""}],"travel":[{"from":"","to":"","durationMinutes":0,"distanceMeters":0,"travelMode":""}]}]}. Return exactly ${durationDays} days. Copy placeId and photoResource exactly from verifiedPlaces and route values exactly from routeData. Do not invent prices or any factual place/route data.`,
     responseMimeType: 'application/json',
   });
   const finalPlan = extractJsonObject(finalText);
   if (!finalPlan?.days?.length) throw new Error('The AI returned an invalid final itinerary.');
+  if (finalPlan.days.length !== durationDays) throw new Error(`The AI returned ${finalPlan.days.length} final days, but ${durationDays} days were requested.`);
 
   const verifiedById = new Map(verifiedPlaces.map((place) => [place.placeId, place]));
   const itinerary = finalPlan.days.map((day, dayIndex) => ({
-    dayNumber: Number(day.day || dayIndex + 1),
-    dateLabel: day.date || `Day ${dayIndex + 1}`,
-    estimatedDayCostPhp: (day.activities || []).reduce((sum, activity) => sum + Number(activity.estimatedCost || 0), 0),
-    estimatedDayCostLowPhp: 0,
-    estimatedDayCostHighPhp: 0,
+    dayNumber: dayIndex + 1,
+    dateLabel: labelDate(new Date(Date.parse(`${startDate}T00:00:00Z`) + dayIndex * 86400000).toISOString()),
+    estimatedDayCostPhp: null,
+    estimatedDayCostLowPhp: null,
+    estimatedDayCostHighPhp: null,
     activities: (day.activities || []).map((activity, activityIndex) => {
       const place = verifiedById.get(String(activity.placeId || ''));
       if (!place) throw new Error('The final itinerary referenced an unverified place.');
-      const matchingRoute = (day.travel || [])[activityIndex - 1];
+      const previousActivity = (day.activities || [])[activityIndex - 1];
+      const routeEntry = previousActivity
+        ? routeData.find((entry) => entry.day === dayIndex + 1 && entry.from === String(previousActivity.placeId || '') && entry.to === place.placeId)
+        : null;
+      const matchingRoute = routeEntry?.route;
+      const dueAt = Date.parse(`${startDate}T09:00:00Z`) + dayIndex * 86400000 + activityIndex * 3600000;
       return {
         id: `verified-${dayIndex + 1}-${activityIndex + 1}`,
         timeLabel: String(activity.startTime || 'Flexible'),
@@ -965,14 +1066,15 @@ async function generateVerifiedItineraryFromAi({ email, message, selectedDestina
         photoResource: place.photoResource || '',
         locationCoords: { lat: place.lat, lng: place.lng },
         note: String(activity.notes || ''),
-        transportMode: matchingRoute?.travelMode || 'DRIVE',
-        travelMinutes: Number(matchingRoute?.durationMinutes || 0),
-        travelDistanceKm: Number(matchingRoute?.distanceMeters || 0) / 1000,
-        estimatedActivityCostPhp: Number(activity.estimatedCost || 0),
-        estimatedTransportCostPhp: 0,
-        estimatedTotalCostPhp: Number(activity.estimatedCost || 0),
-        dueAt: Date.now() + dayIndex * 86400000 + activityIndex * 3600000,
-        iso: new Date(Date.now() + dayIndex * 86400000 + activityIndex * 3600000).toISOString(),
+        routeStatus: routeEntry?.unavailableReason || '',
+        transportMode: matchingRoute?.travelMode || 'Route unavailable',
+        travelMinutes: matchingRoute?.durationMinutes ?? null,
+        travelDistanceKm: matchingRoute ? matchingRoute.distanceMeters / 1000 : null,
+        estimatedActivityCostPhp: null,
+        estimatedTransportCostPhp: null,
+        estimatedTotalCostPhp: null,
+        dueAt,
+        iso: new Date(dueAt).toISOString(),
       };
     }),
   }));
@@ -981,6 +1083,9 @@ async function generateVerifiedItineraryFromAi({ email, message, selectedDestina
     itinerary,
     meta: {
       destination: finalPlan.trip?.destination || destination,
+      startDate,
+      endDate,
+      durationDays,
       source: 'gemini-google-verified',
       generatedAt: new Date().toISOString(),
       budget: finalPlan.trip?.budget || userProfile.budget || null,
@@ -1533,6 +1638,20 @@ app.post('/api/maps/places', async (req, res) => {
     return sendJson(res, 200, { places });
   } catch (error) {
     return sendJson(res, 503, { error: error.message || 'Google Maps is currently unavailable.' });
+  }
+});
+
+app.post('/api/maps/route', async (req, res) => {
+  const { origin, destination, travelMode = 'DRIVE' } = req.body || {};
+  try {
+    const route = await calculateRoute({ origin, destination, travelMode });
+    return sendJson(res, 200, {
+      route,
+      source: isDevelopmentMode ? 'development-mock' : 'google-routes',
+      isDevelopmentMock: isDevelopmentMode,
+    });
+  } catch (error) {
+    return sendJson(res, 503, { error: error.message || 'Route information is currently unavailable.' });
   }
 });
 
