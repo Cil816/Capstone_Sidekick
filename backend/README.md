@@ -32,7 +32,7 @@ GEMINI_MODEL=gemini-2.5-flash
 GOOGLE_MAPS_API_KEY=your_google_maps_key
 ```
 
-Run `schema.sql` once against `sidekick_db` before starting the backend. The SMTP settings are required for registration verification emails.
+For a new database, run `schema.sql` once against `sidekick_db` before starting the backend. For an existing database that is missing only the app-rating table, run `migrations/001_create_app_reviews.sql` in SSMS instead; it creates only `dbo.app_reviews` if absent and makes no changes to existing rows. The SMTP settings are required for registration verification emails.
 
 ## Run locally
 
@@ -47,6 +47,8 @@ npm start
 - POST /api/verify-otp
 - POST /api/resend-otp
 - POST /api/login
+- GET /api/app-reviews/status/:email
+- POST /api/app-reviews
 - GET /api/preferences/:email
 - PUT /api/preferences/:email
 - GET /api/trips/:email
