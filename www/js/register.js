@@ -1,158 +1,204 @@
-function logRegisterDebug(message, details) {
-  if (details === undefined) {
-    console.log(`[Register] ${message}`);
-    return;
-  }
-  console.log(`[Register] ${message}`, details);
+function setRegisterError(message) {
+  const error = document.getElementById("auth-error");
+  if (!error) return;
+  error.textContent = message;
+  error.hidden = !message;
 }
 
-function checkStorageAvailability() {
-  try {
-    const testKey = "sidekick.storage.test";
-    localStorage.setItem(testKey, "1");
-    localStorage.removeItem(testKey);
-    sessionStorage.setItem(testKey, "1");
-    sessionStorage.removeItem(testKey);
-    return true;
-  } catch (error) {
-    console.error("[Register] Storage unavailable", error);
-    return false;
-  }
+function setRegisterStatus(message) {
+  const status = document.getElementById("registration-status");
+  if (!status) return;
+  status.textContent = message;
+  status.hidden = !message;
 }
 
-async function handleRegister(event) {
-  if (!window.SidekickCore) {
-    console.error("SidekickCore is not loaded");
-    return false;
-  }
-
-  try {
-    if (event) {
-      event.preventDefault();
-      event.stopPropagation();
-    }
-  } catch (e) {
-    console.error("Error preventing default form submission:", e);
-    return false;
-  }
-
-  const errEl = document.getElementById("auth-error");
-  const nameEl = document.getElementById("register-name");
-  const emailEl = document.getElementById("register-email");
-  const passwordEl = document.getElementById("register-password");
-  const termsEl = document.getElementById("terms-accepted");
-  const submitBtn = event?.target?.querySelector?.('button[type="submit"]');
-
-  if (!nameEl || !emailEl || !passwordEl || !termsEl) {
-    console.error("Missing form elements");
-    return false;
-  }
-
-  logRegisterDebug("Submit captured", {
-    hasCore: Boolean(window.SidekickCore),
-    storageAvailable: checkStorageAvailability(),
-    userAgent: navigator.userAgent,
-  });
-
-  errEl?.setAttribute("hidden", "hidden");
-
-  const name = String(nameEl.value || "").trim();
-  const email = window.SidekickCore.normalizeEmail(emailEl.value);
-  const password = String(passwordEl.value || "");
-
-  if (!emailEl.validity.valid || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    if (errEl) {
-      errEl.textContent = "Please enter a valid email address.";
-      errEl.removeAttribute("hidden");
-    }
-    return;
-  }
-
-  if (!termsEl.checked) {
-    if (errEl) {
-      errEl.textContent = "You must agree to the Terms and Conditions to register.";
-      errEl.removeAttribute("hidden");
-    }
-    return;
-  }
-
-  if (!name || !email || !password) {
-    if (errEl) {
-      errEl.textContent = "Please complete all fields.";
-      errEl.removeAttribute("hidden");
-    }
-    return;
-  }
-
-  if (password.length < 8) {
-    if (errEl) {
-      errEl.textContent = "Password must be at least 8 characters.";
-      errEl.removeAttribute("hidden");
-    }
-    return;
-  }
-
-  try {
-    if (submitBtn) {
-      submitBtn.disabled = true;
-      submitBtn.textContent = "Creating account...";
-    }
-
-    const user = await window.SidekickCore.apiRequest("/api/register", {
-      method: "POST",
-      body: JSON.stringify({ name, email, password, termsAccepted: true }),
-    });
-
-    logRegisterDebug("Registration success, redirecting to verification", { email });
-    window.location.href = `verify.html?email=${encodeURIComponent(user.email || email)}`;
-  } catch (e) {
-    console.error(e);
-    if (errEl) {
-      errEl.textContent = e.message || "Registration failed. Please try again.";
-      errEl.removeAttribute("hidden");
-    }
-  } finally {
-    if (submitBtn) {
-      submitBtn.disabled = false;
-      submitBtn.textContent = "Register";
-    }
-  }
-
-  return false;
+function setButtonBusy(button, busy, busyText, idleText) {
+  if (!button) return;
+  button.disabled = busy;
+  button.textContent = busy ? busyText : idleText;
 }
 
 function bindRegisterForm() {
   const form = document.getElementById("register-form");
-  if (!form || form.dataset.sidekickBound === "1") {
-    return;
+  if (!form || form.dataset.sidekickBound === "1") return;
+
+  const emailStep = document.getElementById("registration-email-step");
+  const codeStep = document.getElementById("registration-code-step");
+  const detailsStep = document.getElementById("registration-details-step");
+  const emailInput = document.getElementById("register-email");
+  const otpInput = document.getElementById("registration-otp");
+  const nameInput = document.getElementById("register-name");
+  const passwordInput = document.getElementById("register-password");
+  const termsInput = document.getElementById("terms-accepted");
+  const requestCodeButton = document.getElementById("send-registration-code");
+  const confirmCodeButton = document.getElementById("confirm-registration-code");
+  const resendCodeButton = document.getElementById("resend-registration-code");
+  const editEmailButton = document.getElementById("edit-registration-email");
+  const completeButton = document.getElementById("complete-registration");
+  let verifiedEmail = "";
+
+  function showStep(step) {
+    emailStep.hidden = step !== "email";
+    codeStep.hidden = step !== "code";
+    detailsStep.hidden = step !== "details";
+    setRegisterError("");
+    setRegisterStatus("");
   }
 
-  form.dataset.sidekickBound = "1";
-  form.addEventListener("submit", function (event) {
-    event.preventDefault();
-    event.stopPropagation();
-    void handleRegister(event);
+  async function requestCode() {
+    const email = window.SidekickCore.normalizeEmail(emailInput.value);
+    if (!emailInput.validity.valid || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setRegisterError("Please enter a valid email address.");
+      emailInput.focus();
+      return;
+    }
+
+    setRegisterError("");
+    setRegisterStatus("");
+    setButtonBusy(requestCodeButton, true, "Checking email…", "Verify email");
+    try {
+      const result = await window.SidekickCore.apiRequest("/api/register/start", {
+        method: "POST",
+        body: JSON.stringify({ email }),
+      });
+      verifiedEmail = result.email || email;
+      document.getElementById("registration-code-email").textContent = verifiedEmail;
+      otpInput.value = "";
+      showStep("code");
+      setRegisterStatus("Verification code sent. Check your inbox and spam folder.");
+      otpInput.focus();
+    } catch (error) {
+      setRegisterError(error.message || "Unable to send a verification code. Check the email and try again.");
+    } finally {
+      setButtonBusy(requestCodeButton, false, "Checking email…", "Verify email");
+    }
+  }
+
+  requestCodeButton.addEventListener("click", () => { void requestCode(); });
+
+  confirmCodeButton.addEventListener("click", async () => {
+    const otp = String(otpInput.value || "").trim();
+    if (!verifiedEmail || !/^\d{6}$/.test(otp)) {
+      setRegisterError("Enter the 6-digit verification code.");
+      otpInput.focus();
+      return;
+    }
+
+    setRegisterError("");
+    setRegisterStatus("");
+    setButtonBusy(confirmCodeButton, true, "Checking code…", "Confirm email");
+    try {
+      await window.SidekickCore.apiRequest("/api/register/verify-code", {
+        method: "POST",
+        body: JSON.stringify({ email: verifiedEmail, otp }),
+      });
+      document.getElementById("registration-verified-email").textContent = verifiedEmail;
+      showStep("details");
+      nameInput.focus();
+    } catch (error) {
+      setRegisterError(error.message || "Invalid or expired code. Please try again.");
+    } finally {
+      setButtonBusy(confirmCodeButton, false, "Checking code…", "Confirm email");
+    }
   });
 
-  logRegisterDebug("Form listener bound");
+  resendCodeButton.addEventListener("click", async () => {
+    setRegisterError("");
+    setRegisterStatus("");
+    setButtonBusy(resendCodeButton, true, "Sending…", "Resend code");
+    try {
+      await window.SidekickCore.apiRequest("/api/resend-otp", {
+        method: "POST",
+        body: JSON.stringify({ email: verifiedEmail }),
+      });
+      otpInput.value = "";
+      setRegisterStatus("A new verification code has been sent.");
+    } catch (error) {
+      setRegisterError(error.message || "Unable to resend the code.");
+    } finally {
+      setButtonBusy(resendCodeButton, false, "Sending…", "Resend code");
+    }
+  });
 
-  const dialog = document.getElementById("terms-dialog");
-  document.getElementById("terms-link")?.addEventListener("click", () => dialog?.showModal());
-  document.getElementById("terms-close")?.addEventListener("click", () => dialog?.close());
+  editEmailButton.addEventListener("click", () => {
+    verifiedEmail = "";
+    showStep("email");
+    emailInput.focus();
+  });
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (detailsStep.hidden) return;
+
+    const name = String(nameInput.value || "").trim();
+    const password = String(passwordInput.value || "");
+    const otp = String(otpInput.value || "").trim();
+    if (!verifiedEmail || !/^\d{6}$/.test(otp)) {
+      showStep("code");
+      setRegisterError("Verify your email before continuing.");
+      otpInput.focus();
+      return;
+    }
+    if (!name || !password) {
+      setRegisterError("Please complete all fields.");
+      (!name ? nameInput : passwordInput).focus();
+      return;
+    }
+    if (password.length < 8) {
+      setRegisterError("Password must be at least 8 characters.");
+      passwordInput.focus();
+      return;
+    }
+    if (!termsInput.checked) {
+      setRegisterError("You must agree to the Terms and Conditions to register.");
+      termsInput.focus();
+      return;
+    }
+
+    setRegisterError("");
+    setRegisterStatus("");
+    setButtonBusy(completeButton, true, "Creating account…", "Create account");
+    try {
+      const result = await window.SidekickCore.apiRequest("/api/register/complete", {
+        method: "POST",
+        body: JSON.stringify({
+          email: verifiedEmail,
+          otp,
+          name,
+          password,
+          termsAccepted: true,
+        }),
+      });
+      window.SidekickCore.setAuthSession({
+        email: result.user.email,
+        name: result.user.name,
+        loggedInAt: Date.now(),
+      });
+      window.location.href = "onboarding.html";
+    } catch (error) {
+      setRegisterError(error.message || "Registration failed. Please try again.");
+      if (/code|verify|expired/i.test(error.message || "")) {
+        showStep("code");
+        setRegisterError(error.message || "Invalid or expired code. Please request another code.");
+        otpInput.focus();
+      }
+    } finally {
+      setButtonBusy(completeButton, false, "Creating account…", "Create account");
+    }
+  });
+
+  form.dataset.sidekickBound = "1";
+  document.getElementById("terms-link")?.addEventListener("click", () => {
+    document.getElementById("terms-dialog")?.showModal();
+  });
+  document.getElementById("terms-close")?.addEventListener("click", () => {
+    document.getElementById("terms-dialog")?.close();
+  });
 }
 
-window.addEventListener("error", function (event) {
-  console.error("[Register] Unhandled page error:", event.message, event.error);
-});
-
-window.addEventListener("unhandledrejection", function (event) {
-  console.error("[Register] Unhandled promise rejection:", event.reason);
-});
-
 if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", bindRegisterForm);
+  document.addEventListener("DOMContentLoaded", bindRegisterForm, { once: true });
 } else {
   bindRegisterForm();
 }
-
-window.addEventListener("pageshow", bindRegisterForm);

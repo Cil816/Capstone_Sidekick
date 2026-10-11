@@ -7,6 +7,11 @@ let _itineraryMapLoadPromise = null;
 let _liveTripBudget = null;
 let _liveActivityCostsByPlaceId = new Map();
 let _activeBudgetTargetPhp = null;
+let _activeActivityBudgetTargetPhp = null;
+let _activeActivityDailyBudgetTargetPhp = null;
+const TRIP_BUDGET_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const _freshActivityPhotosByPlaceId = new Map();
+const _activityPhotoRequestsByPlaceId = new Map();
 
 function loadGoogleMapsForItinerary() {
   if (window.google?.maps) return Promise.resolve();
@@ -173,6 +178,30 @@ function itineraryDates(startValue, endValue) {
   return { start, end, durationDays };
 }
 
+function normalizeItineraryDateMetadata(itineraryData) {
+  const dayCount = Array.isArray(itineraryData?.itinerary) ? itineraryData.itinerary.length : 0;
+  if (!dayCount) return null;
+
+  const meta = itineraryData.meta && typeof itineraryData.meta === 'object' ? itineraryData.meta : {};
+  let start = meta.startDate ? parseItineraryDate(meta.startDate) : new Date(Number.NaN);
+  if (!Number.isFinite(start.getTime())) start = new Date();
+  start = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+
+  const savedEnd = meta.endDate ? parseItineraryDate(meta.endDate) : new Date(Number.NaN);
+  const savedDuration = Number.isFinite(savedEnd.getTime())
+    ? Math.floor((Date.UTC(savedEnd.getFullYear(), savedEnd.getMonth(), savedEnd.getDate()) - Date.UTC(start.getFullYear(), start.getMonth(), start.getDate())) / 86400000) + 1
+    : 0;
+  const end = savedDuration === dayCount
+    ? new Date(savedEnd.getFullYear(), savedEnd.getMonth(), savedEnd.getDate())
+    : new Date(start.getFullYear(), start.getMonth(), start.getDate() + dayCount - 1);
+  const startValue = formatDateInput(start);
+  const endValue = formatDateInput(end);
+  const changed = meta.startDate !== startValue || meta.endDate !== endValue || Number(meta.durationDays) !== dayCount;
+
+  itineraryData.meta = { ...meta, startDate: startValue, endDate: endValue, durationDays: dayCount };
+  return { start, end, startDate: startValue, endDate: endValue, durationDays: dayCount, changed };
+}
+
 async function searchPlacesForBuilder(query) {
   const mapEl = document.getElementById("map");
   if (!mapEl) return;
@@ -237,11 +266,109 @@ async function searchPlacesForBuilder(query) {
 
 function getPlacePhotoUrl(place) {
   if (String(window.SIDEKICK_CONFIG?.apiMode || "").toLowerCase() === "development") return "";
-  const resource = String(place?.photoResource || "").trim();
+  const placeId = String(place?.placeId || "");
+  const freshPhoto = _freshActivityPhotosByPlaceId.get(placeId);
+  if (_freshActivityPhotosByPlaceId.has(placeId) && !freshPhoto) return "";
+  const resource = String(freshPhoto?.photoResource || place?.photoResource || "").trim();
   const baseUrl = window.SidekickCore?.getApiBaseUrl?.() || "";
   return resource && baseUrl
     ? `${baseUrl}/api/maps/photo?name=${encodeURIComponent(resource)}`
     : "";
+}
+
+function getPhotoAttributionMarkup(place) {
+  const freshPhoto = _freshActivityPhotosByPlaceId.get(String(place?.placeId || ""));
+  if (_freshActivityPhotosByPlaceId.has(String(place?.placeId || "")) && !freshPhoto) return "";
+  const attributions = freshPhoto?.photoAttributions || place?.photoAttributions
+    || (freshPhoto?.photoAttribution || place?.photoAttribution ? [freshPhoto?.photoAttribution || place?.photoAttribution] : []);
+  const mapsPhotoUrl = freshPhoto?.photoGoogleMapsUri || place?.photoGoogleMapsUri || "";
+  const authorLinks = attributions.filter((attribution) => attribution?.name).map((attribution) => {
+    const name = window.SidekickCore.escapeHtml(attribution.name);
+    const uri = /^https:\/\//i.test(String(attribution.uri || "")) ? String(attribution.uri) : "";
+    return uri
+      ? `<a href="${window.SidekickCore.escapeHtml(uri)}" target="_blank" rel="noopener noreferrer">Photo: ${name}</a>`
+      : `<span>Photo: ${name}</span>`;
+  });
+  const safeMapsPhotoUrl = /^https:\/\//i.test(String(mapsPhotoUrl)) ? String(mapsPhotoUrl) : "";
+  if (safeMapsPhotoUrl) {
+    authorLinks.push(`<a href="${window.SidekickCore.escapeHtml(safeMapsPhotoUrl)}" target="_blank" rel="noopener noreferrer">View on Google Maps</a>`);
+  }
+  return authorLinks.length ? `<span class="activity-photo-credit">${authorLinks.join(' · ')}</span>` : "";
+}
+
+async function getFreshActivityPhoto(placeId) {
+  const key = String(placeId || "");
+  if (!key || String(window.SIDEKICK_CONFIG?.apiMode || "").toLowerCase() === "development") return null;
+  if (_freshActivityPhotosByPlaceId.has(key)) return _freshActivityPhotosByPlaceId.get(key);
+  if (_activityPhotoRequestsByPlaceId.has(key)) return _activityPhotoRequestsByPlaceId.get(key);
+
+  const request = window.SidekickCore.apiRequest("/api/maps/place-details", {
+    method: "POST",
+    body: JSON.stringify({ placeId: key }),
+  }).then((response) => {
+    const place = response?.place || null;
+    const photo = place?.photoResource ? {
+      photoResource: place.photoResource,
+      photoAttribution: place.photoAttribution || null,
+      photoAttributions: place.photoAttributions || [],
+      photoGoogleMapsUri: place.photoGoogleMapsUri || "",
+    } : null;
+    _freshActivityPhotosByPlaceId.set(key, photo);
+    return photo;
+  }).catch(() => {
+    _freshActivityPhotosByPlaceId.set(key, null);
+    return null;
+  }).finally(() => {
+    _activityPhotoRequestsByPlaceId.delete(key);
+  });
+  _activityPhotoRequestsByPlaceId.set(key, request);
+  return request;
+}
+
+function replaceWithPhotoPlaceholder(container) {
+  container.replaceChildren(createPhotoPlaceholder());
+}
+
+async function refreshActivityPhoto(container, activity) {
+  if (!container || container.dataset.photoRefreshAttempted === "true") return;
+  const placeId = String(activity?.placeId || "");
+  if (!placeId || String(window.SIDEKICK_CONFIG?.apiMode || "").toLowerCase() === "development") return;
+  container.dataset.photoRefreshAttempted = "true";
+
+  const photo = await getFreshActivityPhoto(placeId);
+  if (!photo?.photoResource) {
+    replaceWithPhotoPlaceholder(container);
+    return;
+  }
+
+  const image = document.createElement("img");
+  image.alt = `Photo of ${String(activity.title || "this place")}`;
+  image.loading = "lazy";
+  image.addEventListener("error", () => replaceWithPhotoPlaceholder(container), { once: true });
+  image.src = getPlacePhotoUrl({ placeId });
+  container.replaceChildren(image);
+  const attributionMarkup = getPhotoAttributionMarkup({ placeId });
+  if (attributionMarkup) {
+    const attributionTemplate = document.createElement("template");
+    attributionTemplate.innerHTML = attributionMarkup;
+    container.appendChild(attributionTemplate.content);
+  }
+}
+
+function attachActivityPhotoHandlers(container, itinerary) {
+  const activitiesByPlaceId = new Map((itinerary || []).flatMap((day) => day.activities || [])
+    .filter((activity) => activity?.placeId)
+    .map((activity) => [String(activity.placeId), activity]));
+  container.querySelectorAll(".activity-photo[data-place-id]").forEach((photoContainer) => {
+    const activity = activitiesByPlaceId.get(String(photoContainer.dataset.placeId || ""));
+    if (!activity) return;
+    const image = photoContainer.querySelector("img");
+    if (image) {
+      image.addEventListener("error", () => refreshActivityPhoto(photoContainer, activity), { once: true });
+    } else {
+      refreshActivityPhoto(photoContainer, activity);
+    }
+  });
 }
 
 function createPhotoPlaceholder() {
@@ -270,38 +397,46 @@ function svgPin() {
 }
 
 function renderActivity(activity) {
-  const timeText = activity?.dueAt ? new Date(Number(activity.dueAt)).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : window.SidekickCore.escapeHtml(activity.timeLabel || '');
-  const hasRouteMeta = typeof activity?.travelMinutes === 'number' || typeof activity?.estimatedTotalCostPhp === 'number';
-  const mode = window.SidekickCore.escapeHtml(activity?.transportMode || 'Suggested transport');
-  const distance = typeof activity?.travelDistanceKm === 'number' ? `${activity.travelDistanceKm.toFixed(1)} km` : 'distance unavailable';
-  const mins = typeof activity?.travelMinutes === 'number' ? `${Math.round(activity.travelMinutes)} min` : 'time n/a';
+  const timeText = activity?.dueAt ? new Date(Number(activity.dueAt)).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : window.SidekickCore.escapeHtml(activity.timeLabel || '');
+  const distance = typeof activity?.travelDistanceKm === 'number' ? `${activity.travelDistanceKm.toFixed(1)} km from the last stop` : '';
+  const mins = typeof activity?.travelMinutes === 'number' ? `about ${Math.round(activity.travelMinutes)} min travel` : '';
+  const routeSummary = [distance, mins, activity.routeStatus ? 'Travel time unavailable' : '']
+    .filter(Boolean)
+    .join(' · ');
   const costEstimate = _liveActivityCostsByPlaceId.get(String(activity?.placeId || ''));
-  const activityCostText = costEstimate
+  const hasActivityCostEstimate = costEstimate
+    && Number.isFinite(costEstimate.lowPhp)
+    && Number.isFinite(costEstimate.highPhp);
+  const activityCostText = hasActivityCostEstimate
     ? (costEstimate.lowPhp === 0 && costEstimate.highPhp === 0
-      ? 'Free admission'
-      : `Admission estimate: PHP ${Number(costEstimate.lowPhp).toLocaleString()}–${Number(costEstimate.highPhp).toLocaleString()}`)
+      ? (/restaurant|cafe/i.test(String(activity?.category || '')) ? 'No entry fee' : 'Free entry')
+      : `Entry fee: PHP ${Number(costEstimate.lowPhp).toLocaleString()}–${Number(costEstimate.highPhp).toLocaleString()}`)
     : '';
+  const durationMinutes = Math.round(Number(activity.durationMinutes));
+  const durationText = durationMinutes >= 60
+    ? `${Math.floor(durationMinutes / 60)} hr${Math.floor(durationMinutes / 60) === 1 ? '' : 's'}${durationMinutes % 60 ? ` ${durationMinutes % 60} min` : ''}`
+    : `${durationMinutes} min`;
   const photoUrl = getPlacePhotoUrl(activity);
+  const photoPlaceId = window.SidekickCore.escapeHtml(String(activity?.placeId || ''));
+  const photoMarkup = photoUrl
+    ? `<img src="${window.SidekickCore.escapeHtml(photoUrl)}" alt="Photo of ${window.SidekickCore.escapeHtml(activity.title || 'this place')}" loading="lazy" />${getPhotoAttributionMarkup(activity)}`
+    : `<span class="activity-photo-placeholder">${svgPin()}</span>`;
   return `
     <div class="activity-card">
-      <div class="activity-photo">
-        ${photoUrl
-          ? `<img src="${window.SidekickCore.escapeHtml(photoUrl)}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';" /><span class="activity-photo-placeholder" style="display:none">${svgPin()}</span>`
-          : `<span class="activity-photo-placeholder">${svgPin()}</span>`}
-      </div>
+      <div class="activity-photo"${photoPlaceId ? ` data-place-id="${photoPlaceId}"` : ''}>${photoMarkup}</div>
       <div class="activity-time">
         ${svgClock()}
-        <span>${timeText}</span>
+        <span>${timeText ? `Start around ${timeText}` : 'Time not set'}</span>
       </div>
       <h3>${window.SidekickCore.escapeHtml(activity.title)}</h3>
       <div class="activity-location">
         ${svgPin()}
         <span>${window.SidekickCore.escapeHtml(activity.location)}</span>
       </div>
-      ${hasRouteMeta || activity.routeStatus ? `<div class="activity-route-meta">${mode} • ${distance} • ${mins}${activity.routeStatus ? ` • ${window.SidekickCore.escapeHtml(activity.routeStatus)}` : ''}</div>` : ''}
-      ${Number.isFinite(Number(activity.durationMinutes)) ? `<div class="activity-note">Planned visit: about ${Math.round(Number(activity.durationMinutes))} minutes. Check the venue for current hours.</div>` : ''}
+      ${routeSummary ? `<div class="activity-route-meta">${routeSummary}${typeof activity?.travelMinutes === 'number' ? ' · Traffic may change this' : ''}</div>` : ''}
+      ${Number.isFinite(durationMinutes) && durationMinutes > 0 ? `<div class="activity-note">Plan about ${durationText} here.</div>` : ''}
       ${activityCostText ? `<div class="activity-cost-estimate">${window.SidekickCore.escapeHtml(activityCostText)}</div>` : ''}
-      ${activity.note ? `<div class="activity-note">${window.SidekickCore.escapeHtml(activity.note)}</div>` : ""}
+      ${activity.note ? `<div class="activity-note">${window.SidekickCore.escapeHtml(activity.note)}</div>` : ''}
     </div>
   `;
 }
@@ -314,56 +449,122 @@ function renderTripBudget(budget) {
     summary.replaceChildren();
     return;
   }
-  const formatBand = (item) => Number.isFinite(item?.lowPhp) && Number.isFinite(item?.highPhp)
-    ? `PHP ${Number(item.lowPhp).toLocaleString()}–${Number(item.highPhp).toLocaleString()}`
-    : 'No verified estimate';
-  const total = Number.isFinite(budget.totalLowPhp) && Number.isFinite(budget.totalHighPhp)
+  const hasActivityEstimate = Number.isFinite(budget.totalLowPhp) && Number.isFinite(budget.totalHighPhp);
+  const total = hasActivityEstimate
     ? `PHP ${Number(budget.totalLowPhp).toLocaleString()}–${Number(budget.totalHighPhp).toLocaleString()}`
-    : 'Complete total unavailable';
-  const hasTripEstimate = Number.isFinite(budget.totalLowPhp) && Number.isFinite(budget.totalHighPhp);
-  const budgetFitNote = Number.isFinite(_activeBudgetTargetPhp) && hasTripEstimate
-    ? (budget.totalLowPhp > _activeBudgetTargetPhp
-      ? 'This estimate is above your entered budget.'
-      : budget.totalHighPhp <= _activeBudgetTargetPhp
-        ? 'This estimate fits within your entered budget.'
-        : 'This estimate overlaps your budget; final spending may be over or under it.')
-    : '';
+    : 'No price estimate found';
   const targetNote = Number.isFinite(_activeBudgetTargetPhp)
-    ? `<p class="itinerary-budget-note">Your entered budget: PHP ${Number(_activeBudgetTargetPhp).toLocaleString()} for the whole trip.${budgetFitNote ? ` ${budgetFitNote}` : ''}</p>`
+    ? `<p class="itinerary-budget-note">Your trip budget: PHP ${Number(_activeBudgetTargetPhp).toLocaleString()}.</p>`
     : '';
-  const categoryHtml = (budget.categories || []).map((item) => {
-    const partialAdmissions = item.key === 'admissions' && item.includedPlaces < item.totalPlaces;
-    return `<div class="itinerary-budget-category"><span>${window.SidekickCore.escapeHtml(item.label)}${partialAdmissions ? ` (${item.includedPlaces}/${item.totalPlaces} priced)` : ''}</span><strong>${formatBand(item)}</strong></div>`;
-  }).join('');
+  const activityTargetNote = Number.isFinite(_activeActivityBudgetTargetPhp)
+    ? `<p class="itinerary-budget-note">About PHP ${Number(_activeActivityBudgetTargetPhp).toLocaleString()} is set aside for activity entry fees${Number.isFinite(_activeActivityDailyBudgetTargetPhp) ? ` (about PHP ${Number(_activeActivityDailyBudgetTargetPhp).toLocaleString()} per day)` : ''}. The rest is for travel, rooms, food, local transport, and extra costs.</p>`
+    : '';
+  const activityOverTargetNote = hasActivityEstimate && Number.isFinite(_activeActivityBudgetTargetPhp)
+    && budget.totalHighPhp > _activeActivityBudgetTargetPhp
+    ? '<p class="itinerary-budget-note">Activity entry fees are over the planned amount. Try lower-cost places or raise your budget.</p>'
+    : '';
   const sourceHtml = (budget.sources || []).map((source) => {
     const url = String(source.url || '');
     if (!/^https?:\/\//i.test(url)) return '';
     return `<a href="${window.SidekickCore.escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${window.SidekickCore.escapeHtml(source.title || 'Price source')}</a>`;
   }).join('');
+  const sourceCount = (budget.sources || []).filter((source) => /^https?:\/\//i.test(String(source.url || ''))).length;
   const searchedDate = budget.searchedAt ? new Date(budget.searchedAt).toLocaleDateString() : '';
   const notes = [
-    'For one adult; web-sourced estimates can change with dates, availability, and fees.',
-    'Shopping, travel insurance, tips, and emergency spending are not included.',
-    budget.originIncluded ? '' : 'Travel to and from the destination is excluded because no starting point was supplied.',
-    budget.missingActivityPriceCount ? `${budget.missingActivityPriceCount} activity admission price(s) had no verifiable source.` : '',
-    budget.status !== 'complete-estimate' ? 'A complete total is shown only when all included categories have sourced prices.' : '',
-    searchedDate ? `Sources checked ${searchedDate}.` : '',
+    `Prices found for ${Number(budget.pricedActivityCount || 0)} of ${Number(budget.totalActivityCount || 0)} activities.`,
+    budget.missingActivityPriceCount ? `${budget.missingActivityPriceCount} activities have no price, so they are not in the total.` : '',
+    'Prices may change.',
+    searchedDate ? `Last checked ${searchedDate}.` : '',
   ].filter(Boolean).map((note) => `<p class="itinerary-budget-note">${window.SidekickCore.escapeHtml(note)}</p>`).join('');
   const suggestionHtml = typeof budget.searchSuggestionHtml === 'string' ? budget.searchSuggestionHtml : '';
-  summary.innerHTML = `<h2>Estimated trip budget</h2><p class="itinerary-budget-total">${window.SidekickCore.escapeHtml(total)}</p>${targetNote}<div class="itinerary-budget-categories">${categoryHtml}</div>${notes}${sourceHtml ? `<div class="itinerary-budget-sources"><strong>Sources:</strong>${sourceHtml}</div>` : '<p class="itinerary-budget-note">No web sources were returned for these prices.</p>'}${suggestionHtml ? `<div class="itinerary-search-suggestions">${suggestionHtml}</div>` : ''}`;
+  const sourcesToggle = sourceHtml
+    ? `<button class="itinerary-sources-toggle" type="button" aria-expanded="false" aria-controls="itinerary-budget-sources">Show sources (${sourceCount})</button><div class="itinerary-budget-sources" id="itinerary-budget-sources" hidden>${sourceHtml}</div>`
+    : '<p class="itinerary-budget-note">No source links found.</p>';
+  summary.innerHTML = `<h2>Activity costs (estimate)</h2><p class="itinerary-budget-total">${window.SidekickCore.escapeHtml(total)}</p>${targetNote}${activityTargetNote}${activityOverTargetNote}${notes}${sourcesToggle}${suggestionHtml ? `<div class="itinerary-search-suggestions">${suggestionHtml}</div>` : ''}`;
+  const sourceToggle = summary.querySelector('.itinerary-sources-toggle');
+  const sourcePanel = summary.querySelector('.itinerary-budget-sources');
+  sourceToggle?.addEventListener('click', () => {
+    const expanded = sourceToggle.getAttribute('aria-expanded') === 'true';
+    sourceToggle.setAttribute('aria-expanded', String(!expanded));
+    sourceToggle.textContent = `${expanded ? 'Show' : 'Hide'} sources (${sourceCount})`;
+    sourcePanel.hidden = expanded;
+  });
   summary.hidden = false;
+}
+
+function getTripBudgetCacheKey(itineraryData) {
+  const meta = itineraryData?.meta || {};
+  const input = JSON.stringify({
+    destination: String(meta.destination || meta.focusedPlace || ''),
+    startDate: String(meta.startDate || ''),
+    endDate: String(meta.endDate || ''),
+    itinerary: (itineraryData?.itinerary || []).map((day) => ({
+      activities: (day.activities || []).map((activity) => ({
+        placeId: String(activity.placeId || ''),
+        title: String(activity.title || ''),
+        location: String(activity.location || ''),
+        category: String(activity.category || 'activity'),
+      })),
+    })),
+  });
+
+  let firstHash = 0x811c9dc5;
+  let secondHash = 0x9e3779b9;
+  for (let index = 0; index < input.length; index += 1) {
+    const code = input.charCodeAt(index);
+    firstHash = Math.imul(firstHash ^ code, 0x01000193);
+    secondHash = Math.imul(secondHash ^ code, 0x85ebca6b);
+  }
+  return `trip-budget-v3-${(firstHash >>> 0).toString(16)}-${(secondHash >>> 0).toString(16)}`;
+}
+
+function normalizeTripBudgetCounts(budget, itinerary, activityCosts) {
+  if (!budget) return null;
+  const activities = (Array.isArray(itinerary) ? itinerary : []).flatMap((day) => day?.activities || []);
+  const costByPlaceId = new Map((Array.isArray(activityCosts) ? activityCosts : [])
+    .map((cost) => [String(cost?.placeId || ''), cost]));
+  const pricedActivityCount = activities.filter((activity) => {
+    const cost = costByPlaceId.get(String(activity?.placeId || ''));
+    return cost && Number.isFinite(cost.lowPhp) && Number.isFinite(cost.highPhp);
+  }).length;
+  const totalActivityCount = activities.length;
+  return {
+    ...budget,
+    pricedActivityCount: Number.isFinite(budget.pricedActivityCount) ? budget.pricedActivityCount : pricedActivityCount,
+    totalActivityCount: Number.isFinite(budget.totalActivityCount) ? budget.totalActivityCount : totalActivityCount,
+    missingActivityPriceCount: Number.isFinite(budget.missingActivityPriceCount)
+      ? budget.missingActivityPriceCount
+      : Math.max(0, totalActivityCount - pricedActivityCount),
+  };
 }
 
 async function loadLiveTripBudget(itineraryData, email) {
   _liveTripBudget = null;
   _liveActivityCostsByPlaceId = new Map();
   renderTripBudget(null);
+  const normalizedDates = normalizeItineraryDateMetadata(itineraryData);
+  if (normalizedDates?.changed) setItineraryForEmail(email, itineraryData);
   const meta = itineraryData?.meta || {};
+  const cacheKey = getTripBudgetCacheKey(itineraryData);
+  const cachedAt = Number(meta.liveTripBudgetCachedAt);
+  const cachedBudgetIsFresh = Boolean(meta.liveTripBudget)
+    && meta.liveTripBudgetCacheKey === cacheKey
+    && Number.isFinite(cachedAt)
+    && Date.now() - cachedAt >= 0
+    && Date.now() - cachedAt < TRIP_BUDGET_CACHE_MAX_AGE_MS;
   _activeBudgetTargetPhp = Number.isFinite(Number(meta.budgetAmountPhp)) && Number(meta.budgetAmountPhp) > 0 ? Number(meta.budgetAmountPhp) : null;
+  _activeActivityBudgetTargetPhp = Number.isFinite(Number(meta.activityBudgetTargetPhp)) && Number(meta.activityBudgetTargetPhp) > 0
+    ? Number(meta.activityBudgetTargetPhp)
+    : (_activeBudgetTargetPhp ? Math.floor(_activeBudgetTargetPhp * 0.25) : null);
+  _activeActivityDailyBudgetTargetPhp = Number.isFinite(Number(meta.dailyActivityBudgetTargetPhp)) && Number(meta.dailyActivityBudgetTargetPhp) > 0
+    ? Number(meta.dailyActivityBudgetTargetPhp)
+    : (_activeActivityBudgetTargetPhp && itineraryData.itinerary?.length
+      ? Math.floor(_activeActivityBudgetTargetPhp / itineraryData.itinerary.length)
+      : null);
   if (!itineraryData?.itinerary?.length || meta.isDevelopmentMock) return;
-  if (meta.liveTripBudget) {
-    _liveTripBudget = meta.liveTripBudget;
+  if (cachedBudgetIsFresh) {
     _liveActivityCostsByPlaceId = new Map((Array.isArray(meta.liveActivityCosts) ? meta.liveActivityCosts : []).map((cost) => [String(cost.placeId), cost]));
+    _liveTripBudget = normalizeTripBudgetCounts(meta.liveTripBudget, itineraryData.itinerary, meta.liveActivityCosts);
     renderTripBudget(_liveTripBudget);
     renderItinerary(itineraryData.itinerary, false);
     return;
@@ -371,7 +572,7 @@ async function loadLiveTripBudget(itineraryData, email) {
   const summary = document.getElementById('itinerary-budget-summary');
   if (summary) {
     summary.hidden = false;
-    summary.innerHTML = '<h2>Estimated trip budget</h2><p class="itinerary-budget-note">Searching current prices and sources…</p>';
+    summary.innerHTML = '<h2>Estimated activity costs</h2><p class="itinerary-budget-note">Searching current activity prices and sources…</p>';
   }
   try {
     const response = await window.SidekickCore.apiRequest('/api/itinerary/estimate-budget', {
@@ -380,22 +581,33 @@ async function loadLiveTripBudget(itineraryData, email) {
         email,
         itinerary: itineraryData.itinerary,
         destination: meta.destination || meta.focusedPlace || '',
-        startDate: meta.startDate,
-        endDate: meta.endDate,
-        budgetTier: meta.budget || 'User entered budget',
-        budgetAmountPhp: _activeBudgetTargetPhp,
-        origin: meta.origin || null,
-        travelMode: meta.travelMode || 'DRIVE',
+        startDate: normalizedDates?.startDate || meta.startDate,
+        endDate: normalizedDates?.endDate || meta.endDate,
       }),
     });
-    _liveTripBudget = response.tripBudget || null;
-    _liveActivityCostsByPlaceId = new Map((response.activityCosts || []).map((cost) => [String(cost.placeId), cost]));
+    const activityCosts = Array.isArray(response.activityCosts) ? response.activityCosts : [];
+    _liveActivityCostsByPlaceId = new Map(activityCosts.map((cost) => [String(cost.placeId), cost]));
+    _liveTripBudget = normalizeTripBudgetCounts(response.tripBudget || null, itineraryData.itinerary, activityCosts);
+    if (_liveTripBudget) {
+      itineraryData.meta = {
+        ...(itineraryData.meta || {}),
+        liveTripBudget: _liveTripBudget,
+        liveActivityCosts: activityCosts,
+        liveTripBudgetCacheKey: cacheKey,
+        liveTripBudgetCachedAt: Date.now(),
+      };
+      try {
+        setItineraryForEmail(email, itineraryData);
+      } catch (storageError) {
+        console.warn('Unable to save the trip price estimate locally:', storageError);
+      }
+    }
     renderTripBudget(_liveTripBudget);
     renderItinerary(itineraryData.itinerary, Boolean(meta.isDevelopmentMock));
   } catch (error) {
     if (summary) {
       summary.hidden = false;
-      summary.innerHTML = `<h2>Estimated trip budget</h2><p class="itinerary-budget-note">Live price search is unavailable right now: ${window.SidekickCore.escapeHtml(error.message || 'Please try again later.')}</p>`;
+      summary.innerHTML = `<h2>Estimated activity costs</h2><p class="itinerary-budget-note">Live price search is unavailable right now: ${window.SidekickCore.escapeHtml(error.message || 'Please try again later.')}</p>`;
     }
   }
 }
@@ -432,7 +644,7 @@ async function enrichItineraryWithLiveRoutes(itineraryData, email) {
         try {
           const response = await window.SidekickCore.apiRequest("/api/maps/route", {
             method: "POST",
-            body: JSON.stringify({ origin: fromCoord, destination: toCoord, travelMode: itineraryData.meta?.travelMode || "DRIVE" }),
+            body: JSON.stringify({ origin: fromCoord, destination: toCoord, travelMode: "DRIVE" }),
           });
           const route = response.route;
           current.travelDistanceKm = route.distanceMeters / 1000;
@@ -470,6 +682,32 @@ function renderItinerary(itinerary, isDevelopmentMock = false) {
 
   for (const day of itinerary) {
     const activitiesHtml = (day.activities || []).map(renderActivity).join("");
+    const dayActivities = day.activities || [];
+    const dayCostBands = isDevelopmentMock
+      ? null
+      : dayActivities
+        .map((activity) => _liveActivityCostsByPlaceId.get(String(activity?.placeId || '')))
+        .filter((cost) => cost && Number.isFinite(cost.lowPhp) && Number.isFinite(cost.highPhp));
+    const dayCostLow = isDevelopmentMock
+      ? Number(day.estimatedDayCostLowPhp ?? day.estimatedDayCostPhp)
+      : (dayCostBands || []).reduce((sum, cost) => sum + cost.lowPhp, 0);
+    const dayCostHigh = isDevelopmentMock
+      ? Number(day.estimatedDayCostHighPhp ?? day.estimatedDayCostPhp)
+      : (dayCostBands || []).reduce((sum, cost) => sum + cost.highPhp, 0);
+    const dayPricedActivityCount = isDevelopmentMock
+      ? (Number.isFinite(dayCostLow) && Number.isFinite(dayCostHigh) ? dayActivities.length : 0)
+      : (dayCostBands || []).length;
+    const hasDayCostEstimate = dayActivities.length > 0 && (isDevelopmentMock
+      ? (typeof day.estimatedDayCostPhp === 'number'
+        || typeof day.estimatedDayCostLowPhp === 'number'
+        || typeof day.estimatedDayCostHighPhp === 'number')
+        && Number.isFinite(dayCostLow) && Number.isFinite(dayCostHigh)
+      : true);
+    const dayCostText = hasDayCostEstimate
+      ? (dayPricedActivityCount
+        ? `Entry fees: PHP ${dayCostLow.toLocaleString()}–${dayCostHigh.toLocaleString()} (${dayPricedActivityCount}/${dayActivities.length} prices found)${Number.isFinite(_activeActivityDailyBudgetTargetPhp) ? ` · daily target ~PHP ${_activeActivityDailyBudgetTargetPhp.toLocaleString()}` : ''}`
+        : `No activity prices found${Number.isFinite(_activeActivityDailyBudgetTargetPhp) ? ` · daily target ~PHP ${_activeActivityDailyBudgetTargetPhp.toLocaleString()}` : ''}`)
+      : '';
 
     const dayHtml = `
       <div class="day-section">
@@ -478,7 +716,7 @@ function renderItinerary(itinerary, isDevelopmentMock = false) {
           <div class="day-info">
             <h2>Day ${day.dayNumber}</h2>
             <p>${window.SidekickCore.escapeHtml(day.dateLabel)}</p>
-            ${typeof day.estimatedDayCostPhp === 'number' ? `<p style="font-size:12px;color:#0f766e;margin-top:4px;">${isDevelopmentMock ? 'Development sample budget' : 'Estimated daily budget'}: PHP ${Number(day.estimatedDayCostLowPhp ?? day.estimatedDayCostPhp).toLocaleString()} - PHP ${Number(day.estimatedDayCostHighPhp ?? day.estimatedDayCostPhp).toLocaleString()}</p>` : ''}
+            ${dayCostText ? `<p class="day-cost-estimate">${window.SidekickCore.escapeHtml(dayCostText)}</p>` : ''}
           </div>
         </div>
         <div class="activities-list">
@@ -495,6 +733,7 @@ function renderItinerary(itinerary, isDevelopmentMock = false) {
     el.style.animation = "cardIn 460ms ease both";
     el.style.animationDelay = `${idx * 40}ms`;
   });
+  attachActivityPhotoHandlers(container, itinerary);
 }
 
 function getItineraryForEmail(email) {
@@ -512,17 +751,10 @@ function updateHeaderDate(prefs, itineraryData) {
   const dateEl = document.getElementById("itinerary-date");
   if (!dateEl) return;
 
-  let startDate = itineraryData?.meta?.startDate
-    ? parseItineraryDate(itineraryData.meta.startDate)
-    : new Date();
-  const dayCount = Math.max(1, Number(itineraryData?.itinerary?.length || 1));
-  if (!Number.isFinite(startDate.getTime())) startDate = new Date();
-  let endDate = itineraryData?.meta?.endDate
-    ? parseItineraryDate(itineraryData.meta.endDate)
-    : new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate() + dayCount - 1);
-  if (!Number.isFinite(endDate.getTime()) || endDate < startDate) {
-    endDate = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate() + dayCount - 1);
-  }
+  const normalizedDates = normalizeItineraryDateMetadata(itineraryData);
+  const startDate = normalizedDates?.start || new Date();
+  const endDate = normalizedDates?.end || startDate;
+  const dayCount = normalizedDates?.durationDays || 1;
   const format = { month: "short", day: "numeric", year: "numeric" };
   const range = `${startDate.toLocaleDateString([], format)} - ${endDate.toLocaleDateString([], format)}`;
   const extra = dayCount === 1 ? "Day" : "Days";
@@ -641,7 +873,6 @@ document.addEventListener("DOMContentLoaded", () => {
   const endInput = document.getElementById('itinerary-end');
   const budgetInput = document.getElementById('itinerary-budget');
   const originInput = document.getElementById('itinerary-origin');
-  const transportationInput = document.getElementById('itinerary-transportation');
   const buildBtn = document.getElementById('build-itinerary');
   const showBuilderBtn = document.getElementById('show-builder');
   const placeSearchInput = document.getElementById("place-search");
@@ -881,18 +1112,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // If user already has an itinerary, show it; otherwise show the builder so user opts in.
   if (existing?.itinerary) {
-    let startDate = existing?.meta?.startDate ? parseItineraryDate(existing.meta.startDate) : new Date();
-    if (!Number.isFinite(startDate.getTime())) startDate = new Date();
-    let endDate = existing?.meta?.endDate
-      ? parseItineraryDate(existing.meta.endDate)
-      : new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate() + Math.max(0, existing.itinerary.length - 1));
-    if (!Number.isFinite(endDate.getTime()) || endDate < startDate) {
-      endDate = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate() + Math.max(0, existing.itinerary.length - 1));
-    }
-    if (!existing.meta?.endDate || !Number.isFinite(parseItineraryDate(existing.meta.endDate).getTime())) {
-      existing.meta = { ...(existing.meta || {}), startDate: formatDateInput(startDate), endDate: formatDateInput(endDate) };
-      setItineraryForEmail(email, existing);
-    }
+    const normalizedDates = normalizeItineraryDateMetadata(existing);
+    const startDate = normalizedDates?.start || new Date();
+    const endDate = normalizedDates?.end || startDate;
+    if (normalizedDates?.changed) setItineraryForEmail(email, existing);
     if (startInput) startInput.value = formatDateInput(startDate);
     if (destinationInput) destinationInput.value = existing.meta?.destination || existing.meta?.focusedPlace || '';
     if (endInput) {
@@ -952,14 +1175,13 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
     const originText = String(originInput?.value || '').trim().slice(0, 180);
-    const travelMode = String(transportationInput?.value || 'DRIVE').toUpperCase();
     const budgetLabel = `PHP ${rawBudget.toLocaleString()} total`;
-    const tempPrefs = { ...prefs, preferredPlaces: [destinationName], budget: budgetLabel, budgetAmountPhp: rawBudget, transportation: travelMode };
+    const tempPrefs = { ...prefs, preferredPlaces: [destinationName], budget: budgetLabel, budgetAmountPhp: rawBudget, transportation: 'DRIVE' };
     const confirmation = `Build a ${durationDays}-day itinerary from ${startVal.toDateString()} through ${endVal.toDateString()}?\nTotal budget: ${budgetLabel}\nDestination: ${destinationName}${originText ? `\nStarting location: ${originText}` : ''}`;
     if (!window.confirm(confirmation)) return;
 
     buildBtn.disabled = true;
-    buildBtn.textContent = 'Verifying places…';
+    buildBtn.textContent = 'Building budget-aware plan…';
     try {
       const generated = await window.SidekickCore.apiRequest('/api/itinerary/generate', {
         method: 'POST',
@@ -976,6 +1198,10 @@ document.addEventListener("DOMContentLoaded", () => {
         itinerary: generated.itinerary,
         meta: { ...generated.meta, destination: generated.meta?.destination || destinationName, startDate: formatDateInput(startVal), endDate: formatDateInput(endVal), durationDays, budget: budgetLabel, budgetAmountPhp: rawBudget },
       };
+      if (itineraryData.meta.liveTripBudget && Array.isArray(itineraryData.meta.liveActivityCosts)) {
+        itineraryData.meta.liveTripBudgetCacheKey = getTripBudgetCacheKey(itineraryData);
+        itineraryData.meta.liveTripBudgetCachedAt = Date.now();
+      }
       setItineraryForEmail(email, itineraryData);
       updateHeaderDate(tempPrefs, itineraryData);
       renderItinerary(itineraryData.itinerary, Boolean(itineraryData.meta?.isDevelopmentMock));
@@ -985,6 +1211,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (addBtn) addBtn.style.display = 'block';
       attachAddActivityHandler(itineraryData, tempPrefs, email, startVal);
       showBuilder(false);
+      window.SidekickAppRating?.afterItineraryGenerated();
       try { window.SidekickCore?.syncRemindersFromItinerary?.(email); } catch (error) {}
       try { window.SidekickCore?.scheduleAllFor?.(email); } catch (error) {}
     } catch (error) {
@@ -997,7 +1224,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
   if (existing?.meta?.budgetAmountPhp && budgetInput) budgetInput.value = existing.meta.budgetAmountPhp;
   if (existing?.meta?.origin && originInput) originInput.value = existing.meta.origin.address || existing.meta.origin.name || '';
-  if (existing?.meta?.travelMode && transportationInput) transportationInput.value = existing.meta.travelMode;
 });
 
 function applyLocalScheduleTimes(itinerary, firstDay) {

@@ -6,6 +6,7 @@
     <title>Sidekick AI - Itinerary</title>
     <link rel="stylesheet" href="css/common.css">
     <link rel="stylesheet" href="css/itinerary.css">
+    <link rel="stylesheet" href="css/app-rating.css">
 </head>
 <body>
     <div class="app-container">
@@ -44,7 +45,6 @@
                         <div class="itinerary-field"><label for="itinerary-start">Start date</label><input id="itinerary-start" type="date" required /></div>
                         <div class="itinerary-field"><label for="itinerary-end">End date</label><input id="itinerary-end" type="date" required /></div>
                         <div class="itinerary-field"><label for="itinerary-budget">Total budget (PHP)</label><input id="itinerary-budget" type="number" min="1" step="1" inputmode="numeric" placeholder="Enter your budget" aria-label="Total trip budget in Philippine pesos" /></div>
-                        <div class="itinerary-field"><label for="itinerary-transportation">Travel mode</label><select id="itinerary-transportation"><option value="DRIVE">Driving</option><option value="TRANSIT">Public transit</option><option value="WALK">Walking</option><option value="BICYCLE">Bicycle</option></select></div>
                         <button id="build-itinerary" class="btn btn-primary">Build Itinerary</button>
                     </div>
                 </div>
@@ -108,6 +108,7 @@
 
     <script src="js/config.local.js"></script>
     <script src="js/core.js"></script>
+    <script src="js/app-rating.js"></script>
     <script src="js/itinerary.js"></script>
     <script src="js/nav.js"></script>
 </body>

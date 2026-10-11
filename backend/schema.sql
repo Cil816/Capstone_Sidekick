@@ -33,3 +33,19 @@ GO
 -- Existing verified users should remain able to log in after this migration.
 UPDATE dbo.users SET is_verified = 1 WHERE is_verified = 0 AND created_at < SYSUTCDATETIME();
 GO
+
+IF OBJECT_ID('dbo.app_reviews', 'U') IS NULL
+BEGIN
+  CREATE TABLE dbo.app_reviews (
+    review_id int IDENTITY(1,1) NOT NULL PRIMARY KEY,
+    user_id int NOT NULL,
+    rating tinyint NOT NULL,
+    review_text nvarchar(2000) NULL,
+    created_at datetime2(7) NOT NULL CONSTRAINT DF_app_reviews_created_at DEFAULT SYSUTCDATETIME(),
+    updated_at datetime2(7) NOT NULL CONSTRAINT DF_app_reviews_updated_at DEFAULT SYSUTCDATETIME(),
+    CONSTRAINT CK_app_reviews_rating CHECK (rating BETWEEN 1 AND 5),
+    CONSTRAINT UQ_app_reviews_user_id UNIQUE (user_id),
+    CONSTRAINT FK_app_reviews_users FOREIGN KEY (user_id) REFERENCES dbo.users(user_id)
+  );
+END;
+GO

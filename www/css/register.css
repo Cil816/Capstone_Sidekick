@@ -1,58 +1,261 @@
-/* Register Screen Specific Styles */
-.footer-text {
-    text-align: center;
-    margin-top: 24px;
-    color: #6B7280;
+.register-screen {
+    --register-ink: #263b51;
+    --register-muted: #718096;
+    --register-accent: #319eaf;
 }
 
-.footer-text a {
-    color: #6B8CAE;
-    text-decoration: none;
+.register-screen .header {
+    width: min(100%, 520px);
+    margin: 0 auto;
+    padding: 16px 0 8px;
 }
 
-.footer-text a:hover {
-    text-decoration: underline;
+.register-screen .content {
+    width: min(100%, 520px);
+    margin: clamp(8px, 3vh, 28px) auto 32px;
+    padding: clamp(22px, 5vw, 36px);
+    border: 1px solid #e8eef4;
+    border-radius: 24px;
+    background: #fff;
+    box-shadow: 0 20px 55px rgb(38 59 81 / 9%);
+    overflow: visible;
 }
 
-.terms-check {
-    display: flex;
-    gap: 9px;
+.register-screen .screen-title {
+    margin-bottom: 4px;
+    color: var(--register-ink);
+    font-family: "Manrope", "Avenir Next", sans-serif;
+    font-size: clamp(23px, 5vw, 28px);
+    font-weight: 800;
+    letter-spacing: -0.035em;
+    line-height: 1.2;
+}
+
+.register-screen .screen-subtitle {
+    margin-bottom: 26px;
+    color: var(--register-muted);
+    line-height: 1.5;
+}
+
+.register-screen .form {
+    gap: 0;
+}
+
+.register-screen .form section:not([hidden]) {
+    display: grid;
+    gap: 16px;
+    min-width: 0;
+}
+
+.register-screen .form section > .screen-subtitle {
+    margin: 0 0 2px;
+    overflow-wrap: anywhere;
+}
+
+.register-screen .form-group {
+    gap: 7px;
+}
+
+.register-screen .form-group label {
+    color: #35485e;
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.register-screen .form-group input {
+    width: 100%;
+    min-width: 0;
+    height: 50px;
+    border-color: #dce6ef;
+    background: #f6f9fc;
+}
+
+.register-screen .form-group input:focus {
+    border-color: #58bdc6;
+    background: #fff;
+    box-shadow: 0 0 0 4px rgb(69 184 194 / 13%);
+}
+
+.register-screen .btn-primary {
+    min-height: 50px;
+    border-radius: 14px;
+    background: linear-gradient(110deg, #279bb0, #51c9c5);
+    box-shadow: 0 9px 18px rgb(39 155 176 / 17%);
+    font-weight: 700;
+}
+
+.register-screen .btn-primary:hover {
+    background: linear-gradient(110deg, #218ba0, #43b9b6);
+    box-shadow: 0 11px 22px rgb(39 155 176 / 22%);
+}
+
+.register-screen .btn-primary:focus-visible,
+.register-secondary-button:focus-visible,
+.register-screen a:focus-visible,
+.register-screen .back-btn:focus-visible,
+.terms-link:focus-visible {
+    outline: 3px solid rgb(49 158 175 / 38%);
+    outline-offset: 3px;
+}
+
+.registration-secondary-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    margin-top: 0;
+}
+
+.registration-secondary-button {
+    min-width: 0;
+    min-height: 42px;
+    padding: 8px 10px;
+    border: 1px solid #dce8ef;
+    border-radius: 12px;
+    background: #f8fbfd;
+    color: #4b718d;
+    cursor: pointer;
+    font: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease;
+}
+
+.registration-secondary-button:hover {
+    border-color: #a9dce0;
+    background: #eefafb;
+    color: #247f91;
+}
+
+.registration-secondary-button:disabled {
+    cursor: wait;
+    opacity: 0.65;
+}
+
+.register-screen .terms-check {
     align-items: flex-start;
-    color: #4B5563;
-    font-size: 13px;
-    line-height: 1.45;
+    margin: 2px 0;
+    color: #526274;
+    font-size: 14px;
 }
 
-.terms-check input {
-    margin-top: 3px;
-    accent-color: #6B8CAE;
+.register-screen .terms-check input {
+    width: 17px;
+    height: 17px;
+    flex: 0 0 auto;
+    margin-top: 2px;
 }
 
 .terms-link {
-    border: 0;
-    padding: 0;
-    color: #6B8CAE;
-    background: transparent;
-    text-decoration: underline;
-    cursor: pointer;
-    font: inherit;
+    color: #287f97;
+    font-weight: 600;
+    text-underline-offset: 3px;
+}
+
+.register-screen .auth-error {
+    margin-top: 16px;
+    padding: 12px 14px;
+    border-radius: 13px;
+    font-size: 14px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+}
+
+.register-screen .auth-success {
+    border-color: #bcebd0;
+    background: #f0fbf5;
+    color: #187245;
+}
+
+.register-screen .footer-text {
+    margin-top: 24px;
+    color: #788596;
+    font-size: 14px;
+}
+
+.register-screen .footer-text a {
+    color: #347f9b;
+    font-weight: 700;
 }
 
 .terms-dialog {
-    max-width: 420px;
-    border: 0;
-    border-radius: 12px;
+    width: min(420px, calc(100vw - 32px));
+    max-width: none;
+    border: 1px solid #e3ebf1;
+    border-radius: 18px;
     padding: 24px;
-    color: #27364B;
-    line-height: 1.55;
+    color: #35485e;
+    line-height: 1.6;
+    box-shadow: 0 24px 70px rgb(22 39 56 / 22%);
 }
 
-.terms-dialog::backdrop { background: rgb(16 24 40 / 45%); }
-.terms-dialog-header { display: flex; justify-content: space-between; align-items: center; }
-.terms-dialog h2 { margin: 0; font-size: 21px; }
-.terms-close { border: 0; background: transparent; font-size: 26px; cursor: pointer; color: #6B7280; }
+.terms-dialog::backdrop {
+    background: rgb(20 35 50 / 48%);
+    backdrop-filter: blur(3px);
+}
 
-.resend-button {
-    display: block;
-    margin: 20px auto 0;
+.terms-dialog-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 12px;
+}
+
+.terms-dialog h2 {
+    margin: 0;
+    color: var(--register-ink);
+    font-family: "Manrope", "Avenir Next", sans-serif;
+    font-size: 21px;
+}
+
+.terms-dialog p + p {
+    margin-top: 12px;
+}
+
+.terms-close {
+    flex: 0 0 auto;
+    width: 36px;
+    height: 36px;
+    border: 0;
+    border-radius: 10px;
+    background: #f2f6f9;
+    color: #65758a;
+    cursor: pointer;
+    font-size: 25px;
+    line-height: 1;
+}
+
+@media (max-width: 480px) {
+    .register-screen .content {
+        margin-top: 8px;
+        padding: 22px 18px;
+        border-radius: 20px;
+    }
+
+    .register-screen .screen-subtitle {
+        margin-bottom: 22px;
+    }
+}
+
+@media (max-width: 360px) {
+    .register-screen .content {
+        padding: 20px 15px;
+    }
+
+    .registration-secondary-actions {
+        gap: 8px;
+    }
+
+    .registration-secondary-button {
+        padding-inline: 6px;
+        font-size: 13px;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .register-screen *,
+    .terms-dialog * {
+        scroll-behavior: auto;
+        transition-duration: 0.01ms !important;
+    }
 }

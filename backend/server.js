@@ -12,6 +12,8 @@ const app = express();
 const port = Number(process.env.PORT || 3001);
 const configuredServer = process.env.DB_SERVER || 'localhost\\SQLEXPRESS';
 const [serverName, configuredInstance] = configuredServer.split('\\', 2);
+const configuredInstanceName = process.env.DB_INSTANCE || configuredInstance;
+const configuredDatabase = process.env.DB_DATABASE || 'sidekick_db';
 const useWindowsAuthentication = (process.env.DB_AUTH || 'windows').toLowerCase() === 'windows';
 const rateLimits = new Map();
 const routeCache = new Map();
@@ -24,18 +26,18 @@ const config = {
   ...(useWindowsAuthentication ? { driver: 'msnodesqlv8' } : {}),
   ...(useWindowsAuthentication
     ? {
-        connectionString: 'Driver={ODBC Driver 18 for SQL Server};Server=localhost,1433;Database=sidekick_db;Trusted_Connection=Yes;TrustServerCertificate=Yes;',
+        connectionString: `Driver={ODBC Driver 18 for SQL Server};Server=${configuredInstanceName ? `${serverName}\\${configuredInstanceName}` : `${serverName},${Number(process.env.DB_PORT || 1433)}`};Database=${configuredDatabase};Trusted_Connection=Yes;TrustServerCertificate=Yes;`,
       }
     : {}),
   server: serverName || 'localhost',
-  database: process.env.DB_DATABASE || 'sidekick_db',
+  database: configuredDatabase,
   ...(useWindowsAuthentication
     ? { options: { trustedConnection: true } }
     : {
         user: process.env.DB_USERNAME || 'sa',
         password: process.env.DB_PASSWORD || '',
       }),
-  ...(!(process.env.DB_INSTANCE || configuredInstance)
+  ...(!configuredInstanceName
     ? { port: Number(process.env.DB_PORT || 1433) }
     : {}),
   options: {
@@ -43,8 +45,8 @@ const config = {
     trustServerCertificate: true,
     enableArithAbort: true,
     ...(useWindowsAuthentication ? { trustedConnection: true } : {}),
-    ...(process.env.DB_INSTANCE || configuredInstance
-      ? { instanceName: process.env.DB_INSTANCE || configuredInstance }
+    ...(configuredInstanceName
+      ? { instanceName: configuredInstanceName }
       : {}),
   },
 };
@@ -72,7 +74,12 @@ function mapPlace(place) {
   const location = place.location || place.geometry?.location;
   const photo = place.photos?.[0];
   const photoResource = photo?.name || null;
-  const photoAttribution = photo?.authorAttributions?.[0] || null;
+  const photoAttributions = Array.isArray(photo?.authorAttributions)
+    ? photo.authorAttributions.map((attribution) => ({
+      name: attribution.displayName || '',
+      uri: attribution.uri || '',
+    }))
+    : [];
   return {
     placeId: place.id || place.place_id || place.placeId || null,
     name: place.displayName?.text || place.name || 'Unnamed place',
@@ -85,10 +92,9 @@ function mapPlace(place) {
     openingHours: place.regularOpeningHours?.weekdayDescriptions || [],
     types: Array.isArray(place.types) ? place.types.slice(0, 6) : [],
     photoResource,
-    photoAttribution: photoAttribution ? {
-      name: photoAttribution.displayName || '',
-      uri: photoAttribution.uri || '',
-    } : null,
+    photoAttribution: photoAttributions[0] || null,
+    photoAttributions,
+    photoGoogleMapsUri: photo?.googleMapsUri || '',
   };
 }
 
@@ -183,7 +189,7 @@ async function callGooglePlacesApi(path, payload) {
       headers: {
         'Content-Type': 'application/json',
         'X-Goog-Api-Key': apiKey,
-        'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.priceLevel,places.regularOpeningHours.weekdayDescriptions,places.types,places.photos.name,places.photos.authorAttributions',
+        'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.priceLevel,places.regularOpeningHours.weekdayDescriptions,places.types,places.photos.name,places.photos.authorAttributions,places.photos.googleMapsUri',
       },
       body: JSON.stringify(payload),
     });
@@ -468,9 +474,43 @@ async function callGeminiApi({ message, contextText, systemInstruction, response
   return rawText.trim();
 }
 
-async function callGeminiSearchApi({ message, contextText = '', systemInstruction = '' }) {
+function tripBudgetSearchResponseSchema() {
+  return {
+    type: 'object',
+    properties: {
+      activityCosts: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            placeId: { type: 'string' },
+            lowPhp: { type: ['number', 'null'] },
+            highPhp: { type: ['number', 'null'] },
+            basis: { type: 'string' },
+            sourceUrls: { type: 'array', items: { type: 'string' } },
+          },
+          required: ['placeId', 'lowPhp', 'highPhp', 'basis', 'sourceUrls'],
+        },
+      },
+    },
+    required: ['activityCosts'],
+  };
+}
+
+async function callGeminiSearchApi({ message, contextText = '', systemInstruction = '', responseSchema = null }) {
   const apiKey = getAiApiKey();
   if (!apiKey) throw new Error('AI_API_KEY is missing. Add your Gemini API key in backend/.env.');
+  const model = getAiModel();
+  const supportsSearchStructuredOutput = /^gemini-(?:3\.8-flash|3\.1-pro-preview)(?:$|-)/i.test(model);
+  const generationConfig = { maxOutputTokens: 5000 };
+  if (responseSchema && supportsSearchStructuredOutput) {
+    generationConfig.thinkingConfig = { thinkingLevel: 'low' };
+    generationConfig.responseFormat = {
+      // generateContent's responseFormat.text.mimeType is a proto enum, not
+      // the free-form MIME string used by some of the other Gemini endpoints.
+      text: { mimeType: 'APPLICATION_JSON', schema: responseSchema },
+    };
+  }
   const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(getAiModel())}:generateContent`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' , 'x-goog-api-key': apiKey},
@@ -478,7 +518,7 @@ async function callGeminiSearchApi({ message, contextText = '', systemInstructio
       contents: [{ role: 'user', parts: [{ text: `${contextText}\n\n${message}` }] }],
       ...(systemInstruction ? { systemInstruction: { parts: [{ text: systemInstruction }] } } : {}),
       tools: [{ google_search: {} }],
-      generationConfig: { maxOutputTokens: 2400 },
+      generationConfig,
     }),
   });
   const data = await response.json().catch(() => ({}));
@@ -488,19 +528,23 @@ async function callGeminiSearchApi({ message, contextText = '', systemInstructio
   }
   const candidate = data?.candidates?.[0];
   const text = candidate?.content?.parts?.map((part) => part.text || '').join('') || '';
-  const sources = (candidate?.groundingMetadata?.groundingChunks || [])
+  const groundingMetadata = candidate?.groundingMetadata || candidate?.grounding_metadata || {};
+  const groundingChunks = groundingMetadata.groundingChunks || groundingMetadata.grounding_chunks || [];
+  const sources = groundingChunks
     .map((chunk) => chunk.web)
     .filter((web) => web?.uri && /^https?:\/\//i.test(web.uri))
     .map((web) => ({ title: String(web.title || web.uri), url: web.uri }));
   return {
     text,
     sources: Array.from(new Map(sources.map((source) => [source.url, source])).values()),
-    searchSuggestionHtml: String(candidate?.groundingMetadata?.searchEntryPoint?.renderedContent || ''),
+    searchSuggestionHtml: String(groundingMetadata.searchEntryPoint?.renderedContent || groundingMetadata.search_entry_point?.rendered_content || ''),
     searchedAt: new Date().toISOString(),
   };
 }
 
 function normalizePriceBand(value) {
+  if (value?.lowPhp === null || value?.lowPhp === undefined || value?.highPhp === null || value?.highPhp === undefined) return null;
+  if ((typeof value.lowPhp === 'string' && !value.lowPhp.trim()) || (typeof value.highPhp === 'string' && !value.highPhp.trim())) return null;
   const lowPhp = Number(value?.lowPhp);
   const highPhp = Number(value?.highPhp);
   if (!Number.isFinite(lowPhp) || !Number.isFinite(highPhp) || lowPhp < 0 || highPhp < lowPhp || highPhp > 10000000) return null;
@@ -509,11 +553,20 @@ function normalizePriceBand(value) {
 
 function normalizeSourcedPriceBand(value, allowedSources) {
   const band = normalizePriceBand(value);
-  const matchedSourceUrls = Array.isArray(value?.sourceUrls)
-    ? Array.from(new Set(value.sourceUrls.map((url) => String(url || '')).filter((url) => allowedSources.has(url))))
+  if (!band) return null;
+  const citedUrls = Array.isArray(value?.sourceUrls)
+    ? Array.from(new Set(value.sourceUrls.map((url) => String(url || '')).filter((url) => /^https?:\/\//i.test(url))))
     : [];
-  if (!band || !allowedSources.size || !matchedSourceUrls.length) return null;
-  return { ...band, sourceUrls: matchedSourceUrls };
+  const verifiedUrls = citedUrls.filter((url) => allowedSources.has(url));
+  // Prefer the exact Google grounding URL where available. Some API responses
+  // omit grounding metadata, so retain direct source URLs supplied in the
+  // structured result as citations rather than silently dropping the estimate.
+  const sourceUrls = verifiedUrls.length
+    ? verifiedUrls
+    : allowedSources.size
+      ? Array.from(allowedSources).slice(0, 8)
+      : citedUrls;
+  return sourceUrls.length ? { ...band, sourceUrls } : null;
 }
 
 function addPriceBands(bands) {
@@ -525,62 +578,49 @@ function addPriceBands(bands) {
   }), { lowPhp: 0, highPhp: 0 });
 }
 
-function multiplyPriceBand(band, count) {
-  if (!band) return null;
-  return { lowPhp: band.lowPhp * count, highPhp: band.highPhp * count };
-}
-
-async function estimateVerifiedTripBudget({ itinerary, destination, startDate, endDate, budgetTier, budgetAmountPhp, origin, travelMode }) {
+async function estimateVerifiedTripBudget({ itinerary, destination, startDate, endDate }) {
   const places = itinerary.flatMap((day) => day.activities || []).map((activity) => ({
     placeId: activity.placeId,
     name: activity.title,
     address: activity.location,
     category: activity.category || 'activity',
   }));
-  const days = itinerary.length;
-  const nights = Math.max(0, inclusiveDayCount(startDate, endDate) - 1);
   const contextText = [
     `Destination: ${destination}`,
     `Dates: ${startDate} through ${endDate}`,
-    `Budget tier: ${budgetTier || 'User-entered budget'}`,
-    `User-entered total budget ceiling: ${Number.isFinite(Number(budgetAmountPhp)) && Number(budgetAmountPhp) > 0 ? `PHP ${Number(budgetAmountPhp).toLocaleString()}` : 'not provided'}`,
-    'Travel party: one adult',
-    `Origin: ${origin?.address || origin?.name || 'not provided'}`,
-    `Requested travel mode from origin: ${travelMode || 'not provided'}`,
     `Places already selected and verified by Google Places: ${JSON.stringify(places)}`,
-    'Find current, source-backed prices. Prefer official attraction, accommodation, transport, and restaurant sources; use reputable current sources when official prices are unavailable. When a total budget ceiling is provided, choose a realistic lodging and meals estimate suitable for that ceiling and identify whether the researched total appears likely to fit. Do not force prices to fit the ceiling.',
-    'Only return numeric price ranges when search results support them. Never invent a venue price. Return null when a price cannot be verified. Keep currency in PHP and convert using a current source when a result lists another currency.',
+    'Search current web results for each listed place’s admission or activity fee. Prefer official venue pages and ticket sellers; if an official price is unavailable, use a clearly identified estimate supported by a reputable current source. The entered budget is context only and must not change the researched prices. Keep currency in PHP and convert using a current source if necessary.',
+    'Return null only when you cannot find enough evidence to give a useful estimate. Do not price meals, lodging, or travel to the destination; this estimate covers the listed activities only.',
   ].join('\n');
-  const prompt = `Search the web now and return one JSON object only, without markdown, shaped as {"activityCosts":[{"placeId":"exact supplied placeId","lowPhp":null,"highPhp":null,"basis":"adult admission; null if not found","sourceUrls":[]}],"mealsPerPersonPerDay":{"lowPhp":null,"highPhp":null,"basis":"three meals; null if not supported","sourceUrls":[]},"localTransportPerPersonPerDay":{"lowPhp":null,"highPhp":null,"basis":"local trips; null if not supported","sourceUrls":[]},"lodgingPerNight":{"lowPhp":null,"highPhp":null,"basis":"one adult, one room, suitable for the entered total budget when provided; null if not supported","sourceUrls":[]},"originRoundTrip":{"lowPhp":null,"highPhp":null,"basis":"round trip for one adult using requested mode; null if origin missing or not verifiable","sourceUrls":[]}}. Return one activityCosts item per supplied place, preserving exact placeIds. For attractions, estimate adult admission. For food venues, use zero admission because meals are budgeted separately, unless a cover fee exists. For confirmed free admission, use 0 for both bounds. Every non-null band must include one or more exact URLs from the web search results in sourceUrls; otherwise return null for its lowPhp and highPhp. Never cite a URL that was not actually returned by Google Search.`;
-  const grounded = await callGeminiSearchApi({ message: prompt, contextText });
+  const prompt = `Search the web now and return one JSON object only, without markdown, shaped as {"activityCosts":[{"placeId":"exact supplied placeId","lowPhp":null,"highPhp":null,"basis":"brief price basis or why unavailable","sourceUrls":[]}]}. Return one activityCosts item per supplied place, preserving each exact placeId. Search each place by its exact name plus admission, entrance, or activity fee. For confirmed free entry use 0 for both price bounds. Include a realistic low and high range in PHP when a current source supports an exact price or reasonable estimate; explain whether it is an official price or estimate in basis. If a venue is a restaurant or shop, use 0 for activity admission unless a cover or entry fee applies. For each non-null price, include the canonical web page URL(s) that support that specific price in sourceUrls. Use direct page URLs from your search results; never invent an official price or source URL.`;
+  const grounded = await callGeminiSearchApi({
+    message: prompt,
+    contextText,
+    responseSchema: tripBudgetSearchResponseSchema(),
+  });
   const parsed = extractJsonObject(grounded.text);
   if (!parsed) throw new Error('Web price search returned data that could not be read.');
 
   const allowedSources = new Set(grounded.sources.map((source) => source.url));
+  const citationSources = new Map(grounded.sources.map((source) => [source.url, source]));
   const activityCostByPlaceId = new Map();
   for (const entry of Array.isArray(parsed.activityCosts) ? parsed.activityCosts : []) {
     const placeId = String(entry?.placeId || '');
     const band = normalizeSourcedPriceBand(entry, allowedSources);
-    if (placeId && band) activityCostByPlaceId.set(placeId, { ...band, basis: String(entry.basis || '') });
+    if (placeId && band) {
+      for (const url of band.sourceUrls) {
+        if (!citationSources.has(url)) {
+          let title = url;
+          try { title = new URL(url).hostname.replace(/^www\./, ''); } catch (error) { /* Keep the URL as its label. */ }
+          citationSources.set(url, { title, url });
+        }
+      }
+      activityCostByPlaceId.set(placeId, { ...band, basis: String(entry.basis || '') });
+    }
   }
   const activityBands = places.map((place) => activityCostByPlaceId.get(String(place.placeId))).filter(Boolean);
   const activityTotal = addPriceBands(activityBands);
-  const mealsPerDay = normalizeSourcedPriceBand(parsed.mealsPerPersonPerDay, allowedSources);
-  const localTransportPerDay = normalizeSourcedPriceBand(parsed.localTransportPerPersonPerDay, allowedSources);
-  const lodgingPerNight = normalizeSourcedPriceBand(parsed.lodgingPerNight, allowedSources);
-  const originRoundTrip = origin ? normalizeSourcedPriceBand(parsed.originRoundTrip, allowedSources) : null;
-  const categories = [
-    { key: 'admissions', label: 'Activity admission', ...(activityTotal || {}), includedPlaces: activityBands.length, totalPlaces: places.length },
-    { key: 'meals', label: 'Meals (one adult)', ...(multiplyPriceBand(mealsPerDay, days) || {}), perDay: mealsPerDay },
-    { key: 'localTransport', label: 'Local transport (one adult)', ...(multiplyPriceBand(localTransportPerDay, days) || {}), perDay: localTransportPerDay },
-    { key: 'lodging', label: `Lodging (${nights} ${nights === 1 ? 'night' : 'nights'})`, ...(nights ? multiplyPriceBand(lodgingPerNight, nights) || {} : { lowPhp: 0, highPhp: 0 }), perNight: lodgingPerNight },
-    ...(origin ? [{ key: 'originTravel', label: 'Travel to and from destination', ...(originRoundTrip || {}), basis: String(parsed.originRoundTrip?.basis || '') }] : []),
-  ];
-  const requiredCategories = categories.filter((category) => category.key !== 'admissions' || category.totalPlaces > 0);
-  const complete = Boolean(origin) && requiredCategories.length > 0
-    && requiredCategories.every((category) => Number.isFinite(category.lowPhp) && Number.isFinite(category.highPhp))
-    && activityBands.length === places.length;
-  const total = complete ? addPriceBands(requiredCategories) : null;
+  const complete = places.length > 0 && activityBands.length === places.length;
 
   return {
     activityCosts: places.map((place) => {
@@ -590,23 +630,22 @@ async function estimateVerifiedTripBudget({ itinerary, destination, startDate, e
         ...cost,
         currency: 'PHP',
         searchedAt: grounded.searchedAt,
-        sources: cost.sourceUrls.map((url) => grounded.sources.find((source) => source.url === url)).filter(Boolean),
+        sources: cost.sourceUrls.map((url) => citationSources.get(url)).filter(Boolean),
       } : { placeId: place.placeId, lowPhp: null, highPhp: null, sourceUrls: [] };
     }),
     tripBudget: {
     status: complete ? 'complete-estimate' : 'partial-estimate',
     currency: 'PHP',
-    travelerCount: 1,
     startDate,
     endDate,
     searchedAt: grounded.searchedAt,
     searchSuggestionHtml: grounded.searchSuggestionHtml,
-    totalLowPhp: total?.lowPhp ?? null,
-    totalHighPhp: total?.highPhp ?? null,
-    categories,
-    sources: grounded.sources.slice(0, 12),
+    totalLowPhp: activityTotal?.lowPhp ?? null,
+    totalHighPhp: activityTotal?.highPhp ?? null,
+    pricedActivityCount: activityBands.length,
+    totalActivityCount: places.length,
+    sources: Array.from(citationSources.values()).slice(0, 12),
     missingActivityPriceCount: Math.max(0, places.length - activityBands.length),
-    originIncluded: Boolean(origin),
     },
   };
 }
@@ -810,6 +849,37 @@ async function executeSidekickTool(name, args, email) {
   throw new Error(`Unsupported Sidekick tool: ${name}`);
 }
 
+async function fetchGooglePlaceReviewData(placeId) {
+  const normalizedPlaceId = String(placeId || '').trim();
+  if (!/^[A-Za-z0-9_-]{4,200}$/.test(normalizedPlaceId)) throw new Error('A valid Google Place ID is required to look up reviews.');
+  const apiKey = getMapsApiKey();
+  if (!apiKey) throw new Error('Google Maps is not configured on the backend.');
+  const response = await fetch(`https://places.googleapis.com/v1/places/${encodeURIComponent(normalizedPlaceId)}`, {
+    headers: {
+      'X-Goog-Api-Key': apiKey,
+      'X-Goog-FieldMask': 'id,displayName,rating,userRatingCount,reviews.rating,reviews.text,reviews.publishTime,googleMapsUri',
+    },
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const reason = data?.error?.message || data?.error?.status;
+    throw new Error(reason ? `Google review lookup failed: ${reason}` : 'Google reviews are currently unavailable.');
+  }
+  const reviews = (Array.isArray(data.reviews) ? data.reviews : []).slice(0, 5).map((review) => ({
+    rating: review.rating != null && Number.isFinite(Number(review.rating)) ? Number(review.rating) : null,
+    publishTime: String(review.publishTime || ''),
+    text: String(review.text?.text || '').slice(0, 1200),
+  })).filter((review) => review.text);
+  return {
+    available: true,
+    rating: data.rating != null && Number.isFinite(Number(data.rating)) ? Number(data.rating) : null,
+    ratingCount: data.userRatingCount != null && Number.isFinite(Number(data.userRatingCount)) ? Number(data.userRatingCount) : null,
+    reviewsReturnedCount: Array.isArray(data.reviews) ? Math.min(data.reviews.length, 5) : 0,
+    reviews,
+    googleMapsUri: String(data.googleMapsUri || ''),
+  };
+}
+
 async function generateAgentReply({ email, message, selectedDestination, history, profile }) {
   const currentProfile = await getUserProfileContext(email);
   const effectiveProfile = {
@@ -824,6 +894,13 @@ async function generateAgentReply({ email, message, selectedDestination, history
 
   if (isDevelopmentMode) {
     const actions = [];
+    if (/\b(?:reviews?|reviewed|ratings?|visitor feedback|worth visiting|what do (?:visitors|people) think)\b/i.test(lowerMessage)) {
+      return {
+        reply: `I can’t access live visitor reviews for ${selectedDestination?.name || 'this place'} in development mode, so I can’t give a review-based assessment here.`,
+        actions,
+        meta: { source: 'development-mock', isDevelopmentMock: true },
+      };
+    }
     const replacingMuseum = /\breplace\b.*\b(cheaper|museum)\b/.test(lowerMessage);
     if (/\bremove\b.*\bmuseum\b/.test(lowerMessage) && !replacingMuseum) actions.push({ type: 'REMOVE_ITINERARY_ACTIVITY', match: 'museum' });
     if (replacingMuseum) actions.push({ type: 'REPLACE_ITINERARY_ACTIVITY', match: 'museum', activity: { title: 'Tokyo Ramen Street', location: '1-9-1 Marunouchi, Chiyoda City, Tokyo', placeId: 'mock-place-tokyo-ramen-street', dayNumber: 1, note: 'Cheaper development replacement.' } });
@@ -851,13 +928,25 @@ async function generateAgentReply({ email, message, selectedDestination, history
     return { reply: `Your travel styles are ${styles}. Your interests are ${interests}. Your preferred places are ${places}.`, meta: { source: 'sidekick-direct' } };
   }
 
+  const reviewData = selectedDestination?.reviewData || null;
+  const reviewContext = reviewData?.available
+    ? [
+      `Google rating: ${reviewData.rating != null && Number.isFinite(Number(reviewData.rating)) ? `${reviewData.rating}/5` : 'not available'}`,
+      `Google rating count: ${reviewData.ratingCount != null && Number.isFinite(Number(reviewData.ratingCount)) ? reviewData.ratingCount : 'not available'}`,
+      `Review excerpts available: ${Number(reviewData.reviewsReturnedCount) || 0} (Google returns at most five, sorted by relevance).`,
+      `Review excerpts: ${JSON.stringify((reviewData.reviews || []).map((review) => ({ rating: review.rating, date: review.publishTime, text: review.text })))}`,
+      `Google Maps listing: ${reviewData.googleMapsUri || 'not available'}`,
+    ].join('\n')
+    : 'Google review data: unavailable; do not infer review themes or claim a review-based recommendation.';
   const contextText = [
     'You are Sidekick AI, the authenticated user\'s travel app agent.',
     `Current screen context: ${selectedDestination?.name || 'not selected'}`,
+    `Destination review data:\n${reviewContext}`,
     `Current preferences: ${JSON.stringify(currentProfile)}`,
     `Conversation history: ${(history || []).slice(-3).map((item) => `${item.role}: ${String(item.content || '').slice(0, 500)}`).join(' | ') || 'none'}`,
   ].join('\n');
   const systemInstruction = 'You are Sidekick, a friendly and practical Philippine travel companion. Sound natural and conversational, like a helpful person. Avoid canned greetings, repeated "How can I help?" questions, stiff phrases, and unnecessary recaps. Do not greet again in the middle of a conversation. If the user already named a destination, respond to it with useful, specific information instead of asking what they want to do. Ask at most one focused question when needed. Match answer length to the request: answer simple questions briefly, but give enough detail for planning, comparisons, budgets, and explanations. For itinerary requests, include specific places, scheduled times, estimated time at each stop, and route durations only when verified. Do not invent prices or route times; say when they are unavailable. Format answers with short paragraphs separated by blank lines, simple bullet lists for multiple options or steps, and **bold** sparingly for important places, times, or decisions. Avoid headings for short replies and never output raw JSON, Markdown fences, or decorative symbols. Use Sidekick tools for current user data and mutations. Never claim a mutation succeeded unless its tool succeeds. Ask for confirmation before destructive deletion. Do not reveal credentials or internal tool details.';
+  const reviewSystemInstruction = `${systemInstruction} When asked what visitors think or to assess a place from reviews, use only supplied Google rating and review excerpts, summarize praise or criticism only when supported, distinguish the aggregate rating from the sample of up to five excerpts, and clearly say when review details are unavailable. Paraphrase reviews rather than quoting them, and include the supplied Google Maps listing link when available.`;
   const contents = [{ role: 'user', parts: [{ text: `${contextText}\n\nUser request:\n${message}` }] }];
   const uiActions = [];
 
@@ -866,7 +955,7 @@ async function generateAgentReply({ email, message, selectedDestination, history
     if (!apiKey) throw new Error('AI_API_KEY is missing. Add your Gemini API key in backend/.env.');
     const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(getAiModel())}:generateContent`, {
       method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
-      body: JSON.stringify({ contents, systemInstruction: { parts: [{ text: systemInstruction }] }, tools: [{ functionDeclarations: sidekickToolDeclarations }], generationConfig: { maxOutputTokens: 2400, responseMimeType: 'text/plain' } }),
+      body: JSON.stringify({ contents, systemInstruction: { parts: [{ text: reviewSystemInstruction }] }, tools: [{ functionDeclarations: sidekickToolDeclarations }], generationConfig: { maxOutputTokens: 2400, responseMimeType: 'text/plain' } }),
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
@@ -893,7 +982,7 @@ async function generateAgentReply({ email, message, selectedDestination, history
         try {
           const continuationResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(getAiModel())}:generateContent`, {
             method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
-            body: JSON.stringify({ contents: continuationContents, systemInstruction: { parts: [{ text: systemInstruction }] }, generationConfig: { maxOutputTokens: 1200, responseMimeType: 'text/plain' } }),
+            body: JSON.stringify({ contents: continuationContents, systemInstruction: { parts: [{ text: reviewSystemInstruction }] }, generationConfig: { maxOutputTokens: 1200, responseMimeType: 'text/plain' } }),
           });
           const continuationData = await continuationResponse.json().catch(() => ({}));
           const continuationCandidate = continuationData?.candidates?.[0];
@@ -1113,7 +1202,7 @@ async function calculateVerifiedRoute(from, to, travelMode = 'DRIVE') {
   return calculateRoute({ origin: from, destination: to, travelMode });
 }
 
-async function generateVerifiedItineraryFromAi({ email, message, selectedDestination, profile, origin }) {
+async function generateVerifiedItineraryFromAi({ email, message, selectedDestination, profile, origin, includeBudgetResearch = false }) {
   const userProfile = profile || (email ? await getUserProfileContext(email) : {});
   const destination = selectedDestination?.name || selectedDestination?.destination || userProfile.preferredPlaces?.[0];
   if (!destination) throw new Error('Please provide a destination before generating an itinerary.');
@@ -1127,6 +1216,12 @@ async function generateVerifiedItineraryFromAi({ email, message, selectedDestina
   const maxActivitiesPerDay = Math.max(2, Math.min(3, Math.floor(32 / durationDays)));
   const requestedMode = String(profile?.transportation || '').toUpperCase();
   const travelMode = ['DRIVE', 'TRANSIT', 'WALK', 'BICYCLE'].includes(requestedMode) ? requestedMode : 'DRIVE';
+  const parsedBudgetAmount = Number(String(profile?.budgetAmountPhp ?? '').replace(/[₱,\s]/g, ''));
+  const budgetAmountPhp = Number.isSafeInteger(parsedBudgetAmount) && parsedBudgetAmount > 0 && parsedBudgetAmount <= 100000000
+    ? parsedBudgetAmount
+    : null;
+  const activityBudgetTargetPhp = budgetAmountPhp ? Math.floor(budgetAmountPhp * 0.25) : null;
+  const dailyActivityBudgetTargetPhp = activityBudgetTargetPhp ? Math.floor(activityBudgetTargetPhp / durationDays) : null;
 
   if (isDevelopmentMode) {
     const request = String(message || '').toLowerCase();
@@ -1196,7 +1291,10 @@ async function generateVerifiedItineraryFromAi({ email, message, selectedDestina
     `Destination: ${destination}`,
     `Interests: ${(userProfile.interests || []).join(', ') || 'not provided'}`,
     `Travel style: ${(userProfile.travelTypes || []).join(', ') || 'not provided'}`,
-    `Budget: ${Number(profile?.budgetAmountPhp) > 0 ? `PHP ${Number(profile.budgetAmountPhp).toLocaleString()} total for the whole trip` : userProfile.budget || 'not provided'}`,
+    `Whole-trip budget: ${budgetAmountPhp ? `PHP ${budgetAmountPhp.toLocaleString()} total, including travel to/from, lodging, meals, local transport, activities, and a contingency` : userProfile.budget || 'not provided'}`,
+    ...(activityBudgetTargetPhp ? [
+      `Activity ticket/admission planning allowance: about PHP ${activityBudgetTargetPhp.toLocaleString()} total, roughly PHP ${dailyActivityBudgetTargetPhp.toLocaleString()} per day. This is an initial allocation of about 25% of the whole-trip budget, not a quote. Preserve the rest for transport, lodging, meals, and contingency; lower the activity allowance if destination travel or lodging is unusually costly.`,
+    ] : []),
     `Dates: ${startDate} through ${endDate}, inclusive (${durationDays} days).`,
     `Pace: ${profile?.pace || 'not provided'}`,
     `Must-see: ${(profile?.mustSee || []).join(', ') || 'none'}`,
@@ -1206,7 +1304,7 @@ async function generateVerifiedItineraryFromAi({ email, message, selectedDestina
   const preliminaryText = await callGeminiApi({
     message,
     contextText: planningContext,
-    systemInstruction: `Return JSON only: {"destination":"...","durationDays":${durationDays},"days":[{"day":1,"theme":"...","activities":[{"searchQuery":"specific real place or category","category":"attraction|restaurant|cafe|museum|hotel|shopping|activity","durationMinutes":90,"notes":"..."}]}]}. Return exactly ${durationDays} days from ${startDate} through ${endDate}, with 2-${maxActivitiesPerDay} activities per day. Keep activities within the selected destination area, avoid repeating places, and account for the user's budget and interests. Never invent place IDs, addresses, ratings, opening hours, ticket prices, transportation fares, or travel times. Leave unverified prices unavailable.`,
+    systemInstruction: `Return JSON only: {"destination":"...","durationDays":${durationDays},"days":[{"day":1,"theme":"...","activities":[{"searchQuery":"specific real place or category","category":"attraction|restaurant|cafe|museum|hotel|shopping|activity","durationMinutes":90,"notes":"..."}]}]}. Return exactly ${durationDays} days from ${startDate} through ${endDate}, with 2-${maxActivitiesPerDay} activities per day. Keep activities within the selected destination area and match the user's interests. Treat the stated budget as the ceiling for the whole trip, not just admission tickets. When the user provided a numeric budget, use the activity allowance as a target across the days: favor worthwhile free or low-cost places, then include the best paid experiences that fit. Use the allowance deliberately without forcing the user to spend it all; leave the rest for transport, lodging, meals, and contingency. Avoid repeating places. Never invent place IDs, addresses, ratings, opening hours, ticket prices, transportation fares, or travel times. Leave unverified prices unavailable.`,
     responseMimeType: 'application/json',
     maxOutputTokens: 3000,
   });
@@ -1239,15 +1337,67 @@ async function generateVerifiedItineraryFromAi({ email, message, selectedDestina
     candidates: places.slice(0, 3).map((place) => ({
       placeId: place.placeId, name: place.name, address: place.address,
       lat: place.lat, lng: place.lng, rating: place.rating,
-      ratingCount: place.ratingCount, types: place.types,
+      ratingCount: place.ratingCount, types: place.types, priceLevel: place.priceLevel,
     })),
   }));
-  const candidateSetsByKey = new Map(candidateSets.map((item) => [item.sourceKey, item]));
+  let candidatePriceResearch = null;
+  const candidatePriceByPlaceId = new Map();
+  if (includeBudgetResearch && budgetAmountPhp) {
+    const researchCandidates = [];
+    const seenCandidateIds = new Set();
+    // Price each activity's best candidate first, then alternatives, with a
+    // bounded request so long trips do not create an unbounded Search call.
+    for (let candidateRank = 0; candidateRank < 3 && researchCandidates.length < 40; candidateRank++) {
+      for (const set of candidateSets) {
+        const place = set.candidates[candidateRank];
+        if (!place || seenCandidateIds.has(place.placeId) || researchCandidates.length >= 40) continue;
+        seenCandidateIds.add(place.placeId);
+        researchCandidates.push({
+          placeId: place.placeId,
+          title: place.name,
+          location: place.address,
+          category: set.category || 'activity',
+        });
+      }
+    }
+    if (researchCandidates.length) {
+      try {
+        candidatePriceResearch = await estimateVerifiedTripBudget({
+          itinerary: [{ activities: researchCandidates }],
+          destination,
+          startDate,
+          endDate,
+        });
+        for (const cost of candidatePriceResearch.activityCosts || []) {
+          if (cost?.placeId) candidatePriceByPlaceId.set(String(cost.placeId), cost);
+        }
+      } catch (error) {
+        console.warn('Budget-aware candidate price research was unavailable:', error.message);
+      }
+    }
+  }
+  const pricedCandidateSets = candidateSets.map((set) => ({
+    ...set,
+    candidates: set.candidates.map((place) => {
+      const cost = candidatePriceByPlaceId.get(String(place.placeId));
+      return {
+        ...place,
+        admissionEstimate: cost && Number.isFinite(cost.lowPhp) && Number.isFinite(cost.highPhp)
+          ? { lowPhp: cost.lowPhp, highPhp: cost.highPhp, basis: cost.basis || 'web estimate' }
+          : null,
+      };
+    }),
+  }));
+  const candidateSetsByKey = new Map(pricedCandidateSets.map((item) => [item.sourceKey, item]));
+
+  const finalBudgetContext = budgetAmountPhp
+    ? `The user's whole-trip ceiling is PHP ${budgetAmountPhp.toLocaleString()}. Keep admission and ticket spending around PHP ${activityBudgetTargetPhp.toLocaleString()} total (about PHP ${dailyActivityBudgetTargetPhp.toLocaleString()} per day), leaving the remaining budget for intercity travel, lodging, meals, local transport, and contingency. This activity allowance is an initial planning allocation, not a verified full-trip quote.`
+    : `Budget style: ${userProfile.budget || 'not provided'}. Prefer good value and include free/low-cost alternatives when a venue's price is unknown.`;
 
   const finalText = await callGeminiApi({
-    message: JSON.stringify({ preliminary, candidateSets }),
-    contextText: `Create the final structured itinerary only from the Google Places candidates grouped under each sourceKey for the user's selected destination: ${destination}. A candidate can only be used for its own sourceKey. Group each day geographically, prefer better-rated relevant candidates when ratings are available, avoid duplicates, and do not invent or infer business hours, prices, addresses, or travel times. Route times will be calculated separately from the final chosen stop order.`,
-    systemInstruction: `Return JSON only with {"trip":{"destination":"","startDate":"${startDate}","endDate":"${endDate}","durationDays":${durationDays},"budget":"","currency":"PHP"},"days":[{"day":1,"theme":"","activities":[{"sourceKey":"d1a1","placeId":"exact candidate id","durationMinutes":90,"category":"attraction|restaurant|cafe|museum|hotel|shopping|activity","notes":""}]}]}. Return exactly ${durationDays} days and 1-${maxActivitiesPerDay} activities per day. Every placeId must be one of the candidates listed under that activity's sourceKey. Return no cost or schedule times; the app will add route-aware timing and researched costs. Do not include unsupported factual claims.`,
+    message: JSON.stringify({ preliminary, candidateSets: pricedCandidateSets }),
+    contextText: `Create the final structured itinerary only from the Google Places candidates grouped under each sourceKey for the user's selected destination: ${destination}. ${finalBudgetContext} A candidate can only be used for its own sourceKey. Candidate admission estimates, when present, come from web price research; unknown prices are not free. Group each day geographically, avoid duplicates, and use each day's activity allowance as a target while staying within the total allowance where verified prices make that possible. Prefer well-rated, worthwhile activities and use the available budget intentionally; do not add weak stops just to spend more. If the budget is tight, choose publicly free or lower-priced activities and reduce paid experiences while keeping the user's must-see places where possible. For restaurants, use Google price level only as a rough meal-cost signal, not as an admission fee. Do not invent business hours, prices, addresses, or travel times. Route times will be calculated separately from the final chosen stop order.`,
+    systemInstruction: `Return JSON only with {"trip":{"destination":"","startDate":"${startDate}","endDate":"${endDate}","durationDays":${durationDays},"budget":"","currency":"PHP"},"days":[{"day":1,"theme":"","activities":[{"sourceKey":"d1a1","placeId":"exact candidate id","durationMinutes":90,"category":"attraction|restaurant|cafe|museum|hotel|shopping|activity","notes":""}]}]}. Return exactly ${durationDays} days and 1-${maxActivitiesPerDay} activities per day. Every placeId must be one of the candidates listed under that activity's sourceKey. Treat the budget as a whole-trip ceiling, not permission to spend it all on attractions. Use supplied admission estimates to plan paid activities around both the daily and total allowance, favoring the best experiences for the money. For unknown admission prices, prefer publicly free places and never assume an unknown price is free. For restaurants, Google price level is only a rough meal-cost signal, not an admission price. Preserve time and money for transport, lodging, meals, and contingency. Use the allowance intentionally without forcing the user to spend it all. Return no cost or schedule times; the app will add estimated schedules and researched costs. Do not include unsupported factual claims.`,
     responseMimeType: 'application/json',
     maxOutputTokens: 5000,
   });
@@ -1268,19 +1418,88 @@ async function generateVerifiedItineraryFromAi({ email, message, selectedDestina
         || candidates.find((candidate) => !usedPlaces.has(candidate.placeId));
       if (!place || !verifiedById.has(place.placeId)) continue;
       usedPlaces.add(place.placeId);
-      selected.push({ activity, place });
+      selected.push({ activity, place, sourceKey: String(activity.sourceKey || '') });
     }
     if (!selected.length) {
       const fallback = candidateSets.find((set) => set.day === dayIndex + 1 && set.candidates.some((place) => !usedPlaces.has(place.placeId)));
       const place = fallback?.candidates.find((candidate) => !usedPlaces.has(candidate.placeId));
       if (place) {
         usedPlaces.add(place.placeId);
-        selected.push({ activity: { durationMinutes: 90, category: fallback.category, notes: '' }, place });
+        selected.push({ activity: { durationMinutes: 90, category: fallback.category, notes: '' }, place, sourceKey: fallback.sourceKey });
       }
     }
     if (!selected.length) throw new Error(`Google Places could not verify activities for day ${dayIndex + 1}.`);
     return selected;
   });
+
+  if (candidatePriceResearch && activityBudgetTargetPhp) {
+    const rebalanceWithinLimit = (entries, limit) => {
+      const totalHigh = () => entries.reduce((sum, entry) => {
+        const cost = candidatePriceByPlaceId.get(String(entry.place.placeId));
+        return sum + (cost && Number.isFinite(cost.highPhp) ? cost.highPhp : 0);
+      }, 0);
+      let currentTotalHigh = totalHigh();
+      if (currentTotalHigh <= limit) return;
+      const selectedByCost = entries
+        .map((entry) => ({ entry, cost: candidatePriceByPlaceId.get(String(entry.place.placeId)) }))
+        .filter(({ cost }) => cost && Number.isFinite(cost.highPhp))
+        .sort((a, b) => b.cost.highPhp - a.cost.highPhp);
+      for (const { entry, cost: currentCost } of selectedByCost) {
+        if (currentTotalHigh <= limit) break;
+        const set = candidateSetsByKey.get(entry.sourceKey);
+        const alternatives = (set?.candidates || [])
+          .filter((candidate) => candidate.placeId !== entry.place.placeId && !usedPlaces.has(candidate.placeId))
+          .map((candidate) => ({ candidate, cost: candidatePriceByPlaceId.get(String(candidate.placeId)) }))
+          .filter(({ candidate, cost }) => cost && Number.isFinite(cost.highPhp)
+            && cost.highPhp < currentCost.highPhp
+            && (!entry.place.rating || !candidate.rating || candidate.rating >= entry.place.rating - 0.7))
+          .sort((a, b) => a.cost.highPhp - b.cost.highPhp || Number(b.candidate.rating || 0) - Number(a.candidate.rating || 0));
+        const replacement = alternatives[0];
+        if (!replacement) continue;
+        const projectedTotal = currentTotalHigh - currentCost.highPhp + replacement.cost.highPhp;
+        if (projectedTotal >= currentTotalHigh) continue;
+        usedPlaces.delete(entry.place.placeId);
+        usedPlaces.add(replacement.candidate.placeId);
+        entry.place = replacement.candidate;
+        currentTotalHigh = projectedTotal;
+      }
+    };
+    if (dailyActivityBudgetTargetPhp) {
+      for (const day of selectedDays) rebalanceWithinLimit(day, dailyActivityBudgetTargetPhp);
+    }
+    rebalanceWithinLimit(selectedDays.flat(), activityBudgetTargetPhp);
+  }
+
+  let selectedBudgetResearch = null;
+  if (candidatePriceResearch) {
+    const selectedActivities = selectedDays.flat();
+    const liveActivityCosts = selectedActivities.map(({ place }) => {
+      const cost = candidatePriceByPlaceId.get(String(place.placeId));
+      return cost || { placeId: place.placeId, lowPhp: null, highPhp: null, sourceUrls: [] };
+    });
+    const pricedBands = liveActivityCosts.filter((cost) => Number.isFinite(cost.lowPhp) && Number.isFinite(cost.highPhp));
+    if (pricedBands.length) {
+      const total = addPriceBands(pricedBands);
+      const sourceMap = new Map(liveActivityCosts.flatMap((cost) => cost.sources || []).map((source) => [source.url, source]));
+      selectedBudgetResearch = {
+        liveActivityCosts,
+        liveTripBudget: {
+          status: pricedBands.length === selectedActivities.length ? 'complete-estimate' : 'partial-estimate',
+          currency: 'PHP',
+          startDate,
+          endDate,
+          searchedAt: candidatePriceResearch.tripBudget.searchedAt,
+          searchSuggestionHtml: candidatePriceResearch.tripBudget.searchSuggestionHtml,
+          totalLowPhp: total?.lowPhp ?? null,
+          totalHighPhp: total?.highPhp ?? null,
+          pricedActivityCount: pricedBands.length,
+          totalActivityCount: selectedActivities.length,
+          missingActivityPriceCount: Math.max(0, selectedActivities.length - pricedBands.length),
+          sources: Array.from(sourceMap.values()).slice(0, 12),
+        },
+      };
+    }
+  }
 
   const routePairs = selectedDays.flatMap((activities, dayIndex) => activities.slice(1).map((entry, index) => ({
     day: dayIndex + 1,
@@ -1352,8 +1571,11 @@ async function generateVerifiedItineraryFromAi({ email, message, selectedDestina
       durationDays,
       source: 'gemini-google-verified',
       generatedAt: new Date().toISOString(),
-      budget: finalPlan.trip?.budget || userProfile.budget || null,
-      budgetAmountPhp: Number(profile?.budgetAmountPhp) > 0 ? Number(profile.budgetAmountPhp) : null,
+      budget: finalPlan.trip?.budget || (budgetAmountPhp ? `PHP ${budgetAmountPhp.toLocaleString()} total` : userProfile.budget || null),
+      budgetAmountPhp,
+      activityBudgetTargetPhp,
+      dailyActivityBudgetTargetPhp,
+      ...(selectedBudgetResearch || {}),
       currency: finalPlan.trip?.currency || 'PHP',
       verifiedPlaceCount: verifiedPlaces.length,
       origin: origin ? {
@@ -1454,6 +1676,45 @@ async function sendOtpEmail(email, otp) {
   });
 }
 
+async function validateRegistrationEmail(email) {
+  const apiKey = String(process.env.ZEROBOUNCE_API_KEY || '').trim();
+  if (!apiKey) {
+    throw new Error('Email validation is not configured. Set ZEROBOUNCE_API_KEY on the backend.');
+  }
+
+  const url = new URL('https://api.zerobounce.net/v2/validate');
+  url.searchParams.set('api_key', apiKey);
+  url.searchParams.set('email', email);
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  let response;
+  try {
+    response = await fetch(url, { signal: controller.signal });
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      throw new Error('Email verification timed out.');
+    }
+    throw new Error('Email verification service is unreachable.');
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  if (!response.ok) throw new Error(`Email verification service returned HTTP ${response.status}.`);
+  const result = await response.json();
+  if (result?.error || !['valid', 'invalid', 'catch-all', 'unknown', 'spamtrap', 'abuse', 'do_not_mail'].includes(result?.status)) {
+    throw new Error('Email verification service returned an unexpected response.');
+  }
+  return { status: result.status, subStatus: result.sub_status || '' };
+}
+
+function isUndeliverableEmailError(error) {
+  const responseCode = Number(error?.responseCode || 0);
+  const message = `${error?.code || ''} ${error?.response || ''} ${error?.message || ''}`;
+  return [550, 551, 553].includes(responseCode)
+    || /5\.1\.1|5\.1\.0|unknown user|user unknown|mailbox.*not found|recipient.*not found|address.*not found/i.test(message);
+}
+
 async function cleanUnverifiedUsers() {
   try {
     const pool = await getPool();
@@ -1483,65 +1744,219 @@ app.get('/health', async (req, res) => {
   }
 });
 
-app.post('/api/register', async (req, res) => {
-  const { name, email, password, termsAccepted } = req.body || {};
-  const normalizedEmail = normalizeEmail(email);
+app.post('/api/register/start', async (req, res) => {
+  const email = normalizeEmail(req.body?.email);
 
-  if (isRateLimited(`register:${req.ip}`, 5, 15 * 60 * 1000)) {
-    return sendJson(res, 429, { error: 'Too many registration attempts. Please try again later.' });
+  if (isRateLimited(`register-start:${req.ip}`, 5, 15 * 60 * 1000)
+    || isRateLimited(`register-start-email:${email}`, 3, 60 * 60 * 1000)) {
+    return sendJson(res, 429, { error: 'Too many verification requests. Please try again later.' });
   }
-
-  if (!name || !normalizedEmail || !password) {
-    return sendJson(res, 400, { error: 'Name, email and password are required.' });
-  }
-
-  if (!emailPattern.test(normalizedEmail)) {
+  if (!emailPattern.test(email)) {
     return sendJson(res, 400, { error: 'Please enter a valid email address.' });
   }
 
-  if (termsAccepted !== true) {
-    return sendJson(res, 400, { error: 'You must agree to the Terms and Conditions to register.' });
-  }
+  let stagedUserId = null;
+  let createdPendingUser = false;
+  try {
+    let emailCheck;
+    try {
+      emailCheck = await validateRegistrationEmail(email);
+    } catch (error) {
+      console.error('Registration email validation failed:', error.message);
+      return sendJson(res, 503, { error: 'We could not check this email address right now. Please try again shortly.' });
+    }
+    if (emailCheck.status === 'invalid') {
+      const error = emailCheck.subStatus === 'mailbox_not_found'
+        ? 'This email address does not exist. Check it and try again.'
+        : 'This email address appears unable to receive email. Check it and try another address.';
+      return sendJson(res, 422, { error });
+    }
+    if (['spamtrap', 'abuse', 'do_not_mail'].includes(emailCheck.status)) {
+      return sendJson(res, 422, { error: 'This email address cannot be used for registration. Please use another address.' });
+    }
 
-  if (String(password).length < 8) {
-    return sendJson(res, 400, { error: 'Password must be at least 8 characters.' });
+    const pool = await getPool();
+    const existing = await pool.query`
+      SELECT user_id, is_verified FROM dbo.users WHERE email = ${email}
+    `;
+    if (existing.recordset[0]?.is_verified) {
+      return sendJson(res, 409, { error: 'An account already exists for this email. Please log in instead.' });
+    }
+
+    stagedUserId = existing.recordset[0]?.user_id || null;
+    if (!stagedUserId) {
+      const unusedPasswordHash = await bcrypt.hash(crypto.randomBytes(48).toString('base64url'), 10);
+      const insert = await pool.query`
+        INSERT INTO dbo.users (name, email, password_hash, is_verified, terms_accepted, terms_accepted_at)
+        OUTPUT INSERTED.user_id
+        VALUES ('Pending registration', ${email}, ${unusedPasswordHash}, 0, 0, NULL)
+      `;
+      stagedUserId = insert.recordset?.[0]?.user_id || null;
+      createdPendingUser = true;
+    }
+    if (!stagedUserId) throw new Error('Unable to create the pending email verification.');
+
+    const otp = createOtp();
+    await pool.query`
+      UPDATE dbo.otp_verifications SET is_used = 1
+      WHERE user_id = ${stagedUserId} AND is_used = 0
+    `;
+    const otpInsert = await pool.query`
+      INSERT INTO dbo.otp_verifications (user_id, otp_code_hash, expires_at)
+      OUTPUT INSERTED.otp_id
+      VALUES (${stagedUserId}, ${hashOtp(otp)}, DATEADD(minute, 10, SYSUTCDATETIME()))
+    `;
+    const otpId = otpInsert.recordset?.[0]?.otp_id;
+    try {
+      await sendOtpEmail(email, otp);
+    } catch (error) {
+      if (otpId) {
+        await pool.query`UPDATE dbo.otp_verifications SET is_used = 1 WHERE otp_id = ${otpId}`;
+      }
+      if (createdPendingUser) {
+        await pool.query`DELETE FROM dbo.otp_verifications WHERE user_id = ${stagedUserId}`;
+        await pool.query`DELETE FROM dbo.users WHERE user_id = ${stagedUserId} AND is_verified = 0`;
+      }
+      if (isUndeliverableEmailError(error)) {
+        return sendJson(res, 422, { error: 'That email address does not appear to exist or cannot receive email. Check it and try again.' });
+      }
+      console.error('Registration verification email failed:', error.message);
+      return sendJson(res, 503, { error: 'We could not send a verification code right now. Please try again later.' });
+    }
+
+    return sendJson(res, 200, { email, verification_required: true });
+  } catch (error) {
+    console.error('Registration verification setup failed:', error.message);
+    return sendJson(res, 500, { error: 'Unable to start registration right now. Please try again.' });
+  }
+});
+
+app.post('/api/register/verify-code', async (req, res) => {
+  const email = normalizeEmail(req.body?.email);
+  const otp = String(req.body?.otp || '').trim();
+  if (isRateLimited(`register-verify:${req.ip}`, 10, 15 * 60 * 1000)) {
+    return sendJson(res, 429, { error: 'Too many verification attempts. Please try again later.' });
+  }
+  if (!emailPattern.test(email) || !/^\d{6}$/.test(otp)) {
+    return sendJson(res, 400, { error: 'Invalid or expired code. Please try again.' });
   }
 
   try {
     const pool = await getPool();
-    const passwordHash = await bcrypt.hash(String(password), 10);
+    const result = await pool.query`
+      SELECT TOP 1 o.otp_id, o.otp_code_hash, o.expires_at, o.is_used, o.verification_attempts
+      FROM dbo.otp_verifications o
+      JOIN dbo.users u ON u.user_id = o.user_id
+      WHERE u.email = ${email} AND u.is_verified = 0
+      ORDER BY o.created_at DESC
+    `;
+    const verification = result.recordset[0];
+    const isValid = verification
+      && !verification.is_used
+      && verification.verification_attempts < 5
+      && new Date(verification.expires_at).getTime() > Date.now()
+      && crypto.timingSafeEqual(Buffer.from(verification.otp_code_hash), Buffer.from(hashOtp(otp)));
+    if (!isValid) {
+      if (verification && !verification.is_used) {
+        await pool.query`
+          UPDATE dbo.otp_verifications
+          SET verification_attempts = verification_attempts + 1
+          WHERE otp_id = ${verification.otp_id}
+        `;
+      }
+      return sendJson(res, 400, { error: 'Invalid or expired code. Please try again.' });
+    }
+    return sendJson(res, 200, { verified: true });
+  } catch (error) {
+    console.error('Registration email code verification failed:', error.message);
+    return sendJson(res, 500, { error: 'Unable to verify that code right now. Please try again.' });
+  }
+});
 
-    const existing = await pool.query`SELECT user_id, is_verified FROM dbo.users WHERE email = ${normalizedEmail}`;
-    if (existing.recordset.length > 0) {
-      return sendJson(res, 409, {
-        error: existing.recordset[0].is_verified
-          ? 'User already exists.'
-          : 'A verification is already pending for this email.',
-      });
+app.post('/api/register/complete', async (req, res) => {
+  const { name, password, termsAccepted } = req.body || {};
+  const email = normalizeEmail(req.body?.email);
+  const otp = String(req.body?.otp || '').trim();
+  const trimmedName = String(name || '').trim();
+  if (isRateLimited(`register-complete:${req.ip}`, 5, 15 * 60 * 1000)) {
+    return sendJson(res, 429, { error: 'Too many registration attempts. Please try again later.' });
+  }
+  if (!emailPattern.test(email) || !/^\d{6}$/.test(otp)) {
+    return sendJson(res, 400, { error: 'Verify your email before completing registration.' });
+  }
+  if (!trimmedName || !password) return sendJson(res, 400, { error: 'Name and password are required.' });
+  if (trimmedName.length > 200) return sendJson(res, 400, { error: 'Name must be 200 characters or less.' });
+  if (String(password).length < 8) return sendJson(res, 400, { error: 'Password must be at least 8 characters.' });
+  if (termsAccepted !== true) return sendJson(res, 400, { error: 'You must agree to the Terms and Conditions to register.' });
+
+  const passwordHash = await bcrypt.hash(String(password), 10);
+  const transaction = new sql.Transaction(await getPool());
+  let transactionStarted = false;
+  let transactionCommitted = false;
+  try {
+    await transaction.begin();
+    transactionStarted = true;
+    const lookup = new sql.Request(transaction);
+    const verificationResult = await lookup.input('email', email).query(`
+      SELECT TOP 1 o.otp_id, o.user_id, o.otp_code_hash, o.expires_at, o.is_used, o.verification_attempts
+      FROM dbo.otp_verifications o WITH (UPDLOCK, HOLDLOCK)
+      JOIN dbo.users u WITH (UPDLOCK, HOLDLOCK) ON u.user_id = o.user_id
+      WHERE u.email = @email AND u.is_verified = 0
+      ORDER BY o.created_at DESC
+    `);
+    const verification = verificationResult.recordset[0];
+    const isValid = verification
+      && !verification.is_used
+      && verification.verification_attempts < 5
+      && new Date(verification.expires_at).getTime() > Date.now()
+      && crypto.timingSafeEqual(Buffer.from(verification.otp_code_hash), Buffer.from(hashOtp(otp)));
+    if (!isValid) {
+      if (verification && !verification.is_used) {
+        const invalid = new sql.Request(transaction);
+        await invalid.input('otpId', verification.otp_id).query(`
+          UPDATE dbo.otp_verifications
+          SET verification_attempts = verification_attempts + 1
+          WHERE otp_id = @otpId
+        `);
+      }
+      await transaction.commit();
+      return sendJson(res, 400, { error: 'Invalid or expired code. Request a new code and try again.' });
     }
 
-    const result = await pool.query`
-      INSERT INTO dbo.users (name, email, password_hash, is_verified, terms_accepted, terms_accepted_at)
-      OUTPUT INSERTED.user_id
-      VALUES (${String(name).trim()}, ${normalizedEmail}, ${passwordHash}, 0, 1, SYSUTCDATETIME())
-    `;
-    const userId = result.recordset?.[0]?.user_id;
-    const otp = createOtp();
-
-    await pool.query`
-      INSERT INTO dbo.otp_verifications (user_id, otp_code_hash, expires_at)
-      VALUES (${userId}, ${hashOtp(otp)}, DATEADD(minute, 10, SYSUTCDATETIME()))
-    `;
-    await sendOtpEmail(normalizedEmail, otp);
-
-    return sendJson(res, 201, {
-      user_id: userId ?? null,
-      email: normalizedEmail,
-      verification_required: true,
-    });
+    const finalize = new sql.Request(transaction);
+    const updateResult = await finalize
+      .input('userId', verification.user_id)
+      .input('otpId', verification.otp_id)
+      .input('name', trimmedName)
+      .input('passwordHash', passwordHash)
+      .query(`
+        UPDATE dbo.users
+        SET name = @name, password_hash = @passwordHash, is_verified = 1,
+            terms_accepted = 1, terms_accepted_at = SYSUTCDATETIME()
+        OUTPUT INSERTED.user_id, INSERTED.name, INSERTED.email
+        WHERE user_id = @userId AND is_verified = 0;
+        UPDATE dbo.otp_verifications SET is_used = 1 WHERE otp_id = @otpId;
+      `);
+    if (!updateResult.recordset?.length) {
+      await transaction.rollback();
+      return sendJson(res, 409, { error: 'This registration is no longer pending. Please start again.' });
+    }
+    await transaction.commit();
+    transactionCommitted = true;
+    return sendJson(res, 201, { user: updateResult.recordset[0], verified: true });
   } catch (error) {
-    return sendJson(res, 500, { error: error.message });
+    if (transactionStarted && !transactionCommitted) {
+      try { await transaction.rollback(); } catch (rollbackError) {
+        console.error('Registration transaction rollback failed:', rollbackError.message);
+      }
+    }
+    console.error('Registration completion failed:', error.message);
+    return sendJson(res, 500, { error: 'Unable to complete registration right now. Please try again.' });
   }
+});
+
+app.post('/api/register', async (req, res) => {
+  return sendJson(res, 410, { error: 'Registration now requires email verification first. Restart signup from the registration page.' });
 });
 
 app.post('/api/verify-otp', async (req, res) => {
@@ -1562,6 +1977,7 @@ app.post('/api/verify-otp', async (req, res) => {
       FROM dbo.otp_verifications o
       JOIN dbo.users u ON u.user_id = o.user_id
       WHERE u.email = ${email} AND u.is_verified = 0
+        AND u.terms_accepted = 1 AND u.name <> 'Pending registration'
       ORDER BY o.created_at DESC
     `;
     const verification = result.recordset[0];
@@ -1621,7 +2037,15 @@ app.post('/api/resend-otp', async (req, res) => {
       INSERT INTO dbo.otp_verifications (user_id, otp_code_hash, expires_at, resend_count)
       VALUES (${userId}, ${hashOtp(otp)}, DATEADD(minute, 10, SYSUTCDATETIME()), 1)
     `;
-    await sendOtpEmail(email, otp);
+    try {
+      await sendOtpEmail(email, otp);
+    } catch (error) {
+      console.error('Verification email resend failed:', error.message);
+      if (isUndeliverableEmailError(error)) {
+        return sendJson(res, 422, { error: 'That email address does not appear to exist or cannot receive email. Check it and try again.' });
+      }
+      return sendJson(res, 503, { error: 'We could not send a verification code right now. Please try again later.' });
+    }
     return sendJson(res, 200, { sent: true });
   } catch (error) {
     return sendJson(res, 500, { error: error.message });
@@ -1663,6 +2087,81 @@ app.post('/api/login', async (req, res) => {
     });
   } catch (error) {
     return sendJson(res, 500, { error: error.message });
+  }
+});
+
+app.get('/api/app-reviews/status/:email', async (req, res) => {
+  const email = normalizeEmail(req.params.email);
+  if (!emailPattern.test(email)) return sendJson(res, 400, { error: 'A valid email address is required.' });
+  try {
+    const pool = await getPool();
+    const userResult = await pool.query`
+      SELECT user_id FROM dbo.users WHERE email = ${email} AND is_verified = 1
+    `;
+    const userId = userResult.recordset[0]?.user_id;
+    if (!userId) return sendJson(res, 404, { error: 'User not found.' });
+    const reviewResult = await pool.query`
+      SELECT TOP 1 review_id FROM dbo.app_reviews WHERE user_id = ${userId}
+    `;
+    return sendJson(res, 200, { submitted: reviewResult.recordset.length > 0 });
+  } catch (error) {
+    console.error('App review status lookup failed:', error.message);
+    return sendJson(res, 500, { error: 'Unable to check app review status.' });
+  }
+});
+
+app.post('/api/app-reviews', async (req, res) => {
+  const email = normalizeEmail(req.body?.email);
+  const rating = Number(req.body?.rating);
+  const rawReview = req.body?.review;
+  if (!emailPattern.test(email)) return sendJson(res, 400, { error: 'A valid email address is required.' });
+  if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+    return sendJson(res, 400, { error: 'Choose a rating from 1 to 5 stars.' });
+  }
+  if (rawReview !== null && rawReview !== undefined && typeof rawReview !== 'string') {
+    return sendJson(res, 400, { error: 'The review must be text.' });
+  }
+  const trimmedReview = typeof rawReview === 'string' ? rawReview.trim() : '';
+  if (trimmedReview.length > 2000) return sendJson(res, 400, { error: 'Reviews must be 2,000 characters or less.' });
+  if (isRateLimited(`app-review:${email}`, 10, 60 * 60 * 1000)) {
+    return sendJson(res, 429, { error: 'Too many review attempts. Please try again later.' });
+  }
+
+  try {
+    const pool = await getPool();
+    const userResult = await pool.query`
+      SELECT user_id FROM dbo.users WHERE email = ${email} AND is_verified = 1
+    `;
+    const userId = userResult.recordset[0]?.user_id;
+    if (!userId) return sendJson(res, 404, { error: 'User not found.' });
+    const reviewText = trimmedReview || null;
+    await pool.query`
+      BEGIN TRY
+        BEGIN TRANSACTION;
+        IF EXISTS (
+          SELECT 1 FROM dbo.app_reviews WITH (UPDLOCK, HOLDLOCK) WHERE user_id = ${userId}
+        )
+        BEGIN
+          UPDATE dbo.app_reviews
+          SET rating = ${rating}, review_text = ${reviewText}, updated_at = SYSUTCDATETIME()
+          WHERE user_id = ${userId};
+        END
+        ELSE
+        BEGIN
+          INSERT INTO dbo.app_reviews (user_id, rating, review_text)
+          VALUES (${userId}, ${rating}, ${reviewText});
+        END;
+        COMMIT TRANSACTION;
+      END TRY
+      BEGIN CATCH
+        IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
+        THROW;
+      END CATCH;
+    `;
+    return sendJson(res, 200, { saved: true });
+  } catch (error) {
+    console.error('App review save failed:', error.message);
+    return sendJson(res, 500, { error: 'Unable to save your rating right now.' });
   }
 });
 
@@ -2007,7 +2506,7 @@ app.post('/api/maps/place-details', async (req, res) => {
     const response = await fetch(detailsUrl, {
       headers: {
         'X-Goog-Api-Key': apiKey,
-        'X-Goog-FieldMask': 'id,formattedAddress,location,types,photos.name,photos.authorAttributions',
+        'X-Goog-FieldMask': 'id,formattedAddress,location,types,photos.name,photos.authorAttributions,photos.googleMapsUri',
       },
     });
     const data = await response.json().catch(() => ({}));
@@ -2058,12 +2557,26 @@ app.post('/api/chat', async (req, res) => {
   const { email, message = '', selectedDestination, history = [], profile = {} } = req.body || {};
   const normalizedEmail = normalizeEmail(email);
   const userMessage = String(message || '').trim();
+  let chatDestination = selectedDestination && typeof selectedDestination === 'object' ? { ...selectedDestination } : null;
+  const asksDestinationReviews = /\b(?:reviews?|reviewed|ratings?|visitor feedback|worth visiting|what do (?:visitors|people) think)\b/i.test(userMessage);
 
   if (!userMessage) {
     return sendJson(res, 400, { error: 'Please enter a message for the assistant.' });
   }
 
   try {
+    if (asksDestinationReviews) {
+      if (!isDevelopmentMode && chatDestination?.placeId) {
+        try {
+          chatDestination.reviewData = await fetchGooglePlaceReviewData(chatDestination.placeId);
+        } catch (error) {
+          chatDestination.reviewData = { available: false };
+        }
+      } else {
+        chatDestination = { ...(chatDestination || {}), reviewData: { available: false } };
+      }
+    }
+
     const storedProfile = await getUserProfileContext(normalizedEmail);
     const userProfile = {
       ...storedProfile,
@@ -2077,7 +2590,7 @@ app.post('/api/chat', async (req, res) => {
     const response = await generateAgentReply({
       email: normalizedEmail,
       message: userMessage,
-      selectedDestination,
+      selectedDestination: chatDestination,
       history,
       profile: userProfile,
     });
@@ -2129,6 +2642,7 @@ app.post('/api/itinerary/generate', async (req, res) => {
       message: userMessage,
       selectedDestination,
       profile: userProfile,
+      includeBudgetResearch: true,
       origin: origin && (origin.address || origin.name) ? {
         name: String(origin.name || '').slice(0, 120),
         address: String(origin.address || origin.name || '').slice(0, 240),
@@ -2147,7 +2661,7 @@ app.post('/api/itinerary/generate', async (req, res) => {
 });
 
 app.post('/api/itinerary/estimate-budget', async (req, res) => {
-  const { email, itinerary, destination, startDate, endDate, budgetTier, budgetAmountPhp, origin = null, travelMode = 'DRIVE' } = req.body || {};
+  const { email, itinerary, destination, startDate, endDate } = req.body || {};
   const normalizedEmail = normalizeEmail(email);
   if (!normalizedEmail) return sendJson(res, 401, { error: 'Authentication is required to estimate a trip budget.' });
   if (!Array.isArray(itinerary) || itinerary.length < 1 || itinerary.length > 14) {
@@ -2180,13 +2694,6 @@ app.post('/api/itinerary/estimate-budget', async (req, res) => {
       destination: String(destination || '').slice(0, 180),
       startDate,
       endDate,
-      budgetTier: String(budgetTier || 'Mid-Range').slice(0, 60),
-      budgetAmountPhp: Number.isFinite(Number(budgetAmountPhp)) && Number(budgetAmountPhp) > 0 ? Number(budgetAmountPhp) : null,
-      origin: origin && (origin.address || origin.name) ? {
-        address: String(origin.address || '').slice(0, 240),
-        name: String(origin.name || '').slice(0, 120),
-      } : null,
-      travelMode: String(travelMode || 'DRIVE').slice(0, 40),
     });
     return sendJson(res, 200, { ok: true, ...estimate });
   } catch (error) {

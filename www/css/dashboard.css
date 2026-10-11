@@ -557,6 +557,51 @@
     font: inherit;
 }
 
+.destination-plan-controls {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    margin-top: 12px;
+}
+
+.destination-plan-field {
+    min-width: 0;
+}
+
+.destination-plan-field label {
+    display: block;
+    margin-bottom: 5px;
+    color: #64748b;
+    font-size: 12px;
+}
+
+.destination-plan-field input {
+    width: 100%;
+    min-width: 0;
+    min-height: 40px;
+    padding: 8px 10px;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    background: #fff;
+    color: #1f2937;
+}
+
+.destination-plan-field input:focus {
+    outline: 2px solid #6b8cae;
+    outline-offset: 1px;
+}
+
+.destination-plan-error {
+    margin: 7px 0 0;
+    color: #b42318;
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+.destination-plan-error[hidden] {
+    display: none;
+}
+
 .destination-actions {
     margin-top: 12px;
 }

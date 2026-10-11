@@ -63,4 +63,8 @@
     margin-bottom: 24px;
     max-width: 320px;
 }
+
+.button-group a,
+.button-group a:hover {
+    text-decoration: none;
 }

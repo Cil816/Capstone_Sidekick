@@ -10,6 +10,10 @@
     .reminders { display:flex; flex-direction:column; gap:10px; margin-top:12px }
     .reminder { padding:12px; border-radius:10px; background:#fff; border:1px solid #eee; display:flex; justify-content:space-between; align-items:center }
     .reminder .meta { font-size:13px; color:#6b7280 }
+    .reminder-bulk-actions { display:flex; justify-content:flex-end; gap:8px; flex-wrap:wrap; margin-top:20px }
+    .reminder-bulk-actions[hidden] { display:none }
+    .reminder-remove-all { color:#b42336; border-color:#f1c5cb }
+    .reminder-bulk-actions button:disabled { opacity:.55; cursor:not-allowed }
     input, select { padding:8px; border-radius:8px; border:1px solid #E5E7EB }
     .btn { padding:8px 12px }
     .settings-shortcut { margin-top: 20px; padding: 12px; border: 1px solid #E5E7EB; border-radius: 12px; background: #F9FAFB; }
@@ -52,7 +56,11 @@
           </div>
         </div>
 
-        <div class="reminders" id="reminders" style="margin-top:20px"></div>
+        <div class="reminder-bulk-actions" id="reminder-bulk-actions" role="group" aria-label="Reminder actions" hidden>
+          <button id="turn-off-all-reminders" class="btn btn-outline" type="button">Turn off all</button>
+          <button id="remove-all-reminders" class="btn btn-outline reminder-remove-all" type="button">Remove all</button>
+        </div>
+        <div class="reminders" id="reminders" style="margin-top:12px"></div>
 
         <div class="settings-shortcut" style="display:flex;justify-content:flex-end;">
           <a href="settings.html" class="btn btn-outline" style="text-decoration:none;">Notification Settings</a>

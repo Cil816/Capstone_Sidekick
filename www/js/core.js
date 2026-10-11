@@ -150,17 +150,40 @@ function getApiBaseUrl() {
   const configuredBase = String(window.SIDEKICK_CONFIG?.apiBaseUrl || "").trim().replace(/\/+$/, "");
   if (configuredBase) return configuredBase;
   const isAndroidApp = /Android/i.test(navigator.userAgent) && window.location.protocol === "https:";
-  return isAndroidApp ? "http://10.0.2.2:3001" : "http://localhost:3001";
+  if (isAndroidApp) return "http://10.0.2.2:3001";
+
+  const localHosts = new Set(["localhost", "127.0.0.1", "0.0.0.0"]);
+  const isLocalDevelopment = window.location.protocol === "file:"
+    || localHosts.has(window.location.hostname);
+  return isLocalDevelopment ? "http://localhost:3001" : "";
 }
 
 async function apiRequest(path, options = {}) {
-  const response = await fetch(`${getApiBaseUrl()}${path}`, {
-    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
-    ...options,
-  });
-  const payload = await response.json().catch(() => ({}));
+  let response;
+  try {
+    response = await fetch(`${getApiBaseUrl()}${path}`, {
+      ...options,
+      headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+    });
+  } catch (error) {
+    if (error?.name === "AbortError") throw error;
+    throw new Error("Unable to connect to the Sidekick server. Check the API server address and your connection.");
+  }
+
+  const responseText = await response.text();
+  let payload = {};
+  try {
+    payload = responseText ? JSON.parse(responseText) : {};
+  } catch {
+    // Use the HTTP status below rather than exposing an HTML error page.
+  }
   if (!response.ok) {
-    throw new Error(payload.error || "The server request failed.");
+    const message = typeof payload.error === "string" && payload.error.trim()
+      ? payload.error
+      : response.status === 404
+        ? `The configured server does not provide this API endpoint (HTTP 404): ${path}. Deploy the current Sidekick backend and set SIDEKICK_CONFIG.apiBaseUrl to its public URL.`
+        : `The Sidekick server returned HTTP ${response.status} for ${path}.`;
+    throw new Error(message);
   }
   return payload;
 }
@@ -1074,6 +1097,24 @@ if (document.readyState === "loading") {
     void syncDeviceNotificationsForEmail(email);
   }
 
+  function removeAllRemindersFor(email) {
+    const reminders = getRemindersFor(email);
+    const scheduledIds = reminders.map((reminder) => ({ id: reminderNotificationId(email, reminder.id) }));
+    setRemindersFor(email, []);
+    if (hasLocalNotifications() && scheduledIds.length) {
+      try {
+        const cancellation = LocalNotifications.cancel({ notifications: scheduledIds });
+        cancellation?.catch?.(() => {});
+      } catch (e) {}
+    }
+  }
+
+  function turnOffAllRemindersFor(email) {
+    const reminders = getRemindersFor(email).map((reminder) => ({ ...reminder, suppressed: true }));
+    setRemindersFor(email, reminders);
+    scheduleAllFor(email);
+  }
+
   function getUpcomingRemindersCount(email, withinMs = 24 * 60 * 60 * 1000) {
     try {
       const list = getRemindersFor(email) || [];
@@ -1299,6 +1340,8 @@ if (document.readyState === "loading") {
     window.SidekickCore.getRemindersFor = getRemindersFor;
     window.SidekickCore.addReminderFor = addReminderFor;
     window.SidekickCore.removeReminderFor = removeReminderFor;
+    window.SidekickCore.removeAllRemindersFor = removeAllRemindersFor;
+    window.SidekickCore.turnOffAllRemindersFor = turnOffAllRemindersFor;
     window.SidekickCore.scheduleAllFor = scheduleAllFor;
     window.SidekickCore.syncRemindersFromItinerary = syncRemindersFromItinerary;
     window.SidekickCore.updateItineraryActivitySchedule = updateItineraryActivitySchedule;

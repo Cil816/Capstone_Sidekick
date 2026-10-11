@@ -1,6 +1,8 @@
 const COMPANION_MEMORY_KEY = "sidekick.aiCompanionByEmail.v2";
 const SELECTED_DESTINATION_KEY = "sidekick.selectedDestination.v1";
 const PENDING_ITINERARY_KEY = "sidekick.pendingItineraryByEmail.v1";
+const PENDING_CHAT_MESSAGE_KEY = "sidekick.pendingChatMessage.v1";
+const CHAT_SCROLL_POSITION_KEY = "sidekick.chatScrollPosition.v1";
 
 const TRAINING_CONTEXT = [
   "You are Sidekick Companion, trained to help users plan Philippines travel inside the Sidekick app.",
@@ -137,10 +139,6 @@ function sumPriceBands(bands) {
 function buildItineraryDraftReply(draft) {
   const days = Array.isArray(draft.itinerary) ? draft.itinerary : [];
   const budget = draft.meta?.liveTripBudget || null;
-  const categories = budget?.categories || [];
-  const mealPerDay = categories.find((item) => item.key === "meals")?.perDay;
-  const localTransportPerDay = categories.find((item) => item.key === "localTransport")?.perDay;
-  const lodgingPerNight = categories.find((item) => item.key === "lodging")?.perNight;
   const activityCosts = new Map((draft.meta?.liveActivityCosts || []).map((item) => [String(item.placeId), item]));
   const lines = [`I’ve prepared a ${days.length}-day itinerary for **${draft.meta?.destination || "your trip"}**. Take a look at the schedule and estimates below; it isn’t saved yet.`];
 
@@ -159,23 +157,13 @@ function buildItineraryDraftReply(draft) {
       const ticketText = ticket ? `; admission ${formatPhpBand(ticket)}` : "";
       return `- **${activity.timeLabel || "Flexible"}: ${activity.title}** (${visit}${transfer}${ticketText})`;
     });
-    const costParts = [];
-    if (knownTickets) costParts.push(`known admission ${formatPhpBand(knownTickets)}`);
-    if (hasPriceBand(mealPerDay)) costParts.push(`meals ${formatPhpBand(mealPerDay)}/day`);
-    if (hasPriceBand(localTransportPerDay)) costParts.push(`local transport ${formatPhpBand(localTransportPerDay)}/day`);
-    const dailyBands = missingTicketCount === 0 && knownTickets && hasPriceBand(mealPerDay)
-      && hasPriceBand(localTransportPerDay) && (index === days.length - 1 || hasPriceBand(lodgingPerNight))
-      ? [knownTickets, mealPerDay, localTransportPerDay, ...(index < days.length - 1 && lodgingPerNight ? [lodgingPerNight] : [])]
-      : [];
-    const dailyEstimate = sumPriceBands(dailyBands);
-    if (index < days.length - 1) costParts.push(`lodging ${formatPhpBand(lodgingPerNight)}/night`);
-    const dayCost = dailyEstimate
-      ? `Estimated day total: **${formatPhpBand(dailyEstimate)}**${index === days.length - 1 ? " (no lodging night included)" : " (includes one lodging night)"}.`
-      : `Estimated costs: ${costParts.length ? costParts.join("; ") : "unavailable"}${missingTicketCount ? `; ${missingTicketCount} admission price(s) unverified` : ""}. A complete day total could not be verified.`;
-    if (dailyEstimate) {
-      day.estimatedDayCostPhp = Math.round((dailyEstimate.lowPhp + dailyEstimate.highPhp) / 2);
-      day.estimatedDayCostLowPhp = dailyEstimate.lowPhp;
-      day.estimatedDayCostHighPhp = dailyEstimate.highPhp;
+    const dayCost = knownTickets
+      ? `Estimated activity costs: **${formatPhpBand(knownTickets)}** for ${ticketBands.length}/${activities.length} priced stops${missingTicketCount ? `; ${missingTicketCount} stop(s) have no verified price` : ""}.`
+      : `Activity cost estimates are unavailable for these stops (${ticketBands.length}/${activities.length} priced).`;
+    if (knownTickets) {
+      day.estimatedDayCostPhp = Math.round((knownTickets.lowPhp + knownTickets.highPhp) / 2);
+      day.estimatedDayCostLowPhp = knownTickets.lowPhp;
+      day.estimatedDayCostHighPhp = knownTickets.highPhp;
     }
     lines.push(`\n**Day ${day.dayNumber || index + 1}${day.dateLabel ? ` — ${day.dateLabel}` : ""}**`);
     lines.push("");
@@ -185,14 +173,16 @@ function buildItineraryDraftReply(draft) {
   }
 
   const totalBudget = hasPriceBand(budget && { lowPhp: budget.totalLowPhp, highPhp: budget.totalHighPhp })
-    ? `\n\nResearch-based full-trip estimate for one adult: **${formatPhpBand({ lowPhp: budget.totalLowPhp, highPhp: budget.totalHighPhp })}**.`
-    : "\n\nI couldn’t verify a complete full-trip cost range. Any listed prices are partial estimates; check current prices before booking.";
-  const lodgingNote = hasPriceBand(lodgingPerNight) ? ` Lodging is estimated separately at ${formatPhpBand(lodgingPerNight)} per night.` : " Lodging prices could not be verified.";
+    ? `\n\nEstimated activity costs: **${formatPhpBand({ lowPhp: budget.totalLowPhp, highPhp: budget.totalHighPhp })}** for ${budget.pricedActivityCount || 0}/${budget.totalActivityCount || days.reduce((count, day) => count + (day.activities || []).length, 0)} priced stops.`
+    : "\n\nI couldn’t verify a total for the activity costs; any unavailable prices are left out rather than guessed.";
+  const enteredBudget = Number(draft.meta?.budgetAmountPhp) > 0
+    ? ` I used your whole-trip budget of PHP ${Number(draft.meta.budgetAmountPhp).toLocaleString()} to choose value-focused stops, with about PHP ${Number(draft.meta.activityBudgetTargetPhp || Math.floor(Number(draft.meta.budgetAmountPhp) * 0.25)).toLocaleString()} planned for activity admission. The rest is reserved for travel, lodging, meals, local transport, and a buffer; the activity prices above are estimates, not a complete trip quote.`
+    : '';
   const sourcesNote = draft.meta?.isDevelopmentMock
     ? " This is development sample data, not a live verified estimate."
     : budget?.sources?.length ? " These ranges use current web sources; prices can change. Route durations are estimates and traffic can change."
       : " Live price sources were unavailable, so I have not filled in unsupported prices.";
-  return `${lines.join("\n")}${totalBudget}${lodgingNote}${sourcesNote}\n\nWould you like me to save this itinerary? Reply **Save itinerary** or **Discard**.`;
+  return `${lines.join("\n")}${totalBudget}${enteredBudget}${sourcesNote}\n\nWould you like me to save this itinerary? Reply **Save itinerary** or **Discard**.`;
 }
 
 function normalizeBudget(value) {
@@ -406,6 +396,11 @@ async function generateItineraryWithBackend(prefs, state, userText) {
 }
 
 async function researchDraftBudget(email, draft, state) {
+  if (draft.meta?.liveTripBudget && Array.isArray(draft.meta.liveActivityCosts)) {
+    draft.meta.liveTripBudgetCacheKey = getDraftBudgetCacheKey(draft);
+    draft.meta.liveTripBudgetCachedAt = Date.now();
+    return draft;
+  }
   if (draft.meta?.isDevelopmentMock) {
     draft.meta.liveTripBudget = null;
     draft.meta.liveActivityCosts = [];
@@ -437,6 +432,31 @@ async function researchDraftBudget(email, draft, state) {
     draft.meta.budgetEstimateError = error.message || "Price research is unavailable.";
     return draft;
   }
+}
+
+function getDraftBudgetCacheKey(itineraryData) {
+  const meta = itineraryData?.meta || {};
+  const input = JSON.stringify({
+    destination: String(meta.destination || meta.focusedPlace || ''),
+    startDate: String(meta.startDate || ''),
+    endDate: String(meta.endDate || ''),
+    itinerary: (itineraryData?.itinerary || []).map((day) => ({
+      activities: (day.activities || []).map((activity) => ({
+        placeId: String(activity.placeId || ''),
+        title: String(activity.title || ''),
+        location: String(activity.location || ''),
+        category: String(activity.category || 'activity'),
+      })),
+    })),
+  });
+  let firstHash = 0x811c9dc5;
+  let secondHash = 0x9e3779b9;
+  for (let index = 0; index < input.length; index += 1) {
+    const code = input.charCodeAt(index);
+    firstHash = Math.imul(firstHash ^ code, 0x01000193);
+    secondHash = Math.imul(secondHash ^ code, 0x85ebca6b);
+  }
+  return `trip-budget-v3-${(firstHash >>> 0).toString(16)}-${(secondHash >>> 0).toString(16)}`;
 }
 
 function fallbackReply(userText, state, prefs) {
@@ -640,9 +660,34 @@ function getSendBtn() {
   return document.querySelector(".send-btn");
 }
 
+function getChatScrollPositionKey(email) {
+  return `${CHAT_SCROLL_POSITION_KEY}:${String(email || "").trim().toLowerCase()}`;
+}
+
+function saveChatScrollPosition() {
+  const el = getMessagesEl();
+  const session = window.SidekickCore.getAuthSession();
+  if (!el || !session?.email) return;
+  try {
+    sessionStorage.setItem(getChatScrollPositionKey(session.email), String(el.scrollTop));
+  } catch (error) {}
+}
+
+function restoreChatScrollPosition(email) {
+  const el = getMessagesEl();
+  if (!el || !email) return;
+  try {
+    const savedPosition = Number(sessionStorage.getItem(getChatScrollPositionKey(email)));
+    if (Number.isFinite(savedPosition) && savedPosition >= 0) el.scrollTop = savedPosition;
+  } catch (error) {}
+}
+
 function scrollToBottom() {
   const el = getMessagesEl();
-  if (el) el.scrollTop = el.scrollHeight;
+  if (!el) return;
+  // Scroll only when an actual chat message was added.
+  el.scrollTop = el.scrollHeight;
+  requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
 }
 
 function formatAssistantMessage(content) {
@@ -653,7 +698,8 @@ function formatAssistantMessage(content) {
     return window.SidekickCore.escapeHtml(normalized)
       .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
       .replace(/(^|[\s(])\*([^*\n]+)\*(?=$|[\s).,!?:;])/g, "$1<em>$2</em>")
-      .replace(/`([^`\n]+)`/g, "<code>$1</code>");
+      .replace(/`([^`\n]+)`/g, "<code>$1</code>")
+      .replace(/\[([^\]]+)\]\((https:\/\/(?:www\.google\.com\/maps\/|maps\.google\.com\/)[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
   };
   const blocks = String(content || "").trim().split(/\n\s*\n/).filter(Boolean);
   return blocks.map((block) => {
@@ -700,7 +746,6 @@ function renderMessages(messages) {
   if (!el) return;
   el.innerHTML = "";
   messages.forEach((m) => appendMessageToDom(m.role, m.content, m.ts, false));
-  scrollToBottom();
 }
 
 function showTypingIndicator() {
@@ -711,7 +756,6 @@ function showTypingIndicator() {
   wrapper.className = "message ai-message";
   wrapper.innerHTML = `<div class="message-bubble typing-bubble"><span></span><span></span><span></span></div>`;
   el.appendChild(wrapper);
-  scrollToBottom();
 }
 
 function removeTypingIndicator() {
@@ -738,6 +782,7 @@ function clearChat() {
   if (!session?.email) return;
 
   setChatForEmail(session.email, []);
+  try { sessionStorage.removeItem(getChatScrollPositionKey(session.email)); } catch (error) {}
   const prefs = window.SidekickCore.getPreferences() || {};
   const opening = `${window.SidekickCore.getInitialAssistantMessage(prefs)}\n\nI am trained as your Sidekick planning companion. Tell me your destination and trip length to start.`;
   setChatForEmail(session.email, [{ role: "ai", content: opening, ts: Date.now() }]);
@@ -761,12 +806,16 @@ async function sendMessage() {
   const input = getInputEl();
   const userText = String(input?.value || "").trim();
   if (!userText) return;
+  const selectedDestination = getSelectedDestination();
+  const asksDestinationReviews = Boolean(selectedDestination?.name)
+    && /\b(?:reviews?|reviewed|ratings?|visitor feedback|worth visiting|what do (?:visitors|people) think)\b/i.test(userText);
 
   isSending = true;
   const sendBtn = getSendBtn();
   if (sendBtn) sendBtn.disabled = true;
 
   appendMessageToDom("user", userText, Date.now(), true);
+  scrollToBottom();
   input.value = "";
   showTypingIndicator();
 
@@ -775,12 +824,20 @@ async function sendMessage() {
     const merged = applySignals(session.email, userText);
     const companionState = merged.state;
     let reply = "";
+    let generatedItineraryThisReply = false;
 
     if (merged.reset) {
       reply = "Companion memory reset. Tell me destination and number of days, then I can build your travel plan again.";
     } else {
       const pendingDraft = getPendingItinerary(session.email);
-      if (pendingDraft && isDraftRejection(userText)) {
+      if (asksDestinationReviews) {
+        try {
+          const backendReply = await askSidekickBackend(history, prefs, companionState, userText);
+          reply = await continueIncompleteReply(backendReply.reply || "I couldn’t retrieve review information for this place.", prefs, companionState, session.email);
+        } catch (error) {
+          reply = "I couldn’t retrieve current Google review details for this place. Please try again in a moment.";
+        }
+      } else if (pendingDraft && isDraftRejection(userText)) {
         setPendingItinerary(session.email, null);
         reply = "I discarded that itinerary draft. It wasn’t added to your saved itineraries.";
       } else if (pendingDraft && isSaveConfirmation(userText)) {
@@ -804,6 +861,7 @@ async function sendMessage() {
           await researchDraftBudget(session.email, draft, companionState);
           setPendingItinerary(session.email, draft);
           reply = buildItineraryDraftReply(draft);
+          generatedItineraryThisReply = true;
         } catch (error) {
           reply = `I couldn’t prepare a verified itinerary right now. ${String(error?.message || "Please check the destination and try again.")}`;
         }
@@ -827,9 +885,11 @@ async function sendMessage() {
     removeTypingIndicator();
     appendMessageToDom("ai", reply, Date.now(), true);
     scrollToBottom();
+    if (generatedItineraryThisReply) window.SidekickAppRating?.afterItineraryGenerated();
   } catch (e) {
     removeTypingIndicator();
     appendMessageToDom("ai", "I hit an issue while planning. Please try again.", Date.now(), false);
+    scrollToBottom();
   } finally {
     isSending = false;
     if (sendBtn) sendBtn.disabled = false;
@@ -851,6 +911,18 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   renderMessages(getChatForEmail(session.email));
+  restoreChatScrollPosition(session.email);
+  getMessagesEl()?.addEventListener("scroll", saveChatScrollPosition, { passive: true });
+  let pendingMessage = "";
+  try {
+    pendingMessage = String(sessionStorage.getItem(PENDING_CHAT_MESSAGE_KEY) || "").trim();
+    sessionStorage.removeItem(PENDING_CHAT_MESSAGE_KEY);
+  } catch (error) {}
+  if (pendingMessage) {
+    const input = getInputEl();
+    if (input) input.value = pendingMessage;
+    window.setTimeout(() => sendMessage(), 0);
+  }
 });
 
 window.sendMessage = sendMessage;

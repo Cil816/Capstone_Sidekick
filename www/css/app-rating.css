@@ -1,0 +1,19 @@
+.app-rating-modal { position: fixed; inset: 0; z-index: 13000; display: grid; place-items: center; padding: 20px; }
+.app-rating-modal[hidden], .app-rating-step[hidden], .app-rating-status[hidden] { display: none; }
+.app-rating-backdrop { position: absolute; inset: 0; background: rgba(15, 23, 42, .56); }
+.app-rating-panel { position: relative; width: min(100%, 390px); padding: 28px 22px 22px; border: 1px solid #dce8ef; border-radius: 22px; background: #fff; box-shadow: 0 22px 54px rgba(15, 23, 42, .24); color: #1e293b; text-align: center; }
+.app-rating-close { position: absolute; top: 8px; right: 11px; width: 36px; height: 36px; border: 0; border-radius: 50%; background: transparent; color: #64748b; font-size: 28px; line-height: 1; cursor: pointer; }
+.app-rating-panel h2 { margin: 4px 28px 6px; color: #183454; font-size: 21px; }
+.app-rating-panel p { margin: 0 0 16px; color: #64748b; font-size: 14px; }
+.app-rating-stars { display: flex; justify-content: center; gap: 7px; margin: 16px 0 14px; }
+.app-rating-stars button { padding: 2px; border: 0; background: transparent; color: #cbd5e1; font-size: 38px; line-height: 1.1; cursor: pointer; transition: color .15s ease, transform .15s ease; }
+.app-rating-stars button:hover, .app-rating-stars button:focus-visible, .app-rating-stars button.selected { color: #f5aa27; transform: scale(1.08); }
+.app-rating-stars button:focus-visible, .app-rating-close:focus-visible, .app-rating-not-now:focus-visible { outline: 2px solid #2c91b0; outline-offset: 3px; }
+.app-rating-not-now { margin-top: 4px; padding: 8px 14px; border: 0; background: transparent; color: #64748b; font: inherit; font-size: 14px; cursor: pointer; }
+.app-rating-panel label { display: block; margin: 10px 0 6px; color: #334155; font-size: 13px; font-weight: 650; text-align: left; }
+.app-rating-panel textarea { display: block; width: 100%; min-height: 104px; padding: 11px 12px; resize: vertical; border: 1px solid #d8e2ec; border-radius: 12px; color: #1e293b; font: inherit; font-size: 14px; }
+.app-rating-panel textarea:focus { outline: 2px solid rgba(44, 145, 176, .28); border-color: #2c91b0; }
+.app-rating-review-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+.app-rating-review-actions button { min-height: 42px; padding: 8px 13px; }
+.app-rating-review-actions button:disabled { opacity: .55; cursor: not-allowed; }
+.app-rating-status { margin: 12px 0 0 !important; color: #b42336 !important; font-size: 13px !important; text-align: left; }

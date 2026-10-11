@@ -1,5 +1,6 @@
 const GOOGLE_MAPS_API_KEY = (window.SIDEKICK_CONFIG && window.SIDEKICK_CONFIG.googleMapsApiKey) || "YOUR_RESTRICTED_GOOGLE_MAPS_KEY";
 const SELECTED_DESTINATION_KEY = "sidekick.selectedDestination.v1";
+const PENDING_CHAT_MESSAGE_KEY = "sidekick.pendingChatMessage.v1";
 
 let _gmapsLoadPromise = null;
 let _modalMap = null;
@@ -509,9 +510,8 @@ async function showDestinationDetails(place, prefs, session) {
   }
 
   async function calculateDestinationRoute(place) {
-    const modeSelect = document.getElementById("destination-travel-mode");
     const origin = _selectedOriginPlace;
-    const travelMode = modeSelect?.value || "DRIVE";
+    const travelMode = "DRIVE";
     if (!origin) {
       return;
     }
@@ -558,6 +558,10 @@ async function showDestinationDetails(place, prefs, session) {
   if (askAiBtn) {
     askAiBtn.onclick = () => {
       persistSelectedDestination(place);
+      const question = `What do visitors think of ${place.name}?`;
+      try {
+        sessionStorage.setItem(PENDING_CHAT_MESSAGE_KEY, question);
+      } catch (error) {}
       window.location.href = "chat.html";
     };
   }
@@ -566,6 +570,36 @@ async function showDestinationDetails(place, prefs, session) {
 async function generateFocusedItinerary(place, prefs, session) {
   if (!session?.email || !place?.name) return;
   const button = document.getElementById("destination-generate");
+  const budgetInput = document.getElementById("destination-plan-budget");
+  const daysInput = document.getElementById("destination-plan-days");
+  const errorEl = document.getElementById("destination-plan-error");
+  const budgetAmountPhp = Number(budgetInput?.value);
+  const durationDays = Number(daysInput?.value);
+  if (errorEl) {
+    errorEl.hidden = true;
+    errorEl.textContent = "";
+  }
+  if (!Number.isSafeInteger(budgetAmountPhp) || budgetAmountPhp < 1) {
+    if (errorEl) {
+      errorEl.textContent = "Enter a whole-number budget in Philippine pesos.";
+      errorEl.hidden = false;
+    }
+    budgetInput?.focus();
+    return;
+  }
+  if (!Number.isInteger(durationDays) || durationDays < 1 || durationDays > 14) {
+    if (errorEl) {
+      errorEl.textContent = "Choose a trip length from 1 to 14 days.";
+      errorEl.hidden = false;
+    }
+    daysInput?.focus();
+    return;
+  }
+  const startDate = (() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  })();
+  const budgetLabel = `PHP ${budgetAmountPhp.toLocaleString()} total`;
   if (button) {
     button.disabled = true;
     button.textContent = "Verifying itinerary...";
@@ -575,7 +609,7 @@ async function generateFocusedItinerary(place, prefs, session) {
       method: "POST",
       body: JSON.stringify({
         email: session.email,
-        message: `Plan a practical trip to ${place.name}. Use my saved preferences and suggest a balanced itinerary.`,
+        message: `Plan a practical ${durationDays}-day trip to ${place.name}. My total budget is PHP ${budgetAmountPhp}. Keep the full trip within this budget when possible. Use my saved preferences and suggest a balanced itinerary.`,
         selectedDestination: { name: place.name, placeId: place.placeId, lat: place.lat, lng: place.lng },
         origin: _selectedOriginPlace ? {
           name: _selectedOriginPlace.name,
@@ -587,8 +621,11 @@ async function generateFocusedItinerary(place, prefs, session) {
         profile: {
           ...(prefs || {}),
           preferredPlaces: [place.name, ...(prefs?.preferredPlaces || [])],
-          startDate: new Date().toISOString().slice(0, 10),
-          transportation: document.getElementById("destination-travel-mode")?.value || "DRIVE",
+          startDate,
+          durationDays,
+          budget: budgetLabel,
+          budgetAmountPhp,
+          transportation: "DRIVE",
         },
       }),
     });
@@ -599,13 +636,20 @@ async function generateFocusedItinerary(place, prefs, session) {
       meta: {
         ...(response.meta || {}),
         focusedPlace: place.name,
-        startDate: response.meta?.startDate || new Date().toISOString(),
+        startDate: response.meta?.startDate || startDate,
+        durationDays,
+        budget: budgetLabel,
+        budgetAmountPhp,
       },
     };
     window.SidekickCore.setItineraryByEmail(byEmail);
+    window.SidekickAppRating?.afterItineraryGenerated({ deferUntilItineraryPage: true });
     window.location.href = "itinerary.html";
   } catch (error) {
-    setSearchStatus(error.message || "Unable to generate a verified itinerary.");
+    if (errorEl) {
+      errorEl.textContent = error.message || "Unable to generate a verified itinerary.";
+      errorEl.hidden = false;
+    }
   } finally {
     if (button) {
       button.disabled = false;

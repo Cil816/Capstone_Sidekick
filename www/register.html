@@ -9,7 +9,7 @@
 </head>
 <body>
     <div class="app-container">
-        <div class="screen">
+        <div class="screen register-screen">
             <div class="header">
                 <a href="index.html" class="back-btn">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -23,30 +23,47 @@
                 <p class="screen-subtitle">Start your adventure today</p>
                 
                 <form class="form" id="register-form" novalidate>
-                    <div class="form-group">
-                        <label for="register-name">Full Name</label>
-                        <input type="text" id="register-name" placeholder="Juan Dela Cruz" required>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label for="register-email">Email</label>
-                        <input type="email" id="register-email" placeholder="your@email.com" required>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label for="register-password">Password</label>
-                        <input type="password" id="register-password" placeholder="••••••••" required>
-                    </div>
+                    <section id="registration-email-step">
+                        <div class="form-group">
+                            <label for="register-email">Email</label>
+                            <input type="email" id="register-email" placeholder="your@email.com" autocomplete="email" required>
+                        </div>
+                        <button type="button" class="btn btn-primary btn-full" id="send-registration-code">Verify email</button>
+                    </section>
 
-                    <label class="terms-check" for="terms-accepted">
-                        <input type="checkbox" id="terms-accepted" required>
-                        <span>I agree to the <button type="button" class="terms-link" id="terms-link">Terms and Conditions</button></span>
-                    </label>
-                    
-                    <button type="submit" class="btn btn-primary btn-full">Register</button>
+                    <section id="registration-code-step" hidden>
+                        <p class="screen-subtitle">Enter the 6-digit code sent to <strong id="registration-code-email"></strong>.</p>
+                        <div class="form-group">
+                            <label for="registration-otp">Verification code</label>
+                            <input type="text" id="registration-otp" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6">
+                        </div>
+                        <button type="button" class="btn btn-primary btn-full" id="confirm-registration-code">Confirm email</button>
+                        <div class="registration-secondary-actions" role="group" aria-label="Email verification options">
+                            <button type="button" class="registration-secondary-button" id="resend-registration-code">Resend code</button>
+                            <button type="button" class="registration-secondary-button" id="edit-registration-email">Change email</button>
+                        </div>
+                    </section>
+
+                    <section id="registration-details-step" hidden>
+                        <p class="screen-subtitle">Email verified: <strong id="registration-verified-email"></strong></p>
+                        <div class="form-group">
+                            <label for="register-name">Full Name</label>
+                            <input type="text" id="register-name" placeholder="Juan Dela Cruz" autocomplete="name">
+                        </div>
+                        <div class="form-group">
+                            <label for="register-password">Password</label>
+                            <input type="password" id="register-password" placeholder="••••••••" autocomplete="new-password">
+                        </div>
+                        <label class="terms-check" for="terms-accepted">
+                            <input type="checkbox" id="terms-accepted">
+                            <span>I agree to the <button type="button" class="terms-link" id="terms-link">Terms and Conditions</button></span>
+                        </label>
+                        <button type="submit" class="btn btn-primary btn-full" id="complete-registration">Create account</button>
+                    </section>
                 </form>
 
                 <div class="auth-error" id="auth-error" role="alert" aria-live="polite" hidden></div>
+                <div class="auth-error auth-success" id="registration-status" role="status" aria-live="polite" hidden></div>
                 
                 <div class="footer-text">
                     <span>Already have an account? </span>

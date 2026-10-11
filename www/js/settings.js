@@ -65,9 +65,11 @@ document.addEventListener('DOMContentLoaded', () => {
   const resetPrefsBtn = document.getElementById('reset-prefs-btn');
   if (resetPrefsBtn) {
     resetPrefsBtn.addEventListener('click', () => {
-      if (!confirm('Reset onboarding preferences?')) return;
+      if (!confirm('Reset your onboarding preferences and go to onboarding now?')) return;
       window.SidekickCore.resetPreferencesForEmail(session.email);
-      showMessage('Preferences reset. You can set them again in onboarding.');
+      localStorage.removeItem('userPreferences');
+      try { sessionStorage.removeItem('sidekick.onboarding.v1'); } catch (error) {}
+      window.location.href = 'onboarding.html';
     });
   }
 

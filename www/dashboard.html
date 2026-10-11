@@ -6,6 +6,7 @@
     <title>Sidekick AI - Dashboard</title>
     <link rel="stylesheet" href="css/common.css">
     <link rel="stylesheet" href="css/dashboard.css">
+    <link rel="stylesheet" href="css/app-rating.css">
 </head>
 <body>
     <div class="app-container">
@@ -62,13 +63,6 @@
                         </div>
                         <div id="destination-origin-status" class="destination-origin-status" role="status" aria-live="polite"></div>
                         <div id="destination-origin-results" class="destination-origin-results" role="listbox" aria-label="Starting location suggestions" hidden></div>
-                        <label for="destination-travel-mode">Travel mode</label>
-                        <select id="destination-travel-mode">
-                            <option value="DRIVE">Driving</option>
-                            <option value="TRANSIT">Public transit</option>
-                            <option value="WALK">Walking</option>
-                            <option value="BICYCLE">Bicycling</option>
-                        </select>
                         <button id="destination-calculate-route" class="btn btn-outline" type="button">Calculate route</button>
                     </div>
                     <div id="destination-map" class="destination-map">Map loading...</div>
@@ -89,11 +83,23 @@
                             <pre id="destination-route-error-details"></pre>
                         </details>
                     </div>
+                    <div class="destination-plan-controls">
+                        <div class="destination-plan-field">
+                            <label for="destination-plan-budget">Total budget (PHP)</label>
+                            <input id="destination-plan-budget" type="number" min="1" step="1" inputmode="numeric" placeholder="Enter your budget" required />
+                        </div>
+                        <div class="destination-plan-field">
+                            <label for="destination-plan-days">Trip length (days)</label>
+                            <input id="destination-plan-days" type="number" min="1" max="14" step="1" inputmode="numeric" placeholder="1–14 days" required />
+                        </div>
+                    </div>
+                    <p id="destination-plan-error" class="destination-plan-error" role="status" aria-live="polite" hidden></p>
                     <div class="destination-actions">
                         <button id="destination-generate" class="btn btn-primary" type="button">Generate itinerary for this place</button>
                         <button id="destination-ask-ai" class="btn btn-outline" type="button">Ask AI</button>
                     </div>
                 </div>
+
             </div>
             
         </div>
@@ -139,6 +145,7 @@
 
     <script src="js/config.local.js"></script>
     <script src="js/core.js"></script>
+    <script src="js/app-rating.js"></script>
     <script src="js/dashboard.js"></script>
     <script src="js/nav.js"></script>
 </body>

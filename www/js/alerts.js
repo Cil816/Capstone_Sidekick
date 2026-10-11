@@ -19,6 +19,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const addBtn = document.getElementById('add');
   const syncBtn = document.getElementById('sync-itinerary');
   const listEl = document.getElementById('reminders');
+  const bulkActionsEl = document.getElementById('reminder-bulk-actions');
+  const turnOffAllBtn = document.getElementById('turn-off-all-reminders');
+  const removeAllBtn = document.getElementById('remove-all-reminders');
   const itineraryEditorEl = document.getElementById('itinerary-editor');
   const itineraryEditorTitleEl = document.getElementById('itinerary-editor-title');
   const itineraryEditorNoteEl = document.getElementById('itinerary-editor-note');
@@ -54,6 +57,8 @@ document.addEventListener('DOMContentLoaded', () => {
     listEl.innerHTML = '';
     const reminders = (window.SidekickCore.getRemindersFor(session.email) || []).slice();
     reminders.sort((a,b) => (Number(a.dueAt||0) - Number(b.dueAt||0)));
+    if (bulkActionsEl) bulkActionsEl.hidden = reminders.length === 0;
+    if (turnOffAllBtn) turnOffAllBtn.disabled = reminders.length === 0 || reminders.every((reminder) => reminder.suppressed);
 
     const now = Date.now();
     const upcoming = reminders.filter(r => !r.firedAt && Number(r.dueAt||0) >= now);
@@ -147,6 +152,26 @@ document.addEventListener('DOMContentLoaded', () => {
           alert('Itinerary sync not available.');
         }
       } catch (err) { }
+    });
+  }
+
+  if (turnOffAllBtn) {
+    turnOffAllBtn.addEventListener('click', () => {
+      const reminders = window.SidekickCore.getRemindersFor(session.email) || [];
+      if (!reminders.some((reminder) => !reminder.suppressed)) return;
+      window.SidekickCore.turnOffAllRemindersFor(session.email);
+      render();
+    });
+  }
+
+  if (removeAllBtn) {
+    removeAllBtn.addEventListener('click', () => {
+      const reminders = window.SidekickCore.getRemindersFor(session.email) || [];
+      if (!reminders.length) return;
+      if (!confirm(`Remove all ${reminders.length} reminders? This cannot be undone.`)) return;
+      window.SidekickCore.removeAllRemindersFor(session.email);
+      closeItineraryEditor();
+      render();
     });
   }
 

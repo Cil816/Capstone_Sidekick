@@ -2,10 +2,11 @@
 .chat-screen {
     display: flex;
     flex-direction: column;
-    /* let parent provide the viewport height and avoid forcing 100vh which can cause overflow */
+    /* Give the message list a bounded flex area so it becomes the scroll container. */
+    height: calc(100dvh - var(--bottom-overlay-height, var(--nav-height)) - env(safe-area-inset-bottom));
     min-height: 0;
     padding-bottom: 0;
-    min-height: calc(100dvh - var(--nav-height) - env(safe-area-inset-bottom));
+    overflow: hidden;
 }
 
 .chat-header {
@@ -55,14 +56,17 @@
 }
 
 .chat-messages {
-    flex: 1;
+    flex: 1 1 0%;
     overflow-y: auto;
+    min-height: 0;
     padding: 24px;
     padding-bottom: calc(var(--bottom-overlay-height, var(--nav-height, 72px)) + 80px + env(safe-area-inset-bottom));
     display: flex;
     flex-direction: column;
     gap: 16px;
     min-width: 0;
+    overscroll-behavior-y: contain;
+    -webkit-overflow-scrolling: touch;
 }
 
 .message {
@@ -211,7 +215,9 @@
         max-width: 860px;
         width: 100%;
         margin: 0 auto;
-        min-height: calc(100dvh - var(--nav-height) - 24px);
+        height: calc(100dvh - var(--bottom-overlay-height, var(--nav-height)) - 24px);
+        min-height: 0;
+        overflow: hidden;
     }
 
     .chat-input-container {
