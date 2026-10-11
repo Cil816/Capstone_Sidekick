@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Admin sign in · Sidekick</title>
+    <link rel="stylesheet" href="css/admin.css" />
+  </head>
+  <body>
+    <main class="login-page">
+      <section class="login-card" aria-labelledby="login-title">
+        <header class="login-header">
+          <img class="login-logo" src="assets/sidekick-logo-512.png" alt="Sidekick compass logo" />
+          <h1 id="login-title">Admin sign in</h1>
+          <p class="admin-subtitle">Sign in to manage Sidekick.</p>
+        </header>
+
+        <div id="admin-status-banner" class="admin-status-banner" aria-live="polite"></div>
+
+        <form id="admin-login-form" class="admin-form">
+          <div class="field">
+            <label for="admin-username">Username</label>
+            <input id="admin-username" name="username" type="text" autocomplete="username" required />
+          </div>
+          <div class="field">
+            <label for="admin-password">Password</label>
+            <input id="admin-password" name="password" type="password" autocomplete="current-password" required />
+          </div>
+          <button id="admin-login-submit" class="admin-button" type="submit">Sign in</button>
+        </form>
+      </section>
+    </main>
+
+    <script src="js/config.js"></script>
+    <script src="js/admin.js"></script>
+  </body>
+</html>

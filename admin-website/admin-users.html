@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Users · Sidekick Admin</title>
+    <link rel="stylesheet" href="css/admin.css" />
+  </head>
+  <body data-page="users">
+    <div class="admin-shell">
+      <aside class="admin-sidebar">
+        <div class="admin-sidebar-header">
+          <img class="admin-logo" src="assets/sidekick-logo-512.png" alt="" />
+          <div>
+            <div style="font-weight:800;">Sidekick</div>
+            <small style="color:rgba(255,255,255,0.7);">Administrator</small>
+          </div>
+        </div>
+        <nav>
+          <a class="admin-nav-link" href="admin.html">Overview</a>
+          <a class="admin-nav-link active" href="admin-users.html">Users</a>
+          <a class="admin-nav-link" href="admin-itineraries.html">Travel plans</a>
+          <a class="admin-nav-link" href="admin-analytics.html">Reports</a>
+          <a class="admin-nav-link" href="admin-reviews.html">App reviews</a>
+          <a class="admin-nav-link" href="admin-activity.html">Activity</a>
+          <a class="admin-nav-link" href="admin-integrations.html">Connections</a>
+          <a class="admin-nav-link" href="admin-settings.html">App setup</a>
+        </nav>
+        <button class="admin-button-secondary" data-admin-logout type="button">Log out</button>
+      </aside>
+
+      <main class="admin-main">
+        <div class="admin-topbar">
+          <div>
+            <h1 class="admin-page-title">Users</h1>
+            <p class="admin-subtitle">Find accounts and check their status. Online means the signed-in app checked in within the past 90 seconds.</p>
+          </div>
+        </div>
+
+        <div id="admin-status-banner" class="admin-status-banner" aria-live="polite"></div>
+
+        <div class="admin-card">
+          <div class="admin-panel-header">
+            <h2>All users</h2>
+            <div class="admin-filters">
+              <label for="user-search">Search name or email</label>
+              <input id="user-search" type="search" maxlength="100" placeholder="Search users" />
+              <label for="user-status-filter">Status</label>
+              <select id="user-status-filter">
+                <option value="all">All accounts</option>
+                <option value="active">Enabled accounts</option>
+                <option value="inactive">Disabled accounts</option>
+                <option value="verified">Verified</option>
+                <option value="unverified">Unverified</option>
+              </select>
+              <button id="user-search-submit" class="admin-button" type="button">Find users</button>
+            </div>
+          </div>
+          <p id="user-last-active-note" class="admin-subtitle">
+            Last active is based on authenticated app check-ins. Accounts with no recorded activity for 180+ days are marked for reference; admins may permanently delete any account.
+          </p>
+          <div class="admin-table-wrap">
+            <table class="admin-table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Email</th>
+                  <th>Joined</th>
+                  <th>Last app activity</th>
+                  <th>Account status</th>
+                  <th>App presence</th>
+                  <th>Email verified</th>
+                  <th>Details</th>
+                </tr>
+              </thead>
+              <tbody id="user-table-body"></tbody>
+            </table>
+          </div>
+          <div class="admin-pagination">
+            <span id="user-page-summary" aria-live="polite"></span>
+            <div>
+              <button id="user-page-previous" class="admin-button-secondary" type="button">Previous</button>
+              <button id="user-page-next" class="admin-button-secondary" type="button">Next</button>
+            </div>
+          </div>
+        </div>
+
+        <section id="user-detail-panel" class="admin-card admin-detail-panel" hidden aria-live="polite">
+          <div class="admin-panel-header">
+            <h2>User details</h2>
+            <button id="user-detail-close" class="admin-button-secondary" type="button">Close</button>
+          </div>
+          <div id="user-detail-content"></div>
+        </section>
+      </main>
+    </div>
+
+    <script src="js/config.js"></script>
+    <script src="js/admin.js"></script>
+  </body>
+</html>

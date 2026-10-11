@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sidekick Admin</title>
+    <link rel="stylesheet" href="css/admin.css" />
+  </head>
+  <body data-page="dashboard">
+    <div class="admin-shell">
+      <aside class="admin-sidebar">
+        <div class="admin-sidebar-header">
+          <img class="admin-logo" src="assets/sidekick-logo-512.png" alt="" />
+          <div>
+            <div style="font-weight:800;">Sidekick</div>
+            <small style="color:rgba(255,255,255,0.7);">Administrator</small>
+          </div>
+        </div>
+        <nav>
+          <a class="admin-nav-link active" href="admin.html">Overview</a>
+          <a class="admin-nav-link" href="admin-users.html">Users</a>
+          <a class="admin-nav-link" href="admin-itineraries.html">Travel plans</a>
+          <a class="admin-nav-link" href="admin-analytics.html">Reports</a>
+          <a class="admin-nav-link" href="admin-reviews.html">App reviews</a>
+          <a class="admin-nav-link" href="admin-activity.html">Activity</a>
+          <a class="admin-nav-link" href="admin-integrations.html">Connections</a>
+          <a class="admin-nav-link" href="admin-settings.html">App setup</a>
+        </nav>
+        <button class="admin-button-secondary" data-admin-logout type="button">Log out</button>
+      </aside>
+
+      <main class="admin-main">
+        <div class="admin-topbar">
+          <div>
+            <h1 class="admin-page-title">Overview</h1>
+            <p class="admin-subtitle">A snapshot of Sidekick accounts and saved travel plans.</p>
+          </div>
+          <div class="admin-toolbar">
+            <span class="admin-pill">Sidekick admin</span>
+          </div>
+        </div>
+
+        <div id="admin-status-banner" class="admin-status-banner" aria-live="polite"></div>
+
+        <section class="admin-grid" id="dashboard-summary"></section>
+        <p class="admin-subtitle">Travel plans saved only on a user's device aren't included.</p>
+
+        <div class="content-grid">
+          <div class="admin-card">
+            <div class="admin-panel-header">
+              <h2>Recent sign-ups and saved plans</h2>
+            </div>
+            <div id="recent-activity-list" class="admin-logger"></div>
+          </div>
+
+          <div class="admin-card">
+            <div class="admin-panel-header">
+              <h2>About these numbers</h2>
+            </div>
+            <ul class="admin-logger">
+              <li class="logger-item"><span class="logger-text">Account status and email verification are tracked separately.</span></li>
+              <li class="logger-item"><span class="logger-text">AI requests and route searches aren't recorded, so they aren't included.</span></li>
+              <li class="logger-item"><span class="logger-text">Recent activity shows when accounts and saved plans were created; it isn't a full activity history.</span></li>
+              <li class="logger-item"><span class="logger-text">Admin sign-in history appears when audit logging is set up.</span></li>
+            </ul>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <script src="js/config.js"></script>
+    <script src="js/admin.js"></script>
+  </body>
+</html>

@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Travel plans · Sidekick Admin</title>
+    <link rel="stylesheet" href="css/admin.css" />
+  </head>
+  <body data-page="itineraries">
+    <div class="admin-shell">
+      <aside class="admin-sidebar">
+        <div class="admin-sidebar-header">
+          <img class="admin-logo" src="assets/sidekick-logo-512.png" alt="" />
+          <div>
+            <div style="font-weight:800;">Sidekick</div>
+            <small style="color:rgba(255,255,255,0.7);">Administrator</small>
+          </div>
+        </div>
+        <nav>
+          <a class="admin-nav-link" href="admin.html">Overview</a>
+          <a class="admin-nav-link" href="admin-users.html">Users</a>
+          <a class="admin-nav-link active" href="admin-itineraries.html">Travel plans</a>
+          <a class="admin-nav-link" href="admin-analytics.html">Reports</a>
+          <a class="admin-nav-link" href="admin-reviews.html">App reviews</a>
+          <a class="admin-nav-link" href="admin-activity.html">Activity</a>
+          <a class="admin-nav-link" href="admin-integrations.html">Connections</a>
+          <a class="admin-nav-link" href="admin-settings.html">App setup</a>
+        </nav>
+        <button class="admin-button-secondary" data-admin-logout type="button">Log out</button>
+      </aside>
+
+      <main class="admin-main">
+        <div class="admin-topbar">
+          <div>
+            <h1 class="admin-page-title">Travel plans</h1>
+            <p class="admin-subtitle">Generated itineraries include the account owner and current stored schedule. Plans are automatically removed 24 hours after their end date.</p>
+          </div>
+        </div>
+
+        <div id="admin-status-banner" class="admin-status-banner" aria-live="polite"></div>
+
+        <div class="admin-card">
+          <div class="admin-panel-header">
+            <h2>Generated plans</h2>
+            <div class="admin-filters">
+              <label for="itinerary-search">Search saved itineraries</label>
+              <input id="itinerary-search" type="search" maxlength="100" placeholder="Title, destination, or traveler" />
+              <button id="itinerary-search-submit" class="admin-button" type="button">Find plans</button>
+            </div>
+          </div>
+          <div class="admin-table-wrap">
+            <table class="admin-table">
+              <thead>
+                <tr>
+                  <th>Plan</th>
+                  <th>Traveler</th>
+                  <th>Destination</th>
+                  <th>Travel dates</th>
+                  <th>Days</th>
+                  <th>Activities</th>
+                  <th>Created</th>
+                  <th>Details</th>
+                </tr>
+              </thead>
+              <tbody id="itinerary-table-body"></tbody>
+            </table>
+          </div>
+          <div class="admin-pagination">
+            <span id="itinerary-page-summary" aria-live="polite"></span>
+            <div>
+              <button id="itinerary-page-previous" class="admin-button-secondary" type="button">Previous</button>
+              <button id="itinerary-page-next" class="admin-button-secondary" type="button">Next</button>
+            </div>
+          </div>
+        </div>
+
+        <section id="itinerary-detail-panel" class="admin-card admin-detail-panel" hidden aria-live="polite">
+          <div class="admin-panel-header">
+            <h2>Plan details</h2>
+            <button id="itinerary-detail-close" class="admin-button-secondary" type="button">Close</button>
+          </div>
+          <div id="itinerary-detail-content"></div>
+        </section>
+      </main>
+    </div>
+
+    <script src="js/config.js"></script>
+    <script src="js/admin.js"></script>
+  </body>
+</html>

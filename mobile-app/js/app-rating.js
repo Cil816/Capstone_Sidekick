@@ -90,11 +90,11 @@
       statusEl.textContent = "Saving your rating…";
       statusEl.hidden = false;
       try {
-        await window.SidekickCore.apiRequest("/api/app-reviews", {
+        await window.SidekickCore.apiRequest("/api/app-reviews/me", {
           method: "POST",
-          body: JSON.stringify({ email: session.email, rating: selectedRating, review: reviewText }),
+          body: JSON.stringify({ rating: selectedRating, review: reviewText }),
         });
-        statusEl.textContent = "Thank you for your feedback!";
+        statusEl.textContent = "Thank You! Your rating has been saved.";
         window.setTimeout(hideModal, 900);
       } catch (error) {
         statusEl.textContent = error.message || "Could not save your rating. Please try again.";
@@ -148,8 +148,8 @@
     if (promptPromise) return promptPromise;
     promptPromise = (async () => {
       try {
-        const result = await window.SidekickCore.apiRequest(`/api/app-reviews/status/${encodeURIComponent(session.email)}`);
-        if (result.submitted) return false;
+        const result = await window.SidekickCore.apiRequest("/api/app-reviews/me");
+        if (result.review) return false;
         const modal = initModal(session);
         if (document.querySelector(".destination-modal.open")) return false;
         modal.hidden = false;

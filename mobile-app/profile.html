@@ -6,6 +6,7 @@
     <title>Sidekick AI - Profile</title>
     <link rel="stylesheet" href="css/common.css">
     <link rel="stylesheet" href="css/login.css">
+    <link rel="stylesheet" href="css/app-rating.css">
 </head>
 <body>
     <div class="app-container">
@@ -38,6 +39,24 @@
                         <button id="logout-btn" class="btn btn-primary btn-full">Logout</button>
                     </div>
                 </div>
+
+                <section class="profile-review-card" aria-labelledby="profile-review-heading">
+                    <h2 id="profile-review-heading">Rate Sidekick</h2>
+                    <p class="profile-review-summary" id="app-review-summary">Loading app ratings…</p>
+                    <p class="profile-review-help">Your feedback helps us improve the app. You can update your rating any time.</p>
+                    <div class="app-rating-stars profile-rating-stars" role="group" aria-label="Choose a rating from 1 to 5 stars">
+                        <button type="button" data-profile-rating="1" aria-label="1 star" aria-pressed="false">★</button>
+                        <button type="button" data-profile-rating="2" aria-label="2 stars" aria-pressed="false">★</button>
+                        <button type="button" data-profile-rating="3" aria-label="3 stars" aria-pressed="false">★</button>
+                        <button type="button" data-profile-rating="4" aria-label="4 stars" aria-pressed="false">★</button>
+                        <button type="button" data-profile-rating="5" aria-label="5 stars" aria-pressed="false">★</button>
+                    </div>
+                    <p class="profile-rating-value" id="profile-rating-value">Select a star rating</p>
+                    <label for="profile-app-review">Your review (optional)</label>
+                    <textarea id="profile-app-review" maxlength="2000" rows="4" placeholder="Tell us what you think about Sidekick"></textarea>
+                    <button id="profile-review-submit" class="btn btn-primary btn-full" type="button" disabled>Submit rating</button>
+                    <p class="profile-review-status" id="profile-review-status" role="status" aria-live="polite"></p>
+                </section>
             </div>
 
         </div>
@@ -83,6 +102,7 @@
 
     <script src="js/config.local.js"></script>
     <script src="js/core.js"></script>
+    <script src="js/app-rating.js"></script>
     <script src="js/profile.js"></script>
     <script src="js/nav.js"></script>
 </body>

@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>App reviews · Sidekick Admin</title>
+    <link rel="stylesheet" href="css/admin.css" />
+  </head>
+  <body data-page="reviews">
+    <div class="admin-shell">
+      <aside class="admin-sidebar">
+        <div class="admin-sidebar-header">
+          <img class="admin-logo" src="assets/sidekick-logo-512.png" alt="" />
+          <div>
+            <div style="font-weight:800;">Sidekick</div>
+            <small style="color:rgba(255,255,255,0.7);">Administrator</small>
+          </div>
+        </div>
+        <nav>
+          <a class="admin-nav-link" href="admin.html">Overview</a>
+          <a class="admin-nav-link" href="admin-users.html">Users</a>
+          <a class="admin-nav-link" href="admin-itineraries.html">Travel plans</a>
+          <a class="admin-nav-link" href="admin-analytics.html">Reports</a>
+          <a class="admin-nav-link" href="admin-reviews.html">App reviews</a>
+          <a class="admin-nav-link" href="admin-activity.html">Activity</a>
+          <a class="admin-nav-link" href="admin-integrations.html">Connections</a>
+          <a class="admin-nav-link" href="admin-settings.html">App setup</a>
+        </nav>
+        <button class="admin-button-secondary" data-admin-logout type="button">Log out</button>
+      </aside>
+
+      <main class="admin-main">
+        <div class="admin-topbar">
+          <div>
+            <h1 class="admin-page-title">App reviews</h1>
+            <p class="admin-subtitle">Ratings and feedback submitted by Sidekick users.</p>
+          </div>
+        </div>
+        <div id="admin-status-banner" class="admin-status-banner" aria-live="polite"></div>
+        <section id="review-summary" class="admin-grid" aria-label="Review summary"></section>
+        <section class="admin-card">
+          <div class="admin-panel-header"><h2>Recent reviews</h2></div>
+          <div class="admin-table-wrap">
+            <table class="admin-table">
+              <thead>
+                <tr><th>Rating</th><th>Review</th><th>User</th><th>Submitted</th></tr>
+              </thead>
+              <tbody id="app-reviews-table-body"></tbody>
+            </table>
+          </div>
+          <div class="admin-pagination">
+            <span id="app-reviews-page-summary" aria-live="polite"></span>
+            <div>
+              <button id="app-reviews-page-previous" class="admin-button-secondary" type="button">Previous</button>
+              <button id="app-reviews-page-next" class="admin-button-secondary" type="button">Next</button>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+    <script src="js/config.js"></script>
+    <script src="js/admin.js"></script>
+  </body>
+</html>

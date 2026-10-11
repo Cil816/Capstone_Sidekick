@@ -75,10 +75,14 @@ async function handleLogin(event) {
       body: JSON.stringify({ email, password }),
     });
     const user = result.user;
+    if (!result.session?.token) {
+      throw new Error("The Sidekick server did not issue an app session. Restart the updated backend, then try signing in again.");
+    }
 
     window.SidekickCore.setAuthSession({
       email,
       name: user?.name || "",
+      apiToken: result.session.token,
       loggedInAt: Date.now(),
     });
 
@@ -108,6 +112,15 @@ function bindLoginForm() {
   const form = document.getElementById("login-form");
   if (!form || form.dataset.sidekickBound === "1") {
     return;
+  }
+
+  const sessionMessage = new URLSearchParams(window.location.search).get("session");
+  if (sessionMessage === "expired") {
+    const errEl = document.getElementById("auth-error");
+    if (errEl) {
+      errEl.textContent = "Your session expired. Please sign in again. Your saved Sidekick data is unchanged.";
+      errEl.removeAttribute("hidden");
+    }
   }
 
   form.dataset.sidekickBound = "1";

@@ -1,7 +1,7 @@
 {
   "appId": "com.sidekick.app",
   "appName": "Sidekick",
-  "webDir": "www",
+  "webDir": "mobile-app",
   "plugins": {
     "Keyboard": {
       "resize": "body",

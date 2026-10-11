@@ -397,7 +397,7 @@ async function showDestinationDetails(place, prefs, session) {
     requestAnimationFrame(() => google.maps.event.trigger(_modalMap, "resize"));
   } catch (err) {
     const message = err && err.message === "No API"
-      ? "Interactive map is not configured. Add a browser-restricted Google Maps key in www/js/config.local.js."
+      ? "Interactive map is not configured. Add a browser-restricted Google Maps key in mobile-app/js/config.local.js."
       : err.message || "Interactive map is unavailable right now.";
     mapEl.innerHTML = `<div class="destination-map-message">${window.SidekickCore.escapeHtml(message)}</div>`;
   }
@@ -545,7 +545,13 @@ async function showDestinationDetails(place, prefs, session) {
       setText("destination-route-distance", "Unavailable");
       if (routeError) {
         routeError.hidden = false;
-        setText("destination-route-error-message", "The route could not be retrieved. Check your Google Routes API setup and try again.");
+        const noRouteExists = error.statusCode === 422;
+        setText(
+          "destination-route-error-message",
+          noRouteExists
+            ? "Google Maps could not find a driving or public-transit route between these locations. Try a different starting point or destination."
+            : "The route service is temporarily unavailable. Please try again later.",
+        );
         setText("destination-route-error-details", error.message || "No additional error details were provided.");
         routeError.querySelector("details")?.removeAttribute("open");
       }
@@ -640,6 +646,7 @@ async function generateFocusedItinerary(place, prefs, session) {
         durationDays,
         budget: budgetLabel,
         budgetAmountPhp,
+        serverTripId: response.tripId,
       },
     };
     window.SidekickCore.setItineraryByEmail(byEmail);

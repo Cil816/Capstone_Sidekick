@@ -38,7 +38,7 @@
 /* Sidekick Core (no backend): auth, user preferences, itinerary + chat generation */
 
 window.SIDEKICK_CONFIG = {
-  apiMode: "development",
+  apiMode: "production",
   googleMapsApiKey: "",
   ...(window.SIDEKICK_CONFIG || {}),
 };
@@ -52,6 +52,8 @@ const SIDEKICK_KEYS = {
   remindersByEmail: "sidekick.remindersByEmail.v1",
   notificationPrefsByEmail: "sidekick.notificationPrefs",
 };
+const itinerarySyncStates = new Map();
+const itineraryMonitoringPromises = new Map();
 
 function safeJsonParse(raw, fallback) {
   try {
@@ -147,23 +149,46 @@ async function hashPasswordSHA256(password) {
 }
 
 function getApiBaseUrl() {
-  const configuredBase = String(window.SIDEKICK_CONFIG?.apiBaseUrl || "").trim().replace(/\/+$/, "");
-  if (configuredBase) return configuredBase;
-  const isAndroidApp = /Android/i.test(navigator.userAgent) && window.location.protocol === "https:";
-  if (isAndroidApp) return "http://10.0.2.2:3001";
+  const config = window.SIDEKICK_CONFIG || {};
+  const configuredBase = String(config.apiBaseUrl || "").trim().replace(/\/+$/, "");
+  const apiMode = String(config.apiMode || "production").trim().toLowerCase();
+  if (configuredBase) {
+    const parsedBase = new URL(configuredBase);
+    const localHttpHosts = new Set(["localhost", "127.0.0.1", "10.0.2.2"]);
+    const isLocalHttp = parsedBase.protocol === "http:" && localHttpHosts.has(parsedBase.hostname);
+    if (apiMode !== "development" && !/^https:\/\//i.test(configuredBase) && !isLocalHttp) {
+      throw new Error("Production SIDEKICK_CONFIG.apiBaseUrl must use HTTPS.");
+    }
+    return configuredBase;
+  }
+
+  if (apiMode !== "development") {
+    if (window.Capacitor?.isNativePlatform?.()) {
+      throw new Error("Configure SIDEKICK_CONFIG.apiBaseUrl with the HTTPS backend URL for production mobile builds.");
+    }
+    return "";
+  }
 
   const localHosts = new Set(["localhost", "127.0.0.1", "0.0.0.0"]);
   const isLocalDevelopment = window.location.protocol === "file:"
     || localHosts.has(window.location.hostname);
+  const isAndroidApp = /Android/i.test(navigator.userAgent) && window.location.protocol === "https:";
+  if (isAndroidApp) return "http://10.0.2.2:3001";
   return isLocalDevelopment ? "http://localhost:3001" : "";
 }
 
 async function apiRequest(path, options = {}) {
+  const apiBaseUrl = getApiBaseUrl();
+  const sessionToken = String(getAuthSession()?.apiToken || "");
   let response;
   try {
-    response = await fetch(`${getApiBaseUrl()}${path}`, {
+    response = await fetch(`${apiBaseUrl}${path}`, {
       ...options,
-      headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+      headers: {
+        "Content-Type": "application/json",
+        ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
+        ...(options.headers || {}),
+      },
     });
   } catch (error) {
     if (error?.name === "AbortError") throw error;
@@ -183,9 +208,25 @@ async function apiRequest(path, options = {}) {
       : response.status === 404
         ? `The configured server does not provide this API endpoint (HTTP 404): ${path}. Deploy the current Sidekick backend and set SIDEKICK_CONFIG.apiBaseUrl to its public URL.`
         : `The Sidekick server returned HTTP ${response.status} for ${path}.`;
-    throw new Error(message);
+    const error = new Error(message);
+    error.statusCode = response.status;
+    if (response.status === 401 && sessionToken && !window.location.pathname.endsWith("/login.html")) {
+      invalidateAppSession(sessionToken);
+    }
+    throw error;
   }
   return payload;
+}
+
+let appSessionInvalidationInProgress = false;
+
+function invalidateAppSession(rejectedToken) {
+  if (appSessionInvalidationInProgress) return;
+  const currentSession = getAuthSession();
+  if (!currentSession?.apiToken || currentSession.apiToken !== rejectedToken) return;
+  appSessionInvalidationInProgress = true;
+  clearAuthSession();
+  window.location.replace("login.html?session=expired");
 }
 
 function redirect(path) {
@@ -228,17 +269,188 @@ function getItineraryByEmail() {
   return safeJsonParse(localStorage.getItem(SIDEKICK_KEYS.itineraryByEmail), {});
 }
 
+function getItinerarySyncPayload(itineraryData) {
+  const meta = itineraryData?.meta || {};
+  return {
+    itinerary: (Array.isArray(itineraryData?.itinerary) ? itineraryData.itinerary : []).map((day, index) => ({
+      dayNumber: Number(day?.dayNumber) || index + 1,
+      title: day?.title || null,
+      activities: (Array.isArray(day?.activities) ? day.activities : []).map((activity) => ({
+        title: activity?.title || "",
+        location: activity?.location || "",
+        category: activity?.category || activity?.activityType || "",
+        timeLabel: activity?.timeLabel || "",
+        startTime: activity?.dueAt != null && Number.isFinite(Number(activity.dueAt))
+          ? `${String(new Date(Number(activity.dueAt)).getHours()).padStart(2, "0")}:${String(new Date(Number(activity.dueAt)).getMinutes()).padStart(2, "0")}`
+          : "",
+        estimatedTotalCostPhp: activity?.estimatedTotalCostPhp ?? activity?.estimatedActivityCostPhp ?? null,
+      })),
+    })),
+    meta: {
+      destination: meta.destination || meta.focusedPlace || "",
+      startDate: String(meta.startDate || new Date().toISOString()).slice(0, 10),
+      endDate: meta.endDate ? String(meta.endDate).slice(0, 10) : "",
+      budget: meta.budget || "",
+    },
+  };
+}
+
+function ensureItineraryMonitored(email, itineraryData) {
+  const currentTripId = Number(itineraryData?.meta?.serverTripId);
+  if (Number.isSafeInteger(currentTripId) && currentTripId > 0) {
+    return Promise.resolve({ ...itineraryData, meta: { ...itineraryData.meta, serverTripId: currentTripId } });
+  }
+  const key = `${email}:${JSON.stringify(getItinerarySyncPayload(itineraryData))}`;
+  const pending = itineraryMonitoringPromises.get(key);
+  if (pending) return pending;
+
+  const request = (async () => {
+    const result = await apiRequest("/api/app-itineraries/sync", {
+      method: "POST",
+      body: JSON.stringify(getItinerarySyncPayload(itineraryData)),
+    });
+    const monitored = {
+      ...itineraryData,
+      meta: { ...itineraryData.meta, serverTripId: result.tripId },
+    };
+    const map = getItineraryByEmail();
+    if (JSON.stringify(map[email]) === JSON.stringify(itineraryData)) {
+      map[email] = monitored;
+      const state = itinerarySyncStates.get(Number(result.tripId))
+        || { lastSynced: "", timer: null, inFlight: false, attempts: 0 };
+      state.lastSynced = JSON.stringify(getItinerarySyncPayload(monitored));
+      itinerarySyncStates.set(Number(result.tripId), state);
+      setItineraryByEmail(map);
+    }
+    return monitored;
+  })();
+  itineraryMonitoringPromises.set(key, request);
+  request.finally(() => {
+    if (itineraryMonitoringPromises.get(key) === request) itineraryMonitoringPromises.delete(key);
+  }).catch(() => {});
+  return request;
+}
+
+function reportItinerarySyncError(error, tripId) {
+  console.error("Unable to sync itinerary changes to the server:", error);
+  document.dispatchEvent(new CustomEvent("sidekick:itinerary-sync-error", {
+    detail: { tripId, message: error?.message || "The itinerary could not be synced to the server." },
+  }));
+}
+
+function scheduleItinerarySync(email, itineraryData, delay = 500) {
+  const tripId = Number(itineraryData?.meta?.serverTripId);
+  if (!email || !Number.isSafeInteger(tripId) || tripId < 1) return;
+  const state = itinerarySyncStates.get(tripId) || { lastSynced: "", timer: null, inFlight: false, attempts: 0 };
+  itinerarySyncStates.set(tripId, state);
+  if (state.deleting) return;
+  const payload = getItinerarySyncPayload(itineraryData);
+  const snapshot = JSON.stringify(payload);
+  if (snapshot === state.lastSynced) return;
+  if (state.timer) clearTimeout(state.timer);
+  state.timer = window.setTimeout(async () => {
+    state.timer = null;
+    if (state.inFlight) return;
+    const current = getItineraryByEmail()[email];
+    if (Number(current?.meta?.serverTripId) !== tripId) return;
+    const latestPayload = getItinerarySyncPayload(current);
+    const latestSnapshot = JSON.stringify(latestPayload);
+    if (latestSnapshot === state.lastSynced) return;
+
+    state.inFlight = true;
+    try {
+      await apiRequest(`/api/app-itineraries/${encodeURIComponent(tripId)}`, {
+        method: "PUT",
+        body: JSON.stringify(latestPayload),
+      });
+      state.lastSynced = latestSnapshot;
+      state.attempts = 0;
+    } catch (error) {
+      state.attempts += 1;
+      if (state.attempts < 3) {
+        state.timer = window.setTimeout(() => scheduleItinerarySync(email, current, 1000 * state.attempts), 1000 * state.attempts);
+      } else {
+        state.attempts = 0;
+        reportItinerarySyncError(error, tripId);
+      }
+    } finally {
+      state.inFlight = false;
+      const latest = getItineraryByEmail()[email];
+      if (Number(latest?.meta?.serverTripId) === tripId
+        && JSON.stringify(getItinerarySyncPayload(latest)) !== state.lastSynced
+        && !state.timer) {
+        scheduleItinerarySync(email, latest);
+      }
+    }
+  }, delay);
+}
+
 function setItineraryByEmail(map) {
+  const priorMap = getItineraryByEmail();
+  localStorage.setItem(SIDEKICK_KEYS.itineraryByEmail, JSON.stringify(map));
+  const session = getAuthSession();
+  const email = session?.email;
+  if (email && JSON.stringify(priorMap[email]) !== JSON.stringify(map?.[email]) && map?.[email]) {
+    scheduleItinerarySync(email, map[email]);
+  }
+  try {
+    document.dispatchEvent(new CustomEvent('sidekick:itinerary-updated'));
+  } catch (e) {}
+}
+
+async function clearItineraryForEmail(email) {
+  let map = getItineraryByEmail();
+  let itineraryData = map[email];
+  if (itineraryData?.itinerary?.length && !itineraryData.meta?.serverTripId) {
+    itineraryData = await ensureItineraryMonitored(email, itineraryData);
+    map = getItineraryByEmail();
+    if (map[email]?.meta?.serverTripId) itineraryData = map[email];
+  }
+  const tripId = Number(itineraryData?.meta?.serverTripId);
+  if (Number.isSafeInteger(tripId) && tripId > 0) {
+    const state = itinerarySyncStates.get(tripId) || { lastSynced: "", timer: null, inFlight: false, attempts: 0 };
+    state.deleting = true;
+    itinerarySyncStates.set(tripId, state);
+    if (state?.timer) clearTimeout(state.timer);
+    while (state?.inFlight) await new Promise((resolve) => window.setTimeout(resolve, 50));
+    if (state.timer) clearTimeout(state.timer);
+    try {
+      await apiRequest(`/api/app-itineraries/${encodeURIComponent(tripId)}`, { method: "DELETE" });
+    } catch (error) {
+      state.deleting = false;
+      throw error;
+    }
+    itinerarySyncStates.delete(tripId);
+  }
+  delete map[email];
   localStorage.setItem(SIDEKICK_KEYS.itineraryByEmail, JSON.stringify(map));
   try {
     document.dispatchEvent(new CustomEvent('sidekick:itinerary-updated'));
   } catch (e) {}
 }
 
-function clearItineraryForEmail(email) {
+function clearExpiredItineraryForEmail(email, expectedTripId = null, expectedItinerary = null) {
   const map = getItineraryByEmail();
+  const current = map[email];
+  if (!current) return false;
+  const currentTripId = Number(current.meta?.serverTripId);
+  if (expectedTripId !== null && currentTripId !== Number(expectedTripId)) return false;
+  if (expectedTripId === null && Number.isSafeInteger(currentTripId) && currentTripId > 0) return false;
+  if (expectedItinerary && JSON.stringify(current) !== JSON.stringify(expectedItinerary)) return false;
+
+  if (Number.isSafeInteger(currentTripId) && currentTripId > 0) {
+    const state = itinerarySyncStates.get(currentTripId);
+    if (state?.timer) clearTimeout(state.timer);
+    itinerarySyncStates.delete(currentTripId);
+  }
   delete map[email];
-  setItineraryByEmail(map);
+  localStorage.setItem(SIDEKICK_KEYS.itineraryByEmail, JSON.stringify(map));
+  window.SidekickCore?.clearItineraryRemindersForEmail?.(email);
+  document.dispatchEvent(new CustomEvent('sidekick:itinerary-updated', { detail: { email } }));
+  if (window.location.pathname.endsWith('/itinerary.html')) {
+    window.setTimeout(() => window.location.reload(), 0);
+  }
+  return true;
 }
 
 function getNotificationPreferences(email) {
@@ -769,8 +981,10 @@ window.SidekickCore = {
   setChatByEmail,
   clearChatForEmail,
   getItineraryByEmail,
+  ensureItineraryMonitored,
   setItineraryByEmail,
   clearItineraryForEmail,
+  clearExpiredItineraryForEmail,
   getNotificationPreferences,
   setNotificationPreferences,
   clearRemindersForEmail,
@@ -786,6 +1000,82 @@ window.SidekickCore = {
   getInitialAssistantMessage,
   isPerfLiteMode,
 };
+
+function startAppPresenceHeartbeat() {
+  let requestInProgress = false;
+  let lastErrorAt = 0;
+  let itineraryCheckInProgress = false;
+  let lastItineraryCheckErrorAt = 0;
+
+  async function verifyStoredItinerary() {
+    const session = getAuthSession();
+    if (!session?.email || !session?.apiToken || document.visibilityState !== "visible" || itineraryCheckInProgress) return;
+    const itinerary = getItineraryByEmail()[session.email];
+    const tripId = Number(itinerary?.meta?.serverTripId);
+    const hasServerTripId = Number.isSafeInteger(tripId) && tripId > 0;
+    itineraryCheckInProgress = true;
+    try {
+      const query = hasServerTripId ? `?tripId=${encodeURIComponent(tripId)}` : '';
+      const retention = await apiRequest(`/api/app-itineraries/retention${query}`);
+      const endDate = String(itinerary?.meta?.endDate || '').slice(0, 10);
+      const passedRetentionDate = /^\d{4}-\d{2}-\d{2}$/.test(endDate)
+        && endDate < String(retention.expiredBeforeDate || '');
+      if (!retention.tripAvailable || passedRetentionDate) {
+        clearExpiredItineraryForEmail(
+          session.email,
+          hasServerTripId ? tripId : null,
+          hasServerTripId ? null : itinerary,
+        );
+      }
+      lastItineraryCheckErrorAt = 0;
+    } catch (error) {
+      if (Date.now() - lastItineraryCheckErrorAt > 60_000) {
+        console.warn("Unable to verify the saved itinerary's retention status:", error.message);
+        lastItineraryCheckErrorAt = Date.now();
+      }
+    } finally {
+      itineraryCheckInProgress = false;
+    }
+  }
+
+  async function sendHeartbeat() {
+    const session = getAuthSession();
+    if (!session?.email || !session?.apiToken || document.visibilityState !== "visible" || !document.hasFocus() || requestInProgress) return;
+    requestInProgress = true;
+    try {
+      await apiRequest("/api/app-presence/heartbeat", { method: "POST" });
+      lastErrorAt = 0;
+    } catch (error) {
+      if (Date.now() - lastErrorAt > 60_000) {
+        console.warn("Unable to update app presence:", error.message);
+        lastErrorAt = Date.now();
+      }
+    } finally {
+      requestInProgress = false;
+    }
+  }
+
+  void sendHeartbeat();
+  void verifyStoredItinerary();
+  window.setInterval(sendHeartbeat, 30_000);
+  window.setInterval(verifyStoredItinerary, 5 * 60_000);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") {
+      void sendHeartbeat();
+      void verifyStoredItinerary();
+    }
+  });
+  window.addEventListener("focus", () => {
+    void sendHeartbeat();
+    void verifyStoredItinerary();
+  });
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", startAppPresenceHeartbeat, { once: true });
+} else {
+  startAppPresenceHeartbeat();
+}
 
 if (document.readyState === "loading") {
   document.addEventListener("DOMContentLoaded", applyPerfModeClass);
@@ -1109,6 +1399,29 @@ if (document.readyState === "loading") {
     }
   }
 
+  function clearItineraryRemindersForEmail(email) {
+    const existing = getRemindersFor(email);
+    const itineraryReminders = existing.filter((reminder) => (
+      reminder.type === 'Itinerary' || reminder.itineraryActivityId
+    ));
+    if (!itineraryReminders.length) return;
+    const itineraryIds = new Set(itineraryReminders.map((reminder) => reminder.id));
+    const retained = existing.filter((reminder) => !itineraryIds.has(reminder.id));
+    setRemindersFor(email, retained);
+    if (hasLocalNotifications()) {
+      const notifications = itineraryReminders.map((reminder) => ({
+        id: reminderNotificationId(email, reminder.id),
+      }));
+      try {
+        const cancellation = LocalNotifications.cancel({ notifications });
+        cancellation?.catch?.((error) => console.warn('Unable to cancel expired itinerary notifications:', error));
+      } catch (error) {
+        console.warn('Unable to cancel expired itinerary notifications:', error);
+      }
+    }
+    void syncDeviceNotificationsForEmail(email);
+  }
+
   function turnOffAllRemindersFor(email) {
     const reminders = getRemindersFor(email).map((reminder) => ({ ...reminder, suppressed: true }));
     setRemindersFor(email, reminders);
@@ -1341,6 +1654,7 @@ if (document.readyState === "loading") {
     window.SidekickCore.addReminderFor = addReminderFor;
     window.SidekickCore.removeReminderFor = removeReminderFor;
     window.SidekickCore.removeAllRemindersFor = removeAllRemindersFor;
+    window.SidekickCore.clearItineraryRemindersForEmail = clearItineraryRemindersForEmail;
     window.SidekickCore.turnOffAllRemindersFor = turnOffAllRemindersFor;
     window.SidekickCore.scheduleAllFor = scheduleAllFor;
     window.SidekickCore.syncRemindersFromItinerary = syncRemindersFromItinerary;

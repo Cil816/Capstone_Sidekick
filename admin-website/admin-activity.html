@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Activity · Sidekick Admin</title>
+    <link rel="stylesheet" href="css/admin.css" />
+  </head>
+  <body data-page="activity">
+    <div class="admin-shell">
+      <aside class="admin-sidebar">
+        <div class="admin-sidebar-header">
+          <img class="admin-logo" src="assets/sidekick-logo-512.png" alt="" />
+          <div>
+            <div style="font-weight:800;">Sidekick</div>
+            <small style="color:rgba(255,255,255,0.7);">Administrator</small>
+          </div>
+        </div>
+        <nav>
+          <a class="admin-nav-link" href="admin.html">Overview</a>
+          <a class="admin-nav-link" href="admin-users.html">Users</a>
+          <a class="admin-nav-link" href="admin-itineraries.html">Travel plans</a>
+          <a class="admin-nav-link" href="admin-analytics.html">Reports</a>
+          <a class="admin-nav-link" href="admin-reviews.html">App reviews</a>
+          <a class="admin-nav-link active" href="admin-activity.html">Activity</a>
+          <a class="admin-nav-link" href="admin-integrations.html">Connections</a>
+          <a class="admin-nav-link" href="admin-settings.html">App setup</a>
+        </nav>
+        <button class="admin-button-secondary" data-admin-logout type="button">Log out</button>
+      </aside>
+
+      <main class="admin-main">
+        <div class="admin-topbar">
+          <div>
+            <h1 class="admin-page-title">Activity</h1>
+            <p class="admin-subtitle">See recent account sign-ups, saved plans, and admin sign-ins.</p>
+          </div>
+        </div>
+
+        <div id="admin-status-banner" class="admin-status-banner" aria-live="polite"></div>
+
+        <div class="admin-card">
+          <div class="admin-panel-header"><h2>Recent sign-ups and saved plans</h2></div>
+          <div id="recent-activity-list" class="admin-logger"></div>
+        </div>
+        <div class="admin-card admin-detail-panel">
+          <div class="admin-panel-header"><h2>Admin sign-in history</h2></div>
+          <p class="admin-subtitle">Sign-in history is available when audit logging has been set up.</p>
+          <div id="admin-audit-list" class="admin-logger"></div>
+        </div>
+      </main>
+    </div>
+
+    <script src="js/config.js"></script>
+    <script src="js/admin.js"></script>
+  </body>
+</html>

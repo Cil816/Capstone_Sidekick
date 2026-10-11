@@ -140,7 +140,7 @@ function buildItineraryDraftReply(draft) {
   const days = Array.isArray(draft.itinerary) ? draft.itinerary : [];
   const budget = draft.meta?.liveTripBudget || null;
   const activityCosts = new Map((draft.meta?.liveActivityCosts || []).map((item) => [String(item.placeId), item]));
-  const lines = [`I’ve prepared a ${days.length}-day itinerary for **${draft.meta?.destination || "your trip"}**. Take a look at the schedule and estimates below; it isn’t saved yet.`];
+  const lines = [`I’ve prepared a ${days.length}-day itinerary for **${draft.meta?.destination || "your trip"}**. It has already been recorded for Sidekick account monitoring. Take a look at the schedule and estimates below.`];
 
   for (const [index, day] of days.entries()) {
     const activities = Array.isArray(day.activities) ? day.activities : [];
@@ -182,7 +182,7 @@ function buildItineraryDraftReply(draft) {
     ? " This is development sample data, not a live verified estimate."
     : budget?.sources?.length ? " These ranges use current web sources; prices can change. Route durations are estimates and traffic can change."
       : " Live price sources were unavailable, so I have not filled in unsupported prices.";
-  return `${lines.join("\n")}${totalBudget}${enteredBudget}${sourcesNote}\n\nWould you like me to save this itinerary? Reply **Save itinerary** or **Discard**.`;
+  return `${lines.join("\n")}${totalBudget}${enteredBudget}${sourcesNote}\n\nWould you like to keep this plan in your app’s My Itinerary tab? Reply **Save itinerary** or **Discard**. Either choice leaves the generated record available to the admin.`;
 }
 
 function normalizeBudget(value) {
@@ -487,14 +487,24 @@ function buildPrefsForGenerator(prefs, state) {
   };
 }
 
-function saveGeneratedItinerary(email, generated) {
+async function ensureItineraryMonitored(generated) {
+  if (generated.meta?.serverTripId || generated.tripId) return generated;
+  return window.SidekickCore.ensureItineraryMonitored(
+    window.SidekickCore.getAuthSession()?.email,
+    generated,
+  );
+}
+
+async function saveGeneratedItinerary(email, generated) {
+  const monitored = await ensureItineraryMonitored(generated);
   const byEmail = window.SidekickCore.getItineraryByEmail();
   byEmail[email] = {
-    itinerary: generated.itinerary,
+    itinerary: monitored.itinerary,
     meta: {
-      ...generated.meta,
+      ...monitored.meta,
       source: "sidekick-companion",
-      startDate: generated.meta?.startDate || new Date().toISOString(),
+      startDate: monitored.meta?.startDate || new Date().toISOString(),
+      serverTripId: monitored.meta?.serverTripId || monitored.tripId,
     },
   };
   window.SidekickCore.setItineraryByEmail(byEmail);
@@ -629,7 +639,7 @@ function applyAgentActions(email, actions) {
   return summaries;
 }
 
-function generateItineraryFromCompanion(email, prefs, state) {
+async function generateItineraryFromCompanion(email, prefs, state) {
   const generatorPrefs = buildPrefsForGenerator(prefs, state);
   const generated = window.SidekickCore.generateItinerary(generatorPrefs, {
     startDate: state.startDate ? new Date(state.startDate) : new Date(),
@@ -639,7 +649,7 @@ function generateItineraryFromCompanion(email, prefs, state) {
     generated.itinerary = generated.itinerary.slice(0, state.dayCount);
   }
 
-  saveGeneratedItinerary(email, generated);
+  await saveGeneratedItinerary(email, generated);
 
   return `Itinerary ready. I generated a ${state.dayCount || generated.itinerary.length}-day plan for ${state.destination}. Open the Itinerary tab to view and edit it.\n\nIf you want changes, tell me: \"make day 2 more relaxed\" or \"adjust budget to luxury\".`;
 }
@@ -838,12 +848,21 @@ async function sendMessage() {
           reply = "I couldn’t retrieve current Google review details for this place. Please try again in a moment.";
         }
       } else if (pendingDraft && isDraftRejection(userText)) {
-        setPendingItinerary(session.email, null);
-        reply = "I discarded that itinerary draft. It wasn’t added to your saved itineraries.";
+        try {
+          await ensureItineraryMonitored(pendingDraft);
+          setPendingItinerary(session.email, null);
+          reply = "I removed the draft from your app. Its generated itinerary remains available to the admin for monitoring.";
+        } catch (error) {
+          reply = `I couldn’t confirm that the itinerary was recorded for admin monitoring, so I kept the draft in your app. ${String(error?.message || "")}`;
+        }
       } else if (pendingDraft && isSaveConfirmation(userText)) {
-        saveGeneratedItinerary(session.email, pendingDraft);
-        setPendingItinerary(session.email, null);
-        reply = `Saved. Open the **Itinerary** tab to see the full schedule, estimated visit durations, route times, and available cost details for ${pendingDraft.meta?.destination || "your trip"}.`;
+        try {
+          await saveGeneratedItinerary(session.email, pendingDraft);
+          setPendingItinerary(session.email, null);
+          reply = `Added to your app’s My Itinerary tab. This itinerary is recorded for admin monitoring.`;
+        } catch (error) {
+          reply = `I couldn’t confirm that the itinerary was recorded for admin monitoring, so I kept the draft. ${String(error?.message || "")}`;
+        }
       } else if (merged.signals.wantsGenerate && !companionNeedsEssentials(companionState)) {
         try {
           const generated = await generateItineraryWithBackend(prefs, companionState, userText);
@@ -856,6 +875,7 @@ async function sendMessage() {
               ...(generated.meta || {}),
               startDate: companionState.startDate || generated.meta?.startDate || new Date().toISOString().slice(0, 10),
               source: generated.meta?.source || "sidekick-chat-ai",
+              serverTripId: generated.tripId,
             },
           };
           await researchDraftBudget(session.email, draft, companionState);
@@ -869,7 +889,7 @@ async function sendMessage() {
         const missing = [!companionState.destination ? "destination" : "", !companionState.dayCount ? "number of days" : ""].filter(Boolean).join(" and ");
         reply = `I can prepare a detailed itinerary. What ${missing} would you like?`;
       } else if (pendingDraft) {
-        reply = `I have an unsaved itinerary draft for **${pendingDraft.meta?.destination || "your trip"}** ready for review. Reply **Save itinerary** to add it to your saved itineraries, or **Discard** to remove the draft.`;
+        reply = `I have an itinerary for **${pendingDraft.meta?.destination || "your trip"}** ready for review. It is recorded for admin monitoring. Reply **Save itinerary** to add it to My Itinerary, or **Discard** to remove it from the app.`;
       } else {
         try {
         const backendReply = await askSidekickBackend(history, prefs, companionState, userText);

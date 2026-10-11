@@ -54,11 +54,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const clearItineraryBtn = document.getElementById('clear-itinerary-btn');
   if (clearItineraryBtn) {
-    clearItineraryBtn.addEventListener('click', () => {
+    clearItineraryBtn.addEventListener('click', async () => {
       if (!confirm('Remove your itinerary and itinerary reminders?')) return;
-      window.SidekickCore.clearItineraryForEmail(session.email);
-      window.SidekickCore.clearRemindersForEmail(session.email);
-      showMessage('Itinerary removed.');
+      clearItineraryBtn.disabled = true;
+      try {
+        await window.SidekickCore.clearItineraryForEmail(session.email);
+        window.SidekickCore.clearRemindersForEmail(session.email);
+        showMessage('Itinerary removed.');
+      } catch (error) {
+        showMessage(error.message || 'The itinerary could not be removed. Please try again.');
+      } finally {
+        clearItineraryBtn.disabled = false;
+      }
     });
   }
 
@@ -75,13 +82,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const logoutBtn = document.getElementById('logout-btn');
   if (logoutBtn) {
-    logoutBtn.addEventListener('click', () => {
-      window.SidekickCore.clearAuthSession();
-      localStorage.removeItem('userName');
-      localStorage.removeItem('name');
-      localStorage.removeItem('userEmail');
-      localStorage.removeItem('email');
-      window.location.href = 'login.html';
+    logoutBtn.addEventListener('click', async () => {
+      try {
+        if (session?.apiToken) {
+          await window.SidekickCore.apiRequest('/api/app-session/logout', { method: 'POST' });
+        }
+      } catch (error) {
+        console.warn('Unable to revoke app session on the server:', error.message);
+      } finally {
+        window.SidekickCore.clearAuthSession();
+        localStorage.removeItem('userName');
+        localStorage.removeItem('name');
+        localStorage.removeItem('userEmail');
+        localStorage.removeItem('email');
+        window.location.href = 'login.html';
+      }
     });
   }
 

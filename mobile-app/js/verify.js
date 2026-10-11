@@ -33,6 +33,7 @@ form.addEventListener("submit", async (event) => {
     window.SidekickCore.setAuthSession({
       email: result.user.email,
       name: result.user.name,
+      apiToken: result.session?.token || "",
       loggedInAt: Date.now(),
     });
     const destination = window.SidekickCore.getPreferences() ? "dashboard.html" : "onboarding.html";

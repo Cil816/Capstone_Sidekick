@@ -173,6 +173,7 @@ function bindRegisterForm() {
       window.SidekickCore.setAuthSession({
         email: result.user.email,
         name: result.user.name,
+        apiToken: result.session?.token || "",
         loggedInAt: Date.now(),
       });
       window.location.href = "onboarding.html";

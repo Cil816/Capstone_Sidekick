@@ -747,6 +747,25 @@ function setItineraryForEmail(email, itineraryData) {
   window.SidekickCore.setItineraryByEmail(map);
 }
 
+async function syncExistingItineraryForMonitoring(email, itineraryData) {
+  if (!itineraryData?.itinerary?.length || itineraryData.meta?.serverTripId) return;
+  const status = document.getElementById('itinerary-monitoring-status');
+  if (status) {
+    status.hidden = false;
+    status.textContent = 'Recording this itinerary for account monitoring…';
+  }
+  try {
+    await window.SidekickCore.ensureItineraryMonitored(email, itineraryData);
+    if (status) status.textContent = 'This itinerary is recorded for admin monitoring.';
+  } catch (error) {
+    if (error.statusCode === 410) {
+      window.SidekickCore.clearExpiredItineraryForEmail(email, null, itineraryData);
+      return;
+    }
+    if (status) status.textContent = `This itinerary could not be synced for admin monitoring: ${error.message || 'Please try again later.'}`;
+  }
+}
+
 function updateHeaderDate(prefs, itineraryData) {
   const dateEl = document.getElementById("itinerary-date");
   if (!dateEl) return;
@@ -874,6 +893,13 @@ document.addEventListener("DOMContentLoaded", () => {
   const budgetInput = document.getElementById('itinerary-budget');
   const originInput = document.getElementById('itinerary-origin');
   const buildBtn = document.getElementById('build-itinerary');
+  const monitoringStatus = document.getElementById('itinerary-monitoring-status');
+  document.addEventListener('sidekick:itinerary-sync-error', (event) => {
+    const tripId = Number(getItineraryForEmail(email)?.meta?.serverTripId);
+    if (!monitoringStatus || Number(event.detail?.tripId) !== tripId) return;
+    monitoringStatus.hidden = false;
+    monitoringStatus.textContent = `Your itinerary is saved on this device, but the admin monitoring record could not be updated: ${event.detail.message}`;
+  });
   const showBuilderBtn = document.getElementById('show-builder');
   const placeSearchInput = document.getElementById("place-search");
 
@@ -1082,16 +1108,14 @@ document.addEventListener("DOMContentLoaded", () => {
     endInput.addEventListener('change', () => updateBuilderDatePreview(startInput.value, endInput.value));
   }
   if (showBuilderBtn) showBuilderBtn.addEventListener('click', () => showBuilder(true));
-
   const removeAllBtn = document.getElementById('remove-all-itinerary');
   if (removeAllBtn) {
-    removeAllBtn.addEventListener('click', (e) => {
+    removeAllBtn.addEventListener('click', async (e) => {
       e.preventDefault();
       if (!window.confirm('Remove your entire itinerary? This cannot be undone.')) return;
+      removeAllBtn.disabled = true;
       try {
-        const map = window.SidekickCore.getItineraryByEmail();
-        delete map[email];
-        window.SidekickCore.setItineraryByEmail(map);
+        await window.SidekickCore.clearItineraryForEmail(email);
         const all = JSON.parse(localStorage.getItem('sidekick.remindersByEmail.v1') || '{}');
         all[email] = (all[email] || []).filter((reminder) => (
           reminder.type !== 'Itinerary' && typeof reminder.parentDueAt === 'undefined'
@@ -1099,13 +1123,17 @@ document.addEventListener("DOMContentLoaded", () => {
         localStorage.setItem('sidekick.remindersByEmail.v1', JSON.stringify(all));
         document.dispatchEvent(new CustomEvent('sidekick:reminders-updated', { detail: { email } }));
       } catch (error) {
-        console.error('Unable to remove itinerary', error);
+        window.alert(error.message || 'Unable to remove the itinerary. Please try again.');
+        removeAllBtn.disabled = false;
+        return;
       }
 
       const container = document.getElementById('itinerary-content');
       if (container) {
         container.innerHTML = `<div id="no-itinerary-message" style="padding:24px;color:#6B7280">You don't have an itinerary yet. Use the builder above to create one.</div><button class="add-activity-btn" id="add-activity-btn" type="button" style="display:none">+ Add Activity</button>`;
       }
+      if (monitoringStatus) monitoringStatus.hidden = true;
+      removeAllBtn.disabled = false;
       showBuilder(true);
     });
   }
@@ -1124,6 +1152,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     updateHeaderDate(prefs, existing);
     renderItinerary(existing.itinerary, Boolean(existing.meta?.isDevelopmentMock));
+    void syncExistingItineraryForMonitoring(email, existing);
     loadLiveTripBudget(existing, email);
     enrichItineraryWithLiveRoutes(existing, email);
     // show add activity button for existing itineraries
@@ -1196,7 +1225,16 @@ document.addEventListener("DOMContentLoaded", () => {
       generated.itinerary = applyLocalScheduleTimes(generated.itinerary, startVal);
       const itineraryData = {
         itinerary: generated.itinerary,
-        meta: { ...generated.meta, destination: generated.meta?.destination || destinationName, startDate: formatDateInput(startVal), endDate: formatDateInput(endVal), durationDays, budget: budgetLabel, budgetAmountPhp: rawBudget },
+        meta: {
+          ...generated.meta,
+          destination: generated.meta?.destination || destinationName,
+          startDate: formatDateInput(startVal),
+          endDate: formatDateInput(endVal),
+          durationDays,
+          budget: budgetLabel,
+          budgetAmountPhp: rawBudget,
+          serverTripId: generated.tripId,
+        },
       };
       if (itineraryData.meta.liveTripBudget && Array.isArray(itineraryData.meta.liveActivityCosts)) {
         itineraryData.meta.liveTripBudgetCacheKey = getTripBudgetCacheKey(itineraryData);
