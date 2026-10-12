@@ -328,7 +328,7 @@ async function askSidekickBackend(history, prefs, state, userText) {
     email: window.SidekickCore.getAuthSession()?.email || "",
     message: userText,
     selectedDestination,
-    history: (history || []).slice(-12),
+    history: (history || []).slice(-12).map((item) => ({ role: item.role, content: item.content, ts: item.ts })),
     profile: {
       interests: prefs?.interests || [],
       travelTypes: prefs?.travelTypes || [],
@@ -522,7 +522,7 @@ function applyAgentActions(email, actions) {
   for (const action of Array.isArray(actions) ? actions : []) {
     if (action?.type === "SHOW_PLACES" && Array.isArray(action.places)) {
       localStorage.setItem("sidekick.aiPlaces.v1", JSON.stringify(action.places.slice(0, 8)));
-      summaries.push(`Map results: ${action.places.map((place) => place.name).filter(Boolean).join(", ") || "No matching places found."}`);
+      // Places are shown as photo cards under the reply.
       continue;
     }
 
@@ -722,9 +722,220 @@ function formatAssistantMessage(content) {
   }).join("");
 }
 
-function appendMessageToDom(role, content, ts, persist = true) {
+// ---- place photo cards ---------------------------------------------------------
+function sanitizeChatPlaces(places) {
+  return (Array.isArray(places) ? places : [])
+    .filter((place) => place && place.name)
+    .slice(0, 4)
+    .map((place) => ({
+      placeId: String(place.placeId || ""),
+      name: String(place.name || ""),
+      address: String(place.address || ""),
+      lat: Number.isFinite(Number(place.lat)) && place.lat !== null ? Number(place.lat) : null,
+      lng: Number.isFinite(Number(place.lng)) && place.lng !== null ? Number(place.lng) : null,
+      rating: Number.isFinite(Number(place.rating)) ? Number(place.rating) : null,
+      ratingCount: Number.isFinite(Number(place.ratingCount)) ? Number(place.ratingCount) : null,
+      priceLevel: String(place.priceLevel || ""),
+      types: Array.isArray(place.types) ? place.types.map(String).slice(0, 6) : [],
+      openingHours: Array.isArray(place.openingHours) ? place.openingHours.map(String).slice(0, 7) : [],
+      photoResource: String(place.photoResource || ""),
+      photoAttribution: place.photoAttribution && place.photoAttribution.name
+        ? { name: String(place.photoAttribution.name), uri: String(place.photoAttribution.uri || "") }
+        : null,
+    }));
+}
+
+function chatPlacePhotoUrl(place) {
+  const resource = String(place?.photoResource || "");
+  if (!/^places\/[A-Za-z0-9_-]+\/photos\/[A-Za-z0-9_-]+$/.test(resource)) return "";
+  let base = "";
+  try { base = window.SidekickCore.getApiBaseUrl() || ""; } catch (error) { return ""; }
+  if (!base && !window.location.protocol.startsWith("http")) return "";
+  return `${base}/api/maps/photo?name=${encodeURIComponent(resource)}`;
+}
+
+function chatPinIcon() {
+  return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>';
+}
+
+function chatRatingText(place) {
+  if (!Number.isFinite(place.rating) || place.rating <= 0) return "";
+  return `\u2605 ${place.rating.toFixed(1)}${Number.isFinite(place.ratingCount) && place.ratingCount > 0 ? ` (${place.ratingCount.toLocaleString()})` : ""}`;
+}
+
+function buildPlaceCards(places) {
+  const wrapper = document.createElement("div");
+  const row = document.createElement("div");
+  row.className = "chat-place-cards";
+  const credit = document.createElement("p");
+  credit.className = "data-attribution";
+  credit.textContent = "Place info and photos from Google Maps.";
+  wrapper.append(row, credit);
+  places.forEach((place) => {
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "chat-place-card";
+    card.setAttribute("aria-label", `See details about ${place.name}`);
+    const media = document.createElement("span");
+    media.className = "chat-place-media";
+    const url = chatPlacePhotoUrl(place);
+    if (url) {
+      const img = document.createElement("img");
+      img.alt = place.name;
+      img.loading = "lazy";
+      img.addEventListener("error", () => { media.innerHTML = chatPinIcon(); }, { once: true });
+      img.src = url;
+      media.appendChild(img);
+    } else {
+      media.innerHTML = chatPinIcon();
+    }
+    const name = document.createElement("strong");
+    name.textContent = place.name;
+    const meta = document.createElement("small");
+    meta.textContent = chatRatingText(place) || "Tap for details";
+    card.append(media, name, meta);
+    card.addEventListener("click", () => openChatPlaceDetails(place));
+    row.appendChild(card);
+  });
+  return wrapper;
+}
+
+function ensureChatPlaceModal() {
+  let modal = document.getElementById("chat-place-modal");
+  if (modal) return modal;
+  modal = document.createElement("div");
+  modal.id = "chat-place-modal";
+  modal.className = "chat-place-modal";
+  modal.setAttribute("aria-hidden", "true");
+  modal.innerHTML = `
+    <div class="chat-place-backdrop" data-close="1"></div>
+    <div class="chat-place-panel" role="dialog" aria-modal="true" aria-labelledby="chat-place-title">
+      <div class="chat-place-head">
+        <h3 id="chat-place-title"></h3>
+        <button type="button" class="chat-place-x" data-close="1" aria-label="Close">\u00d7</button>
+      </div>
+      <div id="chat-place-photo" class="chat-place-photo"></div>
+      <p id="chat-place-address" class="chat-place-address"></p>
+      <div id="chat-place-facts" class="chat-place-facts"></div>
+      <div id="chat-place-tags" class="chat-place-tags"></div>
+      <details id="chat-place-hours" class="chat-place-hours"><summary>Opening hours</summary><ul id="chat-place-hours-list"></ul></details>
+      <div class="chat-place-actions">
+        <a id="chat-place-maps" class="btn btn-primary" target="_blank" rel="noopener noreferrer">Open in Google Maps</a>
+        <button type="button" id="chat-place-ask" class="btn btn-outline">Ask Sidekick about this place</button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+  modal.addEventListener("click", (event) => {
+    if (event.target?.dataset?.close === "1") closeChatPlaceDetails();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && modal.classList.contains("open")) closeChatPlaceDetails();
+  });
+  return modal;
+}
+
+function closeChatPlaceDetails() {
+  const modal = document.getElementById("chat-place-modal");
+  if (!modal) return;
+  if (modal.contains(document.activeElement)) document.activeElement.blur();
+  modal.classList.remove("open");
+  modal.setAttribute("aria-hidden", "true");
+}
+
+function openChatPlaceDetails(place) {
+  const modal = ensureChatPlaceModal();
+  document.getElementById("chat-place-title").textContent = place.name;
+  document.getElementById("chat-place-address").textContent = place.address || "Address unavailable";
+
+  const photo = document.getElementById("chat-place-photo");
+  photo.replaceChildren();
+  const url = chatPlacePhotoUrl(place);
+  photo.hidden = !url;
+  if (url) {
+    const img = document.createElement("img");
+    img.alt = `Photo of ${place.name}`;
+    img.addEventListener("error", () => { photo.hidden = true; }, { once: true });
+    img.src = url;
+    photo.appendChild(img);
+    if (place.photoAttribution?.name) {
+      const credit = document.createElement("small");
+      credit.className = "chat-place-credit";
+      if (/^https:\/\//i.test(place.photoAttribution.uri)) {
+        const link = document.createElement("a");
+        link.href = place.photoAttribution.uri;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.textContent = `Photo: ${place.photoAttribution.name}`;
+        credit.appendChild(link);
+      } else {
+        credit.textContent = `Photo: ${place.photoAttribution.name}`;
+      }
+      photo.appendChild(credit);
+    }
+  }
+
+  const priceLabels = {
+    PRICE_LEVEL_FREE: "Free",
+    PRICE_LEVEL_INEXPENSIVE: "\u20b1",
+    PRICE_LEVEL_MODERATE: "\u20b1\u20b1",
+    PRICE_LEVEL_EXPENSIVE: "\u20b1\u20b1\u20b1",
+    PRICE_LEVEL_VERY_EXPENSIVE: "\u20b1\u20b1\u20b1\u20b1",
+  };
+  const facts = document.getElementById("chat-place-facts");
+  facts.replaceChildren();
+  [["Rating", chatRatingText(place)], ["Price", priceLabels[place.priceLevel] || ""]]
+    .filter(([, value]) => value)
+    .forEach(([label, value]) => {
+      const fact = document.createElement("div");
+      fact.className = "chat-place-fact";
+      const l = document.createElement("span");
+      l.textContent = label;
+      const v = document.createElement("strong");
+      v.textContent = value;
+      fact.append(l, v);
+      facts.appendChild(fact);
+    });
+
+  const tags = document.getElementById("chat-place-tags");
+  tags.replaceChildren();
+  place.types.filter((type) => !["point_of_interest", "establishment"].includes(type)).slice(0, 4).forEach((type) => {
+    const tag = document.createElement("span");
+    tag.className = "chat-place-tag";
+    tag.textContent = type.replace(/_/g, " ");
+    tags.appendChild(tag);
+  });
+
+  const hours = document.getElementById("chat-place-hours");
+  const hoursList = document.getElementById("chat-place-hours-list");
+  hoursList.replaceChildren();
+  place.openingHours.forEach((line) => {
+    const item = document.createElement("li");
+    item.textContent = line;
+    hoursList.appendChild(item);
+  });
+  hours.hidden = !place.openingHours.length;
+  hours.open = false;
+
+  const query = place.lat !== null && place.lng !== null ? `${place.lat},${place.lng}` : `${place.name} ${place.address}`.trim();
+  document.getElementById("chat-place-maps").href = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}${place.placeId ? `&query_place_id=${encodeURIComponent(place.placeId)}` : ""}`;
+  document.getElementById("chat-place-ask").onclick = () => {
+    closeChatPlaceDetails();
+    const input = getInputEl();
+    if (input) {
+      input.value = `Tell me more about ${place.name}`;
+      input.focus();
+    }
+  };
+
+  modal.classList.add("open");
+  modal.setAttribute("aria-hidden", "false");
+  modal.querySelector(".chat-place-panel").scrollTop = 0;
+}
+
+function appendMessageToDom(role, content, ts, persist = true, places = []) {
   const el = getMessagesEl();
   if (!el) return;
+  const placeCards = role === "user" ? [] : sanitizeChatPlaces(places);
 
   const wrapper = document.createElement("div");
   wrapper.className = `message ${role === "user" ? "user-message" : "ai-message"}`;
@@ -739,13 +950,17 @@ function appendMessageToDom(role, content, ts, persist = true) {
     </div>
   `;
 
+  if (placeCards.length) {
+    wrapper.querySelector(".message-bubble")?.insertBefore(buildPlaceCards(placeCards), wrapper.querySelector(".message-time"));
+  }
+
   wrapper.style.animation = "messageIn 280ms ease both";
   el.appendChild(wrapper);
 
   if (persist) {
     const session = window.SidekickCore.getAuthSession();
     if (session?.email) {
-      const next = getChatForEmail(session.email).concat([{ role, content, ts: ts || Date.now() }]);
+      const next = getChatForEmail(session.email).concat([{ role, content, ts: ts || Date.now(), ...(placeCards.length ? { places: placeCards } : {}) }]);
       setChatForEmail(session.email, next);
     }
   }
@@ -755,7 +970,7 @@ function renderMessages(messages) {
   const el = getMessagesEl();
   if (!el) return;
   el.innerHTML = "";
-  messages.forEach((m) => appendMessageToDom(m.role, m.content, m.ts, false));
+  messages.forEach((m) => appendMessageToDom(m.role, m.content, m.ts, false, m.places));
 }
 
 function showTypingIndicator() {
@@ -794,7 +1009,7 @@ function clearChat() {
   setChatForEmail(session.email, []);
   try { sessionStorage.removeItem(getChatScrollPositionKey(session.email)); } catch (error) {}
   const prefs = window.SidekickCore.getPreferences() || {};
-  const opening = `${window.SidekickCore.getInitialAssistantMessage(prefs)}\n\nI am trained as your Sidekick planning companion. Tell me your destination and trip length to start.`;
+  const opening = `${window.SidekickCore.getInitialAssistantMessage(prefs)}\n\nI'm your Sidekick travel companion. Tell me your destination and trip length to start.`;
   setChatForEmail(session.email, [{ role: "ai", content: opening, ts: Date.now() }]);
   renderMessages(getChatForEmail(session.email));
 }
@@ -834,6 +1049,7 @@ async function sendMessage() {
     const merged = applySignals(session.email, userText);
     const companionState = merged.state;
     let reply = "";
+    let replyPlaces = [];
     let generatedItineraryThisReply = false;
 
     if (merged.reset) {
@@ -869,11 +1085,12 @@ async function sendMessage() {
           if (!generated?.itinerary || !Array.isArray(generated.itinerary)) {
             throw new Error("The itinerary service returned no itinerary.");
           }
+          const draftStartDate = companionState.startDate || generated.meta?.startDate || new Date().toISOString().slice(0, 10);
           const draft = {
-            itinerary: generated.itinerary,
+            itinerary: window.SidekickCore.applyLocalScheduleTimes(generated.itinerary, draftStartDate),
             meta: {
               ...(generated.meta || {}),
-              startDate: companionState.startDate || generated.meta?.startDate || new Date().toISOString().slice(0, 10),
+              startDate: draftStartDate,
               source: generated.meta?.source || "sidekick-chat-ai",
               serverTripId: generated.tripId,
             },
@@ -894,6 +1111,7 @@ async function sendMessage() {
         try {
         const backendReply = await askSidekickBackend(history, prefs, companionState, userText);
         reply = await continueIncompleteReply(backendReply.reply || fallbackReply(userText, companionState, prefs), prefs, companionState, session.email);
+        replyPlaces = sanitizeChatPlaces(backendReply.places);
         const actionSummary = applyAgentActions(session.email, backendReply.actions);
         if (actionSummary.length) reply = `${reply}\n\n${actionSummary.join("\n")}`;
         } catch (error) {
@@ -903,7 +1121,7 @@ async function sendMessage() {
     }
 
     removeTypingIndicator();
-    appendMessageToDom("ai", reply, Date.now(), true);
+    appendMessageToDom("ai", reply, Date.now(), true, replyPlaces);
     scrollToBottom();
     if (generatedItineraryThisReply) window.SidekickAppRating?.afterItineraryGenerated();
   } catch (e) {
@@ -926,7 +1144,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const existing = getChatForEmail(session.email);
   if (!existing.length) {
-    const opening = `${window.SidekickCore.getInitialAssistantMessage(prefs)}\n\nI am trained to be your Sidekick travel companion. Start with: \"Plan a 3-day trip to Palawan\".`;
+    const opening = `${window.SidekickCore.getInitialAssistantMessage(prefs)}\n\nI'm your Sidekick travel companion. Try: \"Plan a 3-day trip to Palawan\".`;
     setChatForEmail(session.email, [{ role: "ai", content: opening, ts: Date.now() }]);
   }
 

@@ -7,13 +7,14 @@
     <link rel="stylesheet" href="css/common.css">
     <link rel="stylesheet" href="css/itinerary.css">
     <link rel="stylesheet" href="css/app-rating.css">
+    <link rel="stylesheet" href="css/a11y.css">
 </head>
 <body>
     <div class="app-container">
         <div class="screen itinerary-screen">
             <div class="itinerary-header">
                 <div class="header-top">
-                    <a href="dashboard.html" class="back-btn">
+                    <a href="dashboard.html" class="back-btn" aria-label="Back to home">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M19 12H5M12 19l-7-7 7-7"/>
                         </svg>
@@ -25,6 +26,14 @@
                     </button>
                 </div>
                 <p id="itinerary-monitoring-status" class="itinerary-budget-note" role="status" aria-live="polite" hidden></p>
+                <div id="itinerary-edit-bar" class="itinerary-edit-bar" hidden>
+                    <strong id="itinerary-title-text" class="itinerary-title-text"></strong>
+                    <div class="itinerary-edit-actions">
+                        <button id="itinerary-rename-btn" class="itinerary-edit-chip" type="button">Rename</button>
+                        <button id="itinerary-shift-btn" class="itinerary-edit-chip" type="button">Change dates</button>
+                        <button id="itinerary-add-btn" class="itinerary-edit-chip primary" type="button">+ Add activity</button>
+                    </div>
+                </div>
                 <div class="itinerary-date">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
@@ -59,6 +68,25 @@
                 </details>
             </div>
             
+            <details id="stay-eat" class="stay-eat">
+                <summary>
+                    <span class="stay-eat-summary-title">Hotels &amp; restaurants nearby</span>
+                    <span id="stay-eat-summary-stay" class="stay-eat-summary-stay"></span>
+                </summary>
+                <div class="stay-eat-body">
+                    <p id="stay-eat-area" class="stay-eat-area">Pick where to stay and eat around your destination.</p>
+                    <div id="stay-eat-banner" class="stay-eat-banner" hidden></div>
+                    <div class="stay-eat-tabs" role="tablist">
+                        <button type="button" class="stay-eat-tab active" role="tab" aria-selected="true" data-kind="hotels">Hotels</button>
+                        <button type="button" class="stay-eat-tab" role="tab" aria-selected="false" data-kind="restaurants">Restaurants</button>
+                    </div>
+                    <p id="stay-eat-status" class="stay-eat-status" role="status" aria-live="polite"></p>
+                    <div id="stay-eat-list" class="stay-eat-list" role="list"></div>
+                    <button id="stay-eat-more" class="btn btn-outline stay-eat-more" type="button" hidden>Show more</button>
+                    <p class="data-attribution">Places, photos and ratings from Google Maps.</p>
+                </div>
+            </details>
+
             <section id="itinerary-budget-summary" class="itinerary-budget-summary" aria-live="polite" hidden></section>
             <div class="itinerary-content" id="itinerary-content">
                 <!-- Empty by default. Users build an itinerary using the builder above. -->
@@ -111,6 +139,9 @@
     <script src="js/core.js"></script>
     <script src="js/app-rating.js"></script>
     <script src="js/itinerary.js"></script>
+    <script src="js/budget-pickers.js"></script>
+    <script src="js/itinerary-edit.js"></script>
+    <script src="js/stay-eat.js"></script>
     <script src="js/nav.js"></script>
 </body>
 </html>

@@ -7,6 +7,7 @@
     <link rel="stylesheet" href="css/common.css">
     <link rel="stylesheet" href="css/dashboard.css">
     <link rel="stylesheet" href="css/app-rating.css">
+    <link rel="stylesheet" href="css/a11y.css">
 </head>
 <body>
     <div class="app-container">
@@ -22,7 +23,7 @@
                         <circle cx="11" cy="11" r="8"></circle>
                         <path d="m21 21-4.35-4.35"></path>
                     </svg>
-                    <input type="text" id="destination-search" placeholder="Search destinations..." autocomplete="off" aria-autocomplete="list" aria-controls="destination-search-suggestions" aria-expanded="false">
+                    <input type="text" id="destination-search" placeholder="Search destinations..." aria-label="Search destinations" autocomplete="off" aria-autocomplete="list" aria-controls="destination-search-suggestions" aria-expanded="false">
                 </div>
                 <div id="destination-search-suggestions" class="destination-search-suggestions" role="listbox" aria-label="Destination suggestions" hidden></div>
                 <p id="destination-search-status" class="destination-search-status" aria-live="polite"></p>
@@ -31,7 +32,7 @@
             <div class="section">
                 <div class="section-header">
                     <h2>Recommended for you</h2>
-                    <a href="#" class="see-all">See all</a>
+                    <a href="#" class="see-all" id="see-all-recommended">See all</a>
                 </div>
                 
                 <div class="horizontal-scroll" id="recommended-row"></div>
@@ -40,10 +41,11 @@
             <div class="section">
                 <div class="section-header">
                     <h2>Popular destinations</h2>
-                    <a href="#" class="see-all">See all</a>
+                    <a href="#" class="see-all" id="see-all-popular">See all</a>
                 </div>
                 
                 <div class="grid-2" id="destinations-grid"></div>
+                <p class="data-attribution">Places, photos and ratings from Google Maps.</p>
             </div>
             
             <div id="destination-modal" class="destination-modal" aria-hidden="true">
@@ -103,6 +105,22 @@
             </div>
             
         </div>
+    </div>
+
+    <div id="see-all-screen" class="see-all-screen" aria-hidden="true" hidden>
+        <div class="see-all-header">
+            <button id="see-all-back" class="see-all-back" type="button" aria-label="Back to dashboard">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>
+            </button>
+            <div class="see-all-heading">
+                <h2 id="see-all-title">Destinations</h2>
+                <p id="see-all-subtitle"></p>
+            </div>
+        </div>
+        <div id="see-all-list" class="see-all-list" role="list"></div>
+        <p id="see-all-status" class="see-all-status" aria-live="polite"></p>
+        <p class="data-attribution see-all-attribution">Places and ratings from Google Maps.</p>
+        <button id="see-all-more" class="btn btn-outline see-all-more" type="button" hidden>Show more</button>
     </div>
 
     <nav class="bottom-nav overlay">

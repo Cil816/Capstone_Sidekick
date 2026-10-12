@@ -1,0 +1,93 @@
+/* Six-box verification code input (login reset, registration, verify page) */
+.otp-boxes {
+    display: flex;
+    gap: 8px;
+    width: 100%;
+    max-width: 360px;
+}
+
+.form-group .otp-boxes input.otp-box,
+.otp-boxes input.otp-box {
+    flex: 1 1 0;
+    width: 100%;
+    min-width: 0;
+    max-width: 52px;
+    height: 56px;
+    padding: 0;
+    border: 1.5px solid #dce6ef;
+    border-radius: 12px;
+    background: #f6f9fc;
+    color: #163457;
+    font-size: 22px;
+    font-weight: 700;
+    text-align: center;
+    caret-color: #279bb0;
+    box-sizing: border-box;
+}
+
+.form-group .otp-boxes input.otp-box:focus,
+.otp-boxes input.otp-box:focus {
+    outline: none;
+    border-color: #58bdc6;
+    background: #fff;
+    box-shadow: 0 0 0 4px rgb(69 184 194 / 13%);
+}
+
+.otp-boxes.complete input.otp-box {
+    border-color: #58bdc6;
+}
+
+/* Forgot-password flow on the login screen */
+#login-form[hidden],
+.reset-flow[hidden],
+.reset-step[hidden],
+.footer-text[hidden],
+.auth-error[hidden] {
+    display: none !important;
+}
+
+.reset-step {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.reset-text {
+    margin: 0;
+    color: #526274;
+    font-size: 14px;
+    overflow-wrap: anywhere;
+}
+
+.reset-secondary {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.reset-link-button {
+    padding: 6px 0;
+    border: none;
+    background: none;
+    color: #287f97;
+    font: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.reset-link-button:disabled {
+    opacity: 0.6;
+    cursor: wait;
+}
+
+.reset-back {
+    align-self: center;
+    margin-top: 4px;
+}
+
+.auth-success {
+    border-color: #bcebd0;
+    background: #f0fbf5;
+    color: #187245;
+}

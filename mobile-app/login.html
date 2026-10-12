@@ -6,12 +6,15 @@
     <title>Sidekick AI - Login</title>
     <link rel="stylesheet" href="css/common.css">
     <link rel="stylesheet" href="css/login.css">
+    <link rel="stylesheet" href="css/otp.css">
+    <link rel="stylesheet" href="css/legal.css">
+    <link rel="stylesheet" href="css/a11y.css">
 </head>
 <body>
     <div class="app-container">
         <div class="screen">
             <div class="header">
-                <a href="index.html" class="back-btn">
+                <a href="index.html" class="back-btn" aria-label="Back to welcome screen">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <path d="M19 12H5M12 19l-7-7 7-7"/>
                     </svg>
@@ -38,18 +41,63 @@
                     <button type="submit" class="btn btn-primary btn-full">Login</button>
                 </form>
 
+                <section class="form reset-flow" id="reset-flow" hidden>
+                    <div class="reset-step" id="reset-step-email">
+                        <div class="form-group">
+                            <label for="reset-email">Email</label>
+                            <input type="email" id="reset-email" placeholder="your@email.com" autocomplete="email">
+                        </div>
+                        <button type="button" class="btn btn-primary btn-full" id="reset-send-code">Send code</button>
+                    </div>
+
+                    <div class="reset-step" id="reset-step-code" hidden>
+                        <p class="reset-text">Enter the 6-digit code sent to <strong id="reset-code-email"></strong>.</p>
+                        <div class="form-group">
+                            <label for="reset-otp">Reset code</label>
+                            <input type="text" id="reset-otp" inputmode="numeric" autocomplete="one-time-code" maxlength="6" data-otp-boxes>
+                        </div>
+                        <button type="button" class="btn btn-primary btn-full" id="reset-verify-code">Confirm code</button>
+                        <div class="reset-secondary">
+                            <button type="button" class="reset-link-button" id="reset-resend-code">Resend code</button>
+                            <button type="button" class="reset-link-button" id="reset-change-email">Change email</button>
+                        </div>
+                    </div>
+
+                    <div class="reset-step" id="reset-step-password" hidden>
+                        <div class="form-group">
+                            <label for="reset-password">Enter new password</label>
+                            <input type="password" id="reset-password" placeholder="At least 8 characters" autocomplete="new-password">
+                        </div>
+                        <div class="form-group">
+                            <label for="reset-password-confirm">Confirm new password</label>
+                            <input type="password" id="reset-password-confirm" placeholder="Type it again" autocomplete="new-password">
+                        </div>
+                        <button type="button" class="btn btn-primary btn-full" id="reset-save-password">Change password</button>
+                    </div>
+
+                    <button type="button" class="reset-link-button reset-back" id="reset-back-to-login">Back to login</button>
+                </section>
+
                 <div class="auth-error" id="auth-error" role="alert" aria-live="polite" hidden></div>
+                <div class="auth-error auth-success" id="auth-status" role="status" aria-live="polite" hidden></div>
                 
                 <div class="footer-text">
                     <span>Don't have an account? </span>
                     <a href="register.html">Register</a>
                 </div>
+                <nav class="legal-links" aria-label="Legal">
+                    <a href="privacy.html">Privacy Policy</a>
+                    <a href="terms.html">Terms</a>
+                    <a href="cookies.html">Cookie &amp; Storage Notice</a>
+                </nav>
             </div>
         </div>
     </div>
 
     <script src="js/config.local.js"></script>
     <script src="js/core.js"></script>
+    <script src="js/otp-input.js"></script>
     <script src="js/login.js"></script>
+    <script src="js/forgot-password.js"></script>
 </body>
 </html>

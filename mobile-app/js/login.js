@@ -114,6 +114,14 @@ function bindLoginForm() {
     return;
   }
 
+  if (new URLSearchParams(window.location.search).get("account") === "deleted") {
+    const statusEl = document.getElementById("auth-status");
+    if (statusEl) {
+      statusEl.textContent = "Your account and its data were deleted.";
+      statusEl.removeAttribute("hidden");
+    }
+  }
+
   const sessionMessage = new URLSearchParams(window.location.search).get("session");
   if (sessionMessage === "expired") {
     const errEl = document.getElementById("auth-error");

@@ -609,3 +609,18 @@ input:focus, select:focus, textarea:focus {
 .chat-input-container { background: rgba(255, 255, 255, .86); border-color: var(--sidekick-line); backdrop-filter: blur(12px); }
 
 .auth-error { border-color: #f1cbd1; box-shadow: 0 8px 18px rgba(177, 94, 109, .08); }
+
+/* Maintenance banner (shown while the backend is in maintenance mode) */
+.maintenance-banner {
+    position: sticky;
+    top: 0;
+    z-index: 20000;
+    padding: 10px 16px;
+    background: #fff4e5;
+    color: #7a3e00;
+    border-bottom: 1px solid #f3c58a;
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1.4;
+    text-align: center;
+}

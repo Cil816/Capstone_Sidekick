@@ -100,5 +100,101 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  // ---- Delete account (right to erasure) ----
+  const deleteBtn = document.getElementById('delete-account-btn');
+  const deleteDialog = document.getElementById('delete-account-dialog');
+  const deleteForm = document.getElementById('delete-account-form');
+  const deletePassword = document.getElementById('delete-account-password');
+  const deleteError = document.getElementById('delete-account-error');
+  const deleteConfirm = document.getElementById('delete-account-confirm');
+
+  function setDeleteError(text) {
+    if (!deleteError) return;
+    deleteError.textContent = text || '';
+    deleteError.hidden = !text;
+  }
+
+  // Removes everything Sidekick saved on this device for this account.
+  function clearLocalAccountData(email) {
+    const perEmailKeys = [
+      'sidekick.chatByEmail.v1',
+      'sidekick.itineraryByEmail.v1',
+      'sidekick.pendingItineraryByEmail.v1',
+      'sidekick.preferencesByEmail.v1',
+      'sidekick.remindersByEmail.v1',
+      'sidekick.aiCompanionByEmail.v2',
+      'sidekick.stayByEmail.v1',
+    ];
+    try { window.SidekickCore.removeAllRemindersFor?.(email); } catch (error) {}
+    perEmailKeys.forEach((key) => {
+      try {
+        const all = JSON.parse(localStorage.getItem(key) || '{}');
+        if (all && typeof all === 'object' && email in all) {
+          delete all[email];
+          localStorage.setItem(key, JSON.stringify(all));
+        }
+      } catch (error) {}
+    });
+    [
+      `sidekick.notificationPrefs.${email}`,
+      'sidekick.selectedDestination.v1',
+      'sidekick.aiPlaces.v1',
+      'sidekick.aiRoute.v1',
+      'sidekick.appReviewItineraryOpportunity.v1',
+      'sidekick.appReviewLastPromptAt.v1',
+      'sidekick.appReviewSnoozedUntil.v1',
+      'userPreferences',
+      'userName',
+      'name',
+      'userEmail',
+      'email',
+    ].forEach((key) => {
+      try { localStorage.removeItem(key); } catch (error) {}
+    });
+    try {
+      for (let index = sessionStorage.length - 1; index >= 0; index -= 1) {
+        const key = sessionStorage.key(index);
+        if (key && (key.startsWith('sidekick.chatScrollPosition') || key === 'sidekick.pendingChatMessage.v1' || key === 'sidekick.onboarding.v1')) {
+          sessionStorage.removeItem(key);
+        }
+      }
+    } catch (error) {}
+  }
+
+  if (deleteBtn && deleteDialog && deleteForm) {
+    deleteBtn.addEventListener('click', () => {
+      setDeleteError('');
+      if (deletePassword) deletePassword.value = '';
+      deleteDialog.showModal();
+      deletePassword?.focus();
+    });
+    document.getElementById('delete-account-cancel')?.addEventListener('click', () => deleteDialog.close());
+    deleteForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const password = String(deletePassword?.value || '');
+      if (!password) {
+        setDeleteError('Enter your password to confirm.');
+        deletePassword?.focus();
+        return;
+      }
+      setDeleteError('');
+      deleteConfirm.disabled = true;
+      deleteConfirm.textContent = 'Deleting…';
+      try {
+        await window.SidekickCore.apiRequest('/api/account/delete', {
+          method: 'POST',
+          body: JSON.stringify({ password }),
+        });
+        clearLocalAccountData(session.email);
+        window.SidekickCore.clearAuthSession();
+        window.location.href = 'login.html?account=deleted';
+      } catch (error) {
+        setDeleteError(error.message || 'Your account could not be deleted. Please try again.');
+        deleteConfirm.disabled = false;
+        deleteConfirm.textContent = 'Delete permanently';
+      }
+    });
+  }
+
   loadPreferences();
 });

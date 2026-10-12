@@ -124,3 +124,118 @@
 
     .onboarding-content { padding-bottom: calc(24px + var(--bottom-overlay-height, 0px)); }
 }
+
+/* Destination search (step 3) */
+.dest-search-wrap {
+    position: relative;
+    margin-bottom: 8px;
+}
+
+.dest-search-input {
+    width: 100%;
+    padding: 14px 16px;
+    border: 1px solid #D1D5DB;
+    border-radius: 12px;
+    font-size: 16px;
+    color: #2C3E50;
+    background: #fff;
+    box-sizing: border-box;
+}
+
+.dest-search-input:focus {
+    outline: none;
+    border-color: #6B8CAE;
+    box-shadow: 0 0 0 3px rgba(107, 140, 174, 0.2);
+}
+
+.dest-search-input:disabled {
+    background: #F5F7FA;
+    cursor: not-allowed;
+}
+
+.dest-suggestions {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    z-index: 20;
+    background: #fff;
+    border: 1px solid #E5E7EB;
+    border-radius: 12px;
+    box-shadow: 0 8px 24px rgba(44, 62, 80, 0.12);
+    overflow: hidden;
+}
+
+.dest-suggestions[hidden] {
+    display: none;
+}
+
+.dest-suggestion {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    width: 100%;
+    padding: 12px 16px;
+    background: #fff;
+    border: none;
+    border-bottom: 1px solid #F3F4F6;
+    text-align: left;
+    cursor: pointer;
+}
+
+.dest-suggestion:last-child {
+    border-bottom: none;
+}
+
+.dest-suggestion:hover {
+    background: #F5F7FA;
+}
+
+.dest-suggestion strong {
+    font-size: 15px;
+    font-weight: 500;
+    color: #2C3E50;
+}
+
+.dest-suggestion span {
+    font-size: 13px;
+    color: #6B7280;
+}
+
+.onboarding-content .dest-status {
+    min-height: 20px;
+    margin: 0 0 8px;
+    font-size: 13px;
+    color: #6B7280;
+}
+
+.onboarding-content .dest-counter {
+    margin: 0 0 8px;
+    font-size: 13px;
+    color: #6B8CAE;
+    font-weight: 500;
+}
+
+.dest-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.dest-chip-remove {
+    font-size: 18px;
+    line-height: 1;
+}
+
+.dest-subheading {
+    font-size: 16px;
+    font-weight: 500;
+    color: #2C3E50;
+    margin: 24px 0 12px;
+}
+
+.chip:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}

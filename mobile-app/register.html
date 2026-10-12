@@ -6,12 +6,15 @@
     <title>Sidekick AI - Register</title>
     <link rel="stylesheet" href="css/common.css">
     <link rel="stylesheet" href="css/register.css">
+    <link rel="stylesheet" href="css/otp.css">
+    <link rel="stylesheet" href="css/legal.css">
+    <link rel="stylesheet" href="css/a11y.css">
 </head>
 <body>
     <div class="app-container">
         <div class="screen register-screen">
             <div class="header">
-                <a href="index.html" class="back-btn">
+                <a href="index.html" class="back-btn" aria-label="Back to welcome screen">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <path d="M19 12H5M12 19l-7-7 7-7"/>
                     </svg>
@@ -35,7 +38,7 @@
                         <p class="screen-subtitle">Enter the 6-digit code sent to <strong id="registration-code-email"></strong>.</p>
                         <div class="form-group">
                             <label for="registration-otp">Verification code</label>
-                            <input type="text" id="registration-otp" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6">
+                            <input type="text" id="registration-otp" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" data-otp-boxes>
                         </div>
                         <button type="button" class="btn btn-primary btn-full" id="confirm-registration-code">Confirm email</button>
                         <div class="registration-secondary-actions" role="group" aria-label="Email verification options">
@@ -54,9 +57,17 @@
                             <label for="register-password">Password</label>
                             <input type="password" id="register-password" placeholder="••••••••" autocomplete="new-password">
                         </div>
+                        <div class="form-group">
+                            <label for="register-password-confirm">Confirm password</label>
+                            <input type="password" id="register-password-confirm" placeholder="••••••••" autocomplete="new-password">
+                        </div>
+                        <label class="terms-check" for="age-confirmed">
+                            <input type="checkbox" id="age-confirmed">
+                            <span>I confirm that I am 18 years old or older.</span>
+                        </label>
                         <label class="terms-check" for="terms-accepted">
                             <input type="checkbox" id="terms-accepted">
-                            <span>I agree to the <button type="button" class="terms-link" id="terms-link">Terms and Conditions</button></span>
+                            <span>I agree to the <button type="button" class="terms-link" id="terms-link">Terms and Conditions</button> and consent to Sidekick processing my personal data as described in the <button type="button" class="terms-link" id="privacy-link">Privacy Policy</button>.</span>
                         </label>
                         <button type="submit" class="btn btn-primary btn-full" id="complete-registration">Create account</button>
                     </section>
@@ -73,18 +84,17 @@
         </div>
     </div>
 
-    <dialog class="terms-dialog" id="terms-dialog">
+    <dialog class="terms-dialog" id="terms-dialog" aria-labelledby="terms-dialog-title">
         <div class="terms-dialog-header">
-            <h2>Terms and Conditions</h2>
-            <button type="button" class="terms-close" id="terms-close" aria-label="Close terms">&times;</button>
+            <h2 id="terms-dialog-title">Terms and Conditions</h2>
+            <button type="button" class="terms-close" id="terms-close" aria-label="Close">&times;</button>
         </div>
-        <p>Sidekick helps you plan and organize travel. You agree to provide accurate information, keep your password private, and use the service lawfully.</p>
-        <p>Your account information is stored to provide the service. We may contact you at the email address you provide for account verification and essential service notices.</p>
-        <p>You may stop using your account at any time. These terms may be updated when necessary, and continued use of Sidekick means you accept the current terms.</p>
+        <iframe class="terms-frame" id="terms-frame" title="Terms and Conditions" src="about:blank"></iframe>
     </dialog>
 
     <script src="js/config.local.js"></script>
     <script src="js/core.js"></script>
+    <script src="js/otp-input.js"></script>
     <script src="js/register.js"></script>
 </body>
 </html>

@@ -58,10 +58,11 @@ function ensureGoogleMapsLoaded() {
       const map = document.getElementById("destination-map");
       if (map) map.innerHTML = '<div class="destination-map-message">Google Maps could not authenticate this key. Check its website restrictions, billing, and Maps JavaScript API configuration.</div>';
     };
-    script.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_MAPS_API_KEY}&libraries=geometry`;
+    // loading=async needs a callback: it fires once the API and the geometry library are ready.
+    window.__sidekickDashboardMapsReady = () => resolve();
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_MAPS_API_KEY}&libraries=geometry&loading=async&callback=__sidekickDashboardMapsReady`;
     script.async = true;
     script.defer = true;
-    script.onload = () => resolve();
     script.onerror = () => reject(new Error("Failed to load Google Maps script"));
     document.head.appendChild(script);
   });
@@ -73,26 +74,28 @@ function buildPreferenceKeywords(prefs, searchQuery = "") {
     return [String(searchQuery).trim()];
   }
 
+  // Every keyword targets tourist attractions; interests only steer which kind.
   const byInterest = {
-    Beaches: "beach attractions",
-    Hiking: "hiking trails",
+    Beaches: "famous beaches",
+    Hiking: "hiking trails and peaks",
     "Historical Sites": "historical landmarks",
-    "Local Cuisine": "local food market",
-    Nightlife: "nightlife district",
-    Shopping: "shopping market",
-    Photography: "scenic viewpoint",
-    "Nature & Wildlife": "nature park",
+    "Local Cuisine": "cultural heritage attractions",
+    Nightlife: "scenic city landmarks",
+    Shopping: "heritage districts and landmarks",
+    Photography: "scenic viewpoints",
+    "Nature & Wildlife": "nature parks and waterfalls",
     Mountains: "mountain attractions",
-    "Water Sports": "water sports attractions",
+    "Water Sports": "diving and snorkeling spots",
+    "Island Hopping": "island hopping destinations",
   };
 
   const byTravelType = {
-    "Food Tour": "food spots",
+    "Food Tour": "cultural heritage attractions",
     Adventure: "adventure attractions",
-    Cultural: "heritage attractions",
-    "Beach & Relaxation": "beach resorts",
+    Cultural: "heritage sites",
+    "Beach & Relaxation": "famous beaches",
     "Nature & Wildlife": "nature attractions",
-    "City Exploration": "city attractions",
+    "City Exploration": "city landmarks",
   };
 
   const interestKeywords = (prefs?.interests || []).map((i) => byInterest[i]).filter(Boolean);
@@ -251,21 +254,128 @@ function getPhilippinesSeedLocations() {
   return [{ lat: 14.5995, lng: 120.9842 }, { lat: 10.3157, lng: 123.8854 }, { lat: 7.1907, lng: 125.4553 }];
 }
 
-async function fetchPlacesFromGoogle(prefs, searchQuery = "") {
-  const keywords = buildPreferenceKeywords(prefs, searchQuery);
-  const seeds = getPhilippinesSeedLocations();
+// Types that mark a place as a real tourist spot, and types/names that mark it as an
+// everyday business (markets, malls, hotels, restaurants, terminals...) to leave out.
+const TOURIST_SPOT_TYPES = new Set([
+  "tourist_attraction", "natural_feature", "beach", "park", "national_park", "state_park", "museum",
+  "historical_landmark", "historical_place", "landmark", "monument", "cultural_landmark", "church",
+  "place_of_worship", "hindu_temple", "mosque", "synagogue", "zoo", "aquarium", "amusement_park",
+  "water_park", "hiking_area", "garden", "botanical_garden", "observation_deck", "scenic_spot",
+  "art_gallery", "wildlife_park", "wildlife_refuge", "island", "campground", "plaza", "cultural_center",
+  "picnic_ground", "marina", "visitor_center", "adventure_sports_center",
+]);
+const NON_TOURIST_TYPES = new Set([
+  "market", "shopping_mall", "store", "supermarket", "grocery_store", "convenience_store", "department_store",
+  "clothing_store", "home_goods_store", "hardware_store", "electronics_store", "food_store", "lodging", "hotel",
+  "resort_hotel", "motel", "hostel", "inn", "guest_house", "bed_and_breakfast", "restaurant", "cafe", "bar",
+  "food", "meal_takeaway", "meal_delivery", "bakery", "spa", "gym", "travel_agency", "real_estate_agency",
+  "bank", "atm", "hospital", "pharmacy", "drugstore", "school", "gas_station", "car_rental", "bus_station",
+  "transit_station", "airport", "local_government_office", "police", "post_office", "finance", "doctor",
+]);
+const NON_TOURIST_NAME = /\b(wet market|public market|fish market|meat market|talipapa|palengke|mall|supermarket|grocery|terminal|hospital|pharmacy|drugstore|bank|pawnshop|gas station|gasoline|hardware)\b/i;
+
+function isTouristSpot(place) {
+  if (!place) return false;
+  // Development samples use placeholder types, so keep the old behaviour for them.
+  if (place.isDevelopmentMock) return true;
+  if (NON_TOURIST_NAME.test(String(place.name || ""))) return false;
+  const types = (place.types || []).map((type) => String(type).toLowerCase());
+  if (types.some((type) => NON_TOURIST_TYPES.has(type))) return false;
+  return !types.length || types.some((type) => TOURIST_SPOT_TYPES.has(type));
+}
+
+function getInterestKeywords(prefs) {
+  // Same interest/travel-style keywords used for general recommendations, without the generic fallbacks.
+  return buildPreferenceKeywords(prefs).filter((kw) => kw !== "tourist attractions" && kw !== "best places to visit");
+}
+
+function getRecommendedLimit(prefs) {
+  const destinationCount = (window.SidekickCore.getPreferredDestinations?.(prefs) || []).length;
+  return Math.max(IS_PERF_LITE ? 5 : 8, destinationCount);
+}
+
+async function fetchDestinationPlaces(destination, index, prefs, interestKeywords, destinationCount) {
+  const interestKeyword = interestKeywords.length ? interestKeywords[index % interestKeywords.length] : "";
+  // Always search for top tourist spots; with few destinations add an interest-based query too.
+  const queries = Array.from(new Set(["top tourist spots", interestKeyword].filter(Boolean)))
+    .slice(0, destinationCount <= 3 ? 2 : 1)
+    .map((keyword) => keyword + " in " + destination.name);
+  const lat = Number(destination.lat);
+  const lng = Number(destination.lng);
+  const seeds = destination.lat != null && destination.lng != null && Number.isFinite(lat) && Number.isFinite(lng) ? [{ lat, lng }] : [];
   const data = await window.SidekickCore.apiRequest("/api/maps/places", {
-    method: "POST", body: JSON.stringify({ queries: keywords, seeds }),
+    method: "POST", body: JSON.stringify({ queries, seeds, touristOnly: true }),
   });
-  const allPlaces = (data.places || []).map(toBackendDashboardPlace)
-    .map((place) => ({ ...place, isDevelopmentMock: Boolean(data.isDevelopmentMock) }))
-    .filter((place) => Number.isFinite(place.lat) && Number.isFinite(place.lng));
-  if (allPlaces.length) {
-    const recommended = allPlaces.slice().sort((a, b) => preferenceScore(b, prefs) - preferenceScore(a, prefs)).slice(0, IS_PERF_LITE ? 5 : 8);
-    const popularDestinations = allPlaces.slice().sort((a, b) => b.rating - a.rating).slice(0, IS_PERF_LITE ? 5 : 8);
-    return { recommended, popularDestinations, allPlaces };
+  return (data.places || []).map(toBackendDashboardPlace)
+    .map((place) => ({ ...place, isDevelopmentMock: Boolean(data.isDevelopmentMock), preferredFor: destination.name }))
+    .filter((place) => Number.isFinite(place.lat) && Number.isFinite(place.lng))
+    .filter(isTouristSpot)
+    .sort((a, b) => preferenceScore(b, prefs) - preferenceScore(a, prefs));
+}
+
+async function fetchRecommendedPlaces(prefs, searchQuery = "") {
+  const limit = getRecommendedLimit(prefs);
+  const destinations = String(searchQuery || "").trim() ? [] : (window.SidekickCore.getPreferredDestinations?.(prefs) || []);
+
+  if (!destinations.length) {
+    const keywords = buildPreferenceKeywords(prefs, searchQuery);
+    const data = await window.SidekickCore.apiRequest("/api/maps/places", {
+      method: "POST", body: JSON.stringify({ queries: keywords, seeds: getPhilippinesSeedLocations(), touristOnly: true }),
+    });
+    const allPlaces = (data.places || []).map(toBackendDashboardPlace)
+      .map((place) => ({ ...place, isDevelopmentMock: Boolean(data.isDevelopmentMock) }))
+      .filter((place) => Number.isFinite(place.lat) && Number.isFinite(place.lng))
+      .filter(isTouristSpot);
+    return allPlaces.sort((a, b) => preferenceScore(b, prefs) - preferenceScore(a, prefs)).slice(0, limit);
   }
-  return { recommended: [], popularDestinations: [], allPlaces: [] };
+
+  // Search around each of the user's chosen destinations, then interleave so every
+  // destination is represented before any one of them contributes a second spot.
+  const interestKeywords = getInterestKeywords(prefs);
+  const settled = await Promise.allSettled(
+    destinations.map((destination, index) => fetchDestinationPlaces(destination, index, prefs, interestKeywords, destinations.length)),
+  );
+  const lists = settled.filter((r) => r.status === "fulfilled").map((r) => r.value);
+  const seen = new Set();
+  const recommended = [];
+  for (let round = 0; recommended.length < limit && lists.some((list) => round < list.length); round += 1) {
+    for (const list of lists) {
+      const place = list[round];
+      if (!place || seen.has(place.placeId) || recommended.length >= limit) continue;
+      seen.add(place.placeId);
+      recommended.push(place);
+    }
+  }
+  return recommended;
+}
+
+async function fetchPopularPlaces() {
+  const data = await window.SidekickCore.apiRequest("/api/maps/places", {
+    method: "POST",
+    body: JSON.stringify({ queries: ["top tourist attractions", "famous landmarks", "must visit destinations", "best beaches and islands"], touristOnly: true }),
+  });
+  // Development mode only returns sample places for another country; use the curated list instead.
+  if (data.isDevelopmentMock) return [];
+  const popularity = (place) => (place.rating || 0) * Math.log10((place.ratingCount || 0) + 10);
+  return (data.places || []).map(toBackendDashboardPlace)
+    .filter((place) => Number.isFinite(place.lat) && Number.isFinite(place.lng))
+    .filter((place) => place.rating > 0 && place.ratingCount >= 100)
+    .filter(isTouristSpot)
+    .sort((a, b) => popularity(b) - popularity(a))
+    .slice(0, IS_PERF_LITE ? 5 : 8);
+}
+
+async function fetchPlacesFromGoogle(prefs, searchQuery = "") {
+  // Recommended follows the user's preferences; popular is a general list of top
+  // Philippine tourist spots. They are fetched independently so one failing
+  // does not hide the other.
+  const [recommendedResult, popularResult] = await Promise.allSettled([
+    fetchRecommendedPlaces(prefs, searchQuery),
+    fetchPopularPlaces(),
+  ]);
+  const recommended = recommendedResult.status === "fulfilled" ? recommendedResult.value : [];
+  const popularDestinations = popularResult.status === "fulfilled" && popularResult.value.length >= 4 ? popularResult.value : [];
+  return { recommended, popularDestinations, allPlaces: recommended.concat(popularDestinations) };
 }
 
 function renderPlaceCard(place) {
@@ -342,7 +452,7 @@ async function showDestinationDetails(place, prefs, session) {
   const imageEl = document.getElementById("destination-image");
   if (imageEl) {
     imageEl.innerHTML = place.photoUrl
-      ? `<img src="${place.photoUrl}" alt="${window.SidekickCore.escapeHtml(place.name)}" loading="lazy" />`
+      ? `<img src="${window.SidekickCore.escapeHtml(place.photoUrl)}" alt="${window.SidekickCore.escapeHtml(place.name)}" loading="lazy" />${renderPhotoAttribution(place)}`
       : `<div class="destination-photo-fallback">${svgPin()}</div>`;
   }
 
@@ -638,7 +748,7 @@ async function generateFocusedItinerary(place, prefs, session) {
     if (!Array.isArray(response.itinerary)) throw new Error("The itinerary service returned no itinerary.");
     const byEmail = window.SidekickCore.getItineraryByEmail();
     byEmail[session.email] = {
-      itinerary: response.itinerary,
+      itinerary: window.SidekickCore.applyLocalScheduleTimes(response.itinerary, response.meta?.startDate || startDate),
       meta: {
         ...(response.meta || {}),
         focusedPlace: place.name,
@@ -665,6 +775,205 @@ async function generateFocusedItinerary(place, prefs, session) {
   }
 }
 
+// ---- "See all" list screen -------------------------------------------------
+const SEE_ALL_PAGE_SIZE = 20;
+const SEE_ALL_MAX_ITEMS = 60;
+const _seeAllCache = {};
+const _seeAllState = { kind: "", items: [], shown: 0, prefs: null, session: null, open: false };
+
+function placeNameKey(place) {
+  return String(place?.name || "").trim().toLowerCase();
+}
+
+function dedupePlaces(places) {
+  const seenIds = new Set();
+  const seenNames = new Set();
+  const out = [];
+  for (const place of places) {
+    const id = place.placeId ? String(place.placeId) : "";
+    const nameKey = placeNameKey(place);
+    if ((id && seenIds.has(id)) || (nameKey && seenNames.has(nameKey))) continue;
+    if (id) seenIds.add(id);
+    if (nameKey) seenNames.add(nameKey);
+    out.push(place);
+  }
+  return out;
+}
+
+async function fetchDestinationPool(destination, interestKeywords) {
+  const queries = Array.from(new Set(["top tourist spots", ...interestKeywords.slice(0, 3)]))
+    .slice(0, 4).map((keyword) => keyword + " in " + destination.name);
+  const lat = Number(destination.lat);
+  const lng = Number(destination.lng);
+  const seeds = destination.lat != null && destination.lng != null && Number.isFinite(lat) && Number.isFinite(lng) ? [{ lat, lng }] : [];
+  const data = await window.SidekickCore.apiRequest("/api/maps/places", {
+    method: "POST", body: JSON.stringify({ queries, seeds, touristOnly: true }),
+  });
+  return (data.places || []).map(toBackendDashboardPlace)
+    .map((place) => ({ ...place, isDevelopmentMock: Boolean(data.isDevelopmentMock), preferredFor: destination.name }))
+    .filter((place) => Number.isFinite(place.lat) && Number.isFinite(place.lng))
+    .filter(isTouristSpot);
+}
+
+// Builds the full recommended list ordered from most to least preferred.
+async function buildRecommendedPool(prefs, initial) {
+  const destinations = window.SidekickCore.getPreferredDestinations?.(prefs) || [];
+  const interestKeywords = getInterestKeywords(prefs);
+  const generalQueries = Array.from(new Set([...buildPreferenceKeywords(prefs), "tourist attractions"])).slice(0, 4);
+  const jobs = destinations.map((destination) => fetchDestinationPool(destination, interestKeywords));
+  jobs.push(window.SidekickCore.apiRequest("/api/maps/places", {
+    method: "POST", body: JSON.stringify({ queries: generalQueries, seeds: getPhilippinesSeedLocations(), touristOnly: true }),
+  }).then((data) => (data.places || []).map(toBackendDashboardPlace)
+    .map((place) => ({ ...place, isDevelopmentMock: Boolean(data.isDevelopmentMock) }))
+    .filter((place) => Number.isFinite(place.lat) && Number.isFinite(place.lng))
+    .filter(isTouristSpot)));
+  const settled = await Promise.allSettled(jobs);
+  const fetched = settled.filter((r) => r.status === "fulfilled").flatMap((r) => r.value);
+  const destinationIndex = (place) => destinations.findIndex((d) => d.name === place.preferredFor);
+  // Places found for a chosen destination outrank general ones; earlier picks outrank later ones.
+  const scored = dedupePlaces([...(initial || []), ...fetched]).filter(isTouristSpot).map((place) => {
+    const index = destinationIndex(place);
+    const bonus = index > -1 ? 6 - index * 0.4 : 0;
+    return { place, score: preferenceScore(place, prefs) + bonus };
+  });
+  scored.sort((a, b) => b.score - a.score);
+  return scored.slice(0, SEE_ALL_MAX_ITEMS).map((entry) => entry.place);
+}
+
+// Builds the full popular list: the most generally well-known Philippine spots first.
+async function buildPopularPool(initial) {
+  const searches = [
+    ["top tourist attractions", "famous landmarks", "must visit destinations", "best beaches and islands"],
+    ["best waterfalls", "mountains and hiking spots", "historical sites and churches", "top islands"],
+  ];
+  const settled = await Promise.allSettled(searches.map((queries) => window.SidekickCore.apiRequest("/api/maps/places", {
+    method: "POST", body: JSON.stringify({ queries, touristOnly: true }),
+  })));
+  const responses = settled.filter((r) => r.status === "fulfilled").map((r) => r.value);
+  // Development mode returns sample places from another country, so ignore them.
+  const usable = responses.filter((data) => !data.isDevelopmentMock);
+  const popularity = (place) => (place.rating || 0) * Math.log10((place.ratingCount || 0) + 10);
+  const ranked = usable.flatMap((data) => data.places || []).map(toBackendDashboardPlace)
+    .filter((place) => Number.isFinite(place.lat) && Number.isFinite(place.lng))
+    .filter((place) => place.rating > 0 && place.ratingCount >= 100)
+    .filter(isTouristSpot)
+    .sort((a, b) => popularity(b) - popularity(a));
+  const curated = window.SidekickCore.buildPopularDestinations?.() || [];
+  const merged = dedupePlaces([...ranked, ...(initial || []), ...curated]);
+  // Drop curated spots that a ranked result already covers under a slightly different name.
+  const rankedKeys = ranked.map(placeNameKey);
+  return merged.filter((place) => {
+    if (ranked.includes(place)) return true;
+    const key = placeNameKey(place);
+    return !rankedKeys.some((other) => other.includes(key) || key.includes(other));
+  }).slice(0, SEE_ALL_MAX_ITEMS);
+}
+
+function formatRatingLabel(place) {
+  const rating = Number(place.rating);
+  return Number.isFinite(rating) && rating > 0 ? "★ " + rating.toFixed(1) : "";
+}
+
+function renderSeeAllItems(startIndex, endIndex) {
+  const list = document.getElementById("see-all-list");
+  if (!list) return;
+  const esc = window.SidekickCore.escapeHtml;
+  const html = _seeAllState.items.slice(startIndex, endIndex).map((place, offset) => {
+    const index = startIndex + offset;
+    const detail = [place.region, place.preferredFor ? "Near " + place.preferredFor : ""]
+      .filter(Boolean).filter((part, i, arr) => arr.indexOf(part) === i).join(" • ");
+    return '<button type="button" class="see-all-item" role="listitem" data-index="' + index + '">'
+      + '<span class="see-all-rank">' + (index + 1) + "</span>"
+      + '<span class="see-all-text"><strong>' + esc(place.name) + "</strong><small>" + esc(detail) + "</small></span>"
+      + '<span class="see-all-rating">' + esc(formatRatingLabel(place)) + "</span>"
+      + '<svg class="see-all-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>'
+      + "</button>";
+  }).join("");
+  list.insertAdjacentHTML("beforeend", html);
+}
+
+function updateSeeAllMore() {
+  const more = document.getElementById("see-all-more");
+  if (!more) return;
+  const remaining = _seeAllState.items.length - _seeAllState.shown;
+  more.hidden = remaining <= 0;
+  if (remaining > 0) more.textContent = "Show more (" + remaining + " left)";
+}
+
+function showMoreSeeAll() {
+  const start = _seeAllState.shown;
+  const end = Math.min(start + SEE_ALL_PAGE_SIZE, _seeAllState.items.length);
+  renderSeeAllItems(start, end);
+  _seeAllState.shown = end;
+  updateSeeAllMore();
+}
+
+function setSeeAllVisible(visible) {
+  const screen = document.getElementById("see-all-screen");
+  if (!screen) return;
+  if (!visible && screen.contains(document.activeElement)) {
+    // Focus must leave the screen before it is hidden from assistive technology.
+    const opener = document.getElementById(_seeAllState.kind === "popular" ? "see-all-popular" : "see-all-recommended");
+    if (opener) opener.focus({ preventScroll: true });
+    else document.activeElement.blur();
+  }
+  screen.hidden = !visible;
+  screen.setAttribute("aria-hidden", String(!visible));
+  document.body.style.overflow = visible ? "hidden" : "";
+  _seeAllState.open = visible;
+}
+
+function closeSeeAll() {
+  if (!_seeAllState.open) return;
+  setSeeAllVisible(false);
+}
+
+async function openSeeAll(kind, prefs, session, initialPlaces) {
+  const list = document.getElementById("see-all-list");
+  const status = document.getElementById("see-all-status");
+  const more = document.getElementById("see-all-more");
+  const screen = document.getElementById("see-all-screen");
+  if (!list || !status || !more || !screen) return;
+
+  _seeAllState.kind = kind;
+  _seeAllState.items = [];
+  _seeAllState.shown = 0;
+  _seeAllState.prefs = prefs;
+  _seeAllState.session = session;
+  list.replaceChildren();
+  more.hidden = true;
+  setText("see-all-title", kind === "recommended" ? "Recommended for you" : "Popular destinations");
+  setText("see-all-subtitle", kind === "recommended"
+    ? "Ordered from most to least preferred"
+    : "Top tourist spots across the Philippines");
+  setSeeAllVisible(true);
+  screen.scrollTop = 0;
+  try { history.pushState({ seeAll: true }, ""); } catch (error) {}
+
+  status.textContent = "Loading destinations…";
+  let items = _seeAllCache[kind];
+  if (!items) {
+    try {
+      items = kind === "recommended"
+        ? await buildRecommendedPool(prefs, initialPlaces)
+        : await buildPopularPool(initialPlaces);
+    } catch (error) {
+      items = [];
+    }
+    if (!items.length) {
+      // Offline/failed lookups: fall back to what the dashboard already shows plus the local lists.
+      const local = window.SidekickCore.buildDashboardRecommendations(prefs);
+      items = dedupePlaces([...(initialPlaces || []), ...(kind === "recommended" ? local.recommended : local.popularDestinations)]);
+    }
+    _seeAllCache[kind] = items;
+  }
+  // The user may have closed this screen or opened the other list while loading.
+  if (!_seeAllState.open || _seeAllState.kind !== kind) return;
+  _seeAllState.items = items;
+  status.textContent = items.length ? "" : "No destinations to show right now.";
+  showMoreSeeAll();
+}
+
 function attachCardHandlers(recPlaces, popPlaces, prefs, session) {
   const recCards = document.querySelectorAll("#recommended-row .place-card");
   recCards.forEach((card, idx) => {
@@ -686,7 +995,8 @@ function renderDestinationLists(recommended, popular, query, prefs, session) {
   const destinationsGrid = document.getElementById("destinations-grid");
   if (!recommendedRow || !destinationsGrid) return;
   const q = normalizeQuery(query);
-  const rec = recommended.filter((p) => placeMatches(p, q)).slice(0, IS_PERF_LITE ? 4 : 6);
+  const preferredCount = (window.SidekickCore.getPreferredDestinations?.(prefs) || []).length;
+  const rec = recommended.filter((p) => placeMatches(p, q)).slice(0, Math.max(IS_PERF_LITE ? 4 : 6, preferredCount));
   const pop = popular.filter((p) => placeMatches(p, q)).slice(0, IS_PERF_LITE ? 4 : 6);
   recommendedRow.innerHTML = rec.map(renderPlaceCard).join("");
   destinationsGrid.innerHTML = pop.map(renderDestinationCard).join("");
@@ -732,6 +1042,36 @@ document.addEventListener("DOMContentLoaded", async () => {
     // Show local results only after the initial Places request has settled.
   }
   renderDestinationLists(recommended, popular, "", prefs, session);
+
+  const seeAllList = document.getElementById("see-all-list");
+  const seeAllBack = document.getElementById("see-all-back");
+  const seeAllMore = document.getElementById("see-all-more");
+  const bindSeeAll = (id, kind, getInitial) => {
+    const link = document.getElementById(id);
+    if (link) link.addEventListener("click", (event) => { event.preventDefault(); void openSeeAll(kind, prefs, session, getInitial()); });
+  };
+  bindSeeAll("see-all-recommended", "recommended", () => recommended);
+  bindSeeAll("see-all-popular", "popular", () => popular);
+  if (seeAllList) {
+    seeAllList.addEventListener("click", (event) => {
+      const row = event.target.closest(".see-all-item");
+      const place = row ? _seeAllState.items[Number(row.dataset.index)] : null;
+      if (place) void showDestinationDetails(place, prefs, session);
+    });
+  }
+  if (seeAllMore) seeAllMore.addEventListener("click", showMoreSeeAll);
+  if (seeAllBack) {
+    seeAllBack.addEventListener("click", () => {
+      if (history.state && history.state.seeAll) history.back();
+      else closeSeeAll();
+    });
+  }
+  window.addEventListener("popstate", closeSeeAll);
+  document.addEventListener("keydown", (event) => {
+    const modalOpen = document.getElementById("destination-modal")?.classList.contains("open");
+    if (event.key === "Escape" && _seeAllState.open && !modalOpen) closeSeeAll();
+  });
+
   let suggestionTimer = null;
   let suggestionRequestId = 0;
   let placeSuggestionSessionToken = null;

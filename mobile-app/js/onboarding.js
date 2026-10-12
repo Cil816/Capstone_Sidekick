@@ -3,6 +3,12 @@ let currentStep = 1;
 let selectedTravel = [];
 let selectedInterests = [];
 let selectedPlaces = [];
+// Free-form destinations the user searched for: { name, placeId, lat, lng, region }
+let selectedDestinations = [];
+const MAX_DESTINATIONS = 5;
+let destSearchTimer = null;
+let destSearchRequestId = 0;
+let destSessionToken = null;
 
 const ONBOARDING_STATE_KEY = 'sidekick.onboarding.v1';
 const TOTAL_ONBOARDING_STEPS = 3;
@@ -52,6 +58,7 @@ document.addEventListener('DOMContentLoaded', () => {
             selectedTravel = Array.isArray(saved.selectedTravel) ? saved.selectedTravel : selectedTravel;
             selectedInterests = Array.isArray(saved.selectedInterests) ? saved.selectedInterests : selectedInterests;
             selectedPlaces = Array.isArray(saved.selectedPlaces) ? saved.selectedPlaces : selectedPlaces;
+            selectedDestinations = Array.isArray(saved.selectedDestinations) ? saved.selectedDestinations.slice(0, MAX_DESTINATIONS) : selectedDestinations;
         }
     } catch (e) {
         // ignore parsing errors
@@ -78,7 +85,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Persist state before unload so users don't lose progress on refresh/back.
     window.addEventListener('beforeunload', () => {
         try {
-            sessionStorage.setItem(ONBOARDING_STATE_KEY, JSON.stringify({ currentStep, selectedTravel, selectedInterests, selectedPlaces }));
+            sessionStorage.setItem(ONBOARDING_STATE_KEY, JSON.stringify({ currentStep, selectedTravel, selectedInterests, selectedPlaces, selectedDestinations }));
         } catch (e) {}
     });
 });
@@ -142,32 +149,228 @@ function renderStep() {
         });
     }
     else if (currentStep === 3) {
-        // preferred places
-        const places = window.SidekickCore?.PLACES || [];
-        content.innerHTML = `
-            <h1>Preferred places</h1>
-            <p>Pick places or regions you'd like to visit (optional)</p>
-            <div class="chip-container" id="places-chips"></div>
-        `;
-        const container = document.getElementById('places-chips');
-        // show a compact list
-        places.slice(0, 10).forEach(p => {
-            const name = `${p.name}`;
-            const btn = document.createElement('button');
-            btn.className = 'chip'; btn.textContent = name;
-            if (selectedPlaces.includes(name)) btn.classList.add('selected');
-            btn.onclick = () => {
-                const idx = selectedPlaces.indexOf(name);
-                if (idx > -1) selectedPlaces.splice(idx,1); else selectedPlaces.push(name);
-                renderStep();
-            };
-            container.appendChild(btn);
-        });
+        renderDestinationStep(content);
     }
-   
+
     updateContinueButton();
     // Recalculate bottom spacing when the step content changes.
     try { const ev = new Event('resize'); window.dispatchEvent(ev); } catch (e) {}
+}
+
+function destinationKey(dest) {
+    return String(dest.placeId || dest.name || '').toLowerCase();
+}
+
+function isDestinationSelected(dest) {
+    const key = destinationKey(dest);
+    const nameKey = String(dest.name || '').toLowerCase();
+    return selectedDestinations.some((d) => destinationKey(d) === key || String(d.name || '').toLowerCase() === nameKey);
+}
+
+function setDestinationStatus(text) {
+    const el = document.getElementById('dest-status');
+    if (el) el.textContent = text || '';
+}
+
+function addDestination(dest) {
+    if (!dest || !dest.name || isDestinationSelected(dest)) return false;
+    if (selectedDestinations.length >= MAX_DESTINATIONS) {
+        setDestinationStatus('You can choose up to ' + MAX_DESTINATIONS + ' destinations. Remove one to add another.');
+        return false;
+    }
+    selectedDestinations.push(dest);
+    return true;
+}
+
+function removeDestination(index) {
+    selectedDestinations.splice(index, 1);
+    setDestinationStatus('');
+    refreshDestinationStep();
+}
+
+function closeDestinationSuggestions() {
+    const list = document.getElementById('dest-suggestions');
+    if (list) {
+        list.replaceChildren();
+        list.hidden = true;
+    }
+}
+
+function refreshDestinationStep() {
+    const selectedWrap = document.getElementById('dest-selected');
+    const counter = document.getElementById('dest-counter');
+    const input = document.getElementById('dest-search');
+    const popularWrap = document.getElementById('dest-popular');
+    if (!selectedWrap) return;
+    const atLimit = selectedDestinations.length >= MAX_DESTINATIONS;
+
+    if (counter) counter.textContent = selectedDestinations.length + ' of ' + MAX_DESTINATIONS + ' selected';
+    if (input) input.disabled = atLimit;
+
+    selectedWrap.replaceChildren();
+    selectedDestinations.forEach((dest, index) => {
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'chip selected dest-chip';
+        chip.setAttribute('aria-label', 'Remove ' + dest.name);
+        const label = document.createElement('span');
+        label.textContent = dest.name;
+        const x = document.createElement('span');
+        x.className = 'dest-chip-remove';
+        x.textContent = '×';
+        chip.append(label, x);
+        chip.onclick = () => removeDestination(index);
+        selectedWrap.appendChild(chip);
+    });
+
+    if (popularWrap) {
+        popularWrap.querySelectorAll('.chip').forEach((chip) => {
+            const selected = isDestinationSelected({ name: chip.dataset.name });
+            chip.classList.toggle('selected', selected);
+            chip.disabled = atLimit && !selected;
+        });
+    }
+}
+
+async function selectSuggestedDestination(suggestion) {
+    if (!suggestion?.placeId || !suggestion?.name) return;
+    const sessionToken = destSessionToken;
+    destSessionToken = null;
+    destSearchRequestId += 1;
+    clearTimeout(destSearchTimer);
+    closeDestinationSuggestions();
+    const input = document.getElementById('dest-search');
+    if (input) input.value = '';
+    if (isDestinationSelected({ name: suggestion.name, placeId: suggestion.placeId })) {
+        setDestinationStatus(suggestion.name + ' is already selected.');
+        return;
+    }
+    if (selectedDestinations.length >= MAX_DESTINATIONS) {
+        setDestinationStatus('You can choose up to ' + MAX_DESTINATIONS + ' destinations. Remove one to add another.');
+        return;
+    }
+    setDestinationStatus('Adding ' + suggestion.name + '…');
+    const secondary = String(suggestion.secondaryText || '')
+        .split(',').map((x) => x.trim()).filter((x) => x && x.toLowerCase() !== 'philippines');
+    const dest = {
+        name: suggestion.name,
+        placeId: suggestion.placeId,
+        region: secondary[0] || 'Philippines',
+    };
+    try {
+        const data = await window.SidekickCore.apiRequest('/api/maps/place-details', {
+            method: 'POST',
+            body: JSON.stringify({ placeId: suggestion.placeId, sessionToken }),
+        });
+        const lat = Number(data?.place?.lat);
+        const lng = Number(data?.place?.lng);
+        if (data?.place?.lat != null && data?.place?.lng != null && Number.isFinite(lat) && Number.isFinite(lng)) {
+            dest.lat = lat;
+            dest.lng = lng;
+        }
+    } catch (error) {
+        // Keep the destination by name; the dashboard can still search for it by text.
+    }
+    // The user may have navigated away from this step while details were loading.
+    if (currentStep !== 3) return;
+    addDestination(dest);
+    setDestinationStatus('');
+    refreshDestinationStep();
+}
+
+function runDestinationSearch(query) {
+    const list = document.getElementById('dest-suggestions');
+    const requestId = ++destSearchRequestId;
+    clearTimeout(destSearchTimer);
+    closeDestinationSuggestions();
+    if (query.length < 2) {
+        destSessionToken = null;
+        setDestinationStatus('');
+        return;
+    }
+    if (!destSessionToken) {
+        destSessionToken = window.crypto?.randomUUID?.()
+            || (Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 14));
+    }
+    const sessionToken = destSessionToken;
+    setDestinationStatus('Searching destinations…');
+    destSearchTimer = setTimeout(async () => {
+        try {
+            const data = await window.SidekickCore.apiRequest('/api/maps/place-suggestions', {
+                method: 'POST',
+                body: JSON.stringify({ input: query, sessionToken, scope: 'destination' }),
+            });
+            const input = document.getElementById('dest-search');
+            if (requestId !== destSearchRequestId || !input || input.value.trim() !== query || !list) return;
+            const suggestions = (data.suggestions || []).filter((item) => item?.placeId && item?.name).slice(0, 6);
+            suggestions.forEach((suggestion) => {
+                const option = document.createElement('button');
+                option.type = 'button';
+                option.className = 'dest-suggestion';
+                const title = document.createElement('strong');
+                title.textContent = suggestion.name;
+                option.appendChild(title);
+                if (suggestion.secondaryText) {
+                    const sub = document.createElement('span');
+                    sub.textContent = suggestion.secondaryText;
+                    option.appendChild(sub);
+                }
+                option.addEventListener('mousedown', (event) => event.preventDefault());
+                option.addEventListener('click', () => { void selectSuggestedDestination(suggestion); });
+                list.appendChild(option);
+            });
+            list.hidden = suggestions.length === 0;
+            setDestinationStatus(suggestions.length ? '' : 'No destinations found. Try another name.');
+        } catch (error) {
+            if (requestId !== destSearchRequestId) return;
+            closeDestinationSuggestions();
+            setDestinationStatus('Search is unavailable right now. You can still pick from the popular places below.');
+        }
+    }, 320);
+}
+
+function renderDestinationStep(content) {
+    content.innerHTML = `
+        <h1>Where do you want to go?</h1>
+        <p>Search any destination in the Philippines. Choose up to ${MAX_DESTINATIONS} (optional).</p>
+        <div class="dest-search-wrap">
+            <input type="text" id="dest-search" class="dest-search-input" placeholder="Search places, cities, islands…" autocomplete="off" aria-label="Search destinations" />
+            <div class="dest-suggestions" id="dest-suggestions" hidden></div>
+        </div>
+        <div class="dest-status" id="dest-status" role="status" aria-live="polite"></div>
+        <div class="dest-counter" id="dest-counter"></div>
+        <div class="chip-container" id="dest-selected"></div>
+        <h2 class="dest-subheading">Popular picks</h2>
+        <div class="chip-container" id="dest-popular"></div>
+    `;
+
+    const popular = window.SidekickCore?.POPULAR_PH_SPOTS || [];
+    const popularWrap = document.getElementById('dest-popular');
+    popular.forEach((spot) => {
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'chip';
+        chip.textContent = spot.name;
+        chip.dataset.name = spot.name;
+        chip.onclick = () => {
+            const existing = selectedDestinations.findIndex((d) => String(d.name).toLowerCase() === spot.name.toLowerCase());
+            if (existing > -1) {
+                selectedDestinations.splice(existing, 1);
+                setDestinationStatus('');
+            } else {
+                addDestination({ name: spot.name, region: spot.region, lat: spot.lat, lng: spot.lng });
+            }
+            refreshDestinationStep();
+        };
+        popularWrap.appendChild(chip);
+    });
+
+    const input = document.getElementById('dest-search');
+    input.addEventListener('input', () => runDestinationSearch(input.value.trim()));
+    input.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') closeDestinationSuggestions();
+    });
+    refreshDestinationStep();
 }
 
 function toggleTravel(type) {
@@ -213,7 +416,7 @@ function handleBack() {
     }
 }
 
-function handleNext() {
+async function handleNext() {
     if (currentStep < TOTAL_ONBOARDING_STEPS) {
         currentStep++;
         renderStep();
@@ -224,14 +427,27 @@ function handleNext() {
             return;
         }
 
+        const preferredDestinations = selectedDestinations.slice(0, MAX_DESTINATIONS).map((d) => ({ ...d }));
+        // preferredPlaces stays a plain list of names for the backend and itinerary logic.
+        const preferredPlaceNames = preferredDestinations.map((d) => d.name);
+
         const prefs = {
             travelTypes: selectedTravel,
             interests: selectedInterests,
-            preferredPlaces: selectedPlaces,
+            preferredPlaces: preferredPlaceNames,
+            preferredDestinations,
         };
 
-        // Save preferences for this user.
+        // Save preferences for this user (on the device, then to the account).
         window.SidekickCore.setPreferencesForEmail(session.email, prefs);
+        const continueBtn = document.getElementById('onboarding-continue');
+        if (continueBtn) continueBtn.disabled = true;
+        try {
+            await Promise.race([
+                window.SidekickCore.syncPreferencesToServer?.(session.email, prefs),
+                new Promise((resolve) => setTimeout(resolve, 4000)),
+            ]);
+        } catch (e) {}
 
         // Onboarding is preference setup only. Remove any pre-existing itinerary so
         // users decide later when and what itinerary to generate.
@@ -251,11 +467,7 @@ function handleNext() {
         } catch (e) {}
 
         // Keep legacy key so older code won't break.
-        localStorage.setItem('userPreferences', JSON.stringify({
-            travelTypes: selectedTravel,
-            interests: selectedInterests,
-            preferredPlaces: selectedPlaces,
-        }));
+        localStorage.setItem('userPreferences', JSON.stringify(prefs));
 
         // Clear persisted onboarding state
         try { sessionStorage.removeItem(ONBOARDING_STATE_KEY); } catch (e) {}

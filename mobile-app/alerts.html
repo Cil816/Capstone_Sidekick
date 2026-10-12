@@ -21,12 +21,13 @@
     .editor-panel-title { font-weight: 600; color: #111827; }
     .editor-panel-note { margin-top: 4px; color: #6B7280; font-size: 13px; }
   </style>
+    <link rel="stylesheet" href="css/a11y.css">
 </head>
 <body>
   <div class="app-container">
     <div class="screen">
       <div class="header">
-        <a href="dashboard.html" class="back-btn">
+        <a href="dashboard.html" class="back-btn" aria-label="Back to home">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M19 12H5M12 19l-7-7 7-7"/>
           </svg>
@@ -37,10 +38,10 @@
         <p class="screen-subtitle">Create reminders for schedules, bookings, and advisories.</p>
 
         <div style="margin-top:20px">
-          <input id="title" placeholder="Reminder title" />
+          <input id="title" placeholder="Reminder title" aria-label="Reminder title" />
           <div class="form-row" style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap">
-            <input id="datetime" type="datetime-local" style="flex:1; min-width:150px" />
-            <select id="type" style="flex:0 0 auto"><option>Schedule</option><option>Booking</option><option>Advisory</option></select>
+            <input id="datetime" type="datetime-local" aria-label="Reminder date and time" style="flex:1; min-width:150px" />
+            <select id="type" aria-label="Reminder type" style="flex:0 0 auto"><option>Schedule</option><option>Booking</option><option>Advisory</option></select>
             <button id="add" class="btn btn-primary">Add</button>
             <button id="sync-itinerary" class="btn btn-outline" type="button">Sync from Itinerary</button>
           </div>
@@ -50,7 +51,7 @@
           <div id="itinerary-editor-title" class="editor-panel-title">Edit itinerary schedule</div>
           <div id="itinerary-editor-note" class="editor-panel-note"></div>
           <div class="form-row" style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap">
-            <input id="itinerary-editor-datetime" type="datetime-local" style="flex:1; min-width:170px" />
+            <input id="itinerary-editor-datetime" type="datetime-local" aria-label="New date and time" style="flex:1; min-width:170px" />
             <button id="save-itinerary-edit" class="btn btn-primary" type="button">Save schedule</button>
             <button id="cancel-itinerary-edit" class="btn btn-outline" type="button">Cancel</button>
           </div>

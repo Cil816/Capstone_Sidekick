@@ -6,6 +6,7 @@
   <title>Sidekick AI - Settings</title>
   <link rel="stylesheet" href="css/common.css">
   <link rel="stylesheet" href="css/settings.css">
+    <link rel="stylesheet" href="css/a11y.css">
 </head>
 <body>
   <div class="app-container">
@@ -58,15 +59,39 @@
           <button id="reset-prefs-btn" class="btn btn-outline btn-full settings-action" type="button">Reset onboarding preferences</button>
         </section>
 
+        <section class="settings-card">
+          <h2>Legal &amp; privacy</h2>
+          <nav class="settings-legal-links" aria-label="Legal documents">
+            <a href="privacy.html">Privacy Policy</a>
+            <a href="terms.html">Terms and Conditions</a>
+            <a href="cookies.html">Cookie &amp; Storage Notice</a>
+          </nav>
+          <p class="settings-legal-note">Questions or data requests: <a href="mailto:s2023101800@firstasia.edu.ph">s2023101800@firstasia.edu.ph</a></p>
+        </section>
         <section class="settings-card danger">
           <h2>Account</h2>
           <button id="logout-btn" class="btn btn-primary btn-full settings-action" type="button">Logout</button>
+          <button id="delete-account-btn" class="btn btn-danger-outline btn-full settings-action" type="button">Delete my account</button>
         </section>
 
         <div id="settings-message" class="settings-message" hidden></div>
       </div>
     </div>
   </div>
+
+  <dialog class="delete-account-dialog" id="delete-account-dialog" aria-labelledby="delete-account-title">
+    <form id="delete-account-form" novalidate>
+      <h2 id="delete-account-title">Delete your account?</h2>
+      <p>This permanently deletes your Sidekick account, itineraries, preferences and ratings from our server, and clears your Sidekick data on this device. This cannot be undone.</p>
+      <label for="delete-account-password">Enter your password to confirm</label>
+      <input type="password" id="delete-account-password" autocomplete="current-password" required>
+      <p class="auth-error" id="delete-account-error" role="alert" hidden></p>
+      <div class="delete-account-actions">
+        <button type="button" class="btn btn-outline" id="delete-account-cancel">Cancel</button>
+        <button type="submit" class="btn btn-danger" id="delete-account-confirm">Delete permanently</button>
+      </div>
+    </form>
+  </dialog>
 
   <nav class="bottom-nav overlay">
     <a href="dashboard.html" class="nav-item">

@@ -31,10 +31,11 @@ function loadGoogleMapsForItinerary() {
     };
     const script = document.createElement("script");
     script.dataset.sidekickMaps = "1";
-    script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}`;
+    // loading=async needs a callback: it fires once the API is ready to use.
+    window.__sidekickItineraryMapsReady = () => resolve();
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}&loading=async&callback=__sidekickItineraryMapsReady`;
     script.async = true;
     script.defer = true;
-    script.onload = resolve;
     script.onerror = () => reject(new Error("Google Maps failed to load. Check the browser key, billing, and Maps JavaScript API configuration."));
     document.head.appendChild(script);
   });
@@ -441,10 +442,29 @@ function renderActivity(activity) {
   `;
 }
 
+// True while the signed-in user has a saved itinerary with at least one day.
+function hasStoredItinerary() {
+  try {
+    const owner = window.SidekickCore?.getAuthSession?.()?.email;
+    const saved = owner ? window.SidekickCore.getItineraryByEmail()[owner] : null;
+    return Array.isArray(saved?.itinerary) && saved.itinerary.length > 0;
+  } catch (error) {
+    return false;
+  }
+}
+
+// Hide the cost estimate as soon as the itinerary is removed (or expires).
+document.addEventListener('sidekick:itinerary-updated', () => {
+  if (hasStoredItinerary()) return;
+  _liveTripBudget = null;
+  _liveActivityCostsByPlaceId = new Map();
+  renderTripBudget(null);
+});
+
 function renderTripBudget(budget) {
   const summary = document.getElementById('itinerary-budget-summary');
   if (!summary) return;
-  if (!budget) {
+  if (!budget || !hasStoredItinerary()) {
     summary.hidden = true;
     summary.replaceChildren();
     return;
@@ -570,24 +590,74 @@ async function loadLiveTripBudget(itineraryData, email) {
     return;
   }
   const summary = document.getElementById('itinerary-budget-summary');
-  if (summary) {
+  const knownCosts = new Map((Array.isArray(meta.liveActivityCosts) ? meta.liveActivityCosts : [])
+    .filter((cost) => cost && cost.placeId)
+    .map((cost) => [String(cost.placeId), cost]));
+  const canReusePrices = knownCosts.size > 0 && Boolean(meta.liveTripBudget);
+  const unpricedPlaceIds = new Set((itineraryData.itinerary || []).flatMap((day) => day?.activities || [])
+    .map((activity) => String(activity?.placeId || ''))
+    .filter((placeId) => placeId && !knownCosts.has(placeId)));
+  if (summary && (!canReusePrices || unpricedPlaceIds.size)) {
     summary.hidden = false;
     summary.innerHTML = '<h2>Estimated activity costs</h2><p class="itinerary-budget-note">Searching current activity prices and sources…</p>';
   }
   try {
-    const response = await window.SidekickCore.apiRequest('/api/itinerary/estimate-budget', {
-      method: 'POST',
-      body: JSON.stringify({
-        email,
-        itinerary: itineraryData.itinerary,
-        destination: meta.destination || meta.focusedPlace || '',
+    let activityCosts;
+    let tripBudget;
+    if (canReusePrices) {
+      // Prices already researched for this trip are kept; only new places are searched.
+      let response = null;
+      if (unpricedPlaceIds.size) {
+        response = await window.SidekickCore.apiRequest('/api/itinerary/estimate-budget', {
+          method: 'POST',
+          body: JSON.stringify({
+            email,
+            itinerary: itineraryData.itinerary.map((day) => ({
+              ...day,
+              activities: (day.activities || []).filter((activity) => unpricedPlaceIds.has(String(activity?.placeId || ''))),
+            })),
+            destination: meta.destination || meta.focusedPlace || '',
+            startDate: normalizedDates?.startDate || meta.startDate,
+            endDate: normalizedDates?.endDate || meta.endDate,
+          }),
+        });
+        (Array.isArray(response.activityCosts) ? response.activityCosts : []).forEach((cost) => {
+          if (cost?.placeId) knownCosts.set(String(cost.placeId), cost);
+        });
+      }
+      const usedPlaceIds = new Set((itineraryData.itinerary || []).flatMap((day) => day?.activities || [])
+        .map((activity) => String(activity?.placeId || '')).filter(Boolean));
+      activityCosts = Array.from(knownCosts.values()).filter((cost) => usedPlaceIds.has(String(cost.placeId)));
+      const sources = Array.from(new Map([...(meta.liveTripBudget.sources || []), ...(response?.tripBudget?.sources || [])]
+        .filter((source) => source?.url).map((source) => [source.url, source])).values()).slice(0, 12);
+      tripBudget = buildLocalTripBudget(itineraryData, activityCosts, {
         startDate: normalizedDates?.startDate || meta.startDate,
         endDate: normalizedDates?.endDate || meta.endDate,
-      }),
-    });
-    const activityCosts = Array.isArray(response.activityCosts) ? response.activityCosts : [];
+        searchedAt: response?.tripBudget?.searchedAt || meta.liveTripBudget.searchedAt,
+        searchSuggestionHtml: response?.tripBudget?.searchSuggestionHtml || meta.liveTripBudget.searchSuggestionHtml || '',
+        sources,
+      });
+    } else {
+      const response = await window.SidekickCore.apiRequest('/api/itinerary/estimate-budget', {
+        method: 'POST',
+        body: JSON.stringify({
+          email,
+          itinerary: itineraryData.itinerary,
+          destination: meta.destination || meta.focusedPlace || '',
+          startDate: normalizedDates?.startDate || meta.startDate,
+          endDate: normalizedDates?.endDate || meta.endDate,
+        }),
+      });
+      activityCosts = Array.isArray(response.activityCosts) ? response.activityCosts : [];
+      tripBudget = response.tripBudget || null;
+    }
+    // The itinerary may have been removed while prices were being searched.
+    if (!hasStoredItinerary()) {
+      renderTripBudget(null);
+      return;
+    }
     _liveActivityCostsByPlaceId = new Map(activityCosts.map((cost) => [String(cost.placeId), cost]));
-    _liveTripBudget = normalizeTripBudgetCounts(response.tripBudget || null, itineraryData.itinerary, activityCosts);
+    _liveTripBudget = normalizeTripBudgetCounts(tripBudget, itineraryData.itinerary, activityCosts);
     if (_liveTripBudget) {
       itineraryData.meta = {
         ...(itineraryData.meta || {}),
@@ -605,11 +675,34 @@ async function loadLiveTripBudget(itineraryData, email) {
     renderTripBudget(_liveTripBudget);
     renderItinerary(itineraryData.itinerary, Boolean(meta.isDevelopmentMock));
   } catch (error) {
-    if (summary) {
+    if (summary && hasStoredItinerary()) {
       summary.hidden = false;
       summary.innerHTML = `<h2>Estimated activity costs</h2><p class="itinerary-budget-note">Live price search is unavailable right now: ${window.SidekickCore.escapeHtml(error.message || 'Please try again later.')}</p>`;
     }
   }
+}
+
+// Builds the trip cost summary from per-place prices without another web search.
+function buildLocalTripBudget(itineraryData, activityCosts, { startDate, endDate, searchedAt, searchSuggestionHtml, sources }) {
+  const costByPlaceId = new Map((activityCosts || []).map((cost) => [String(cost.placeId), cost]));
+  const activities = (itineraryData?.itinerary || []).flatMap((day) => day?.activities || []);
+  const priced = activities
+    .map((activity) => costByPlaceId.get(String(activity?.placeId || '')))
+    .filter((cost) => cost && Number.isFinite(cost.lowPhp) && Number.isFinite(cost.highPhp));
+  return {
+    status: priced.length && priced.length === activities.length ? 'complete-estimate' : 'partial-estimate',
+    currency: 'PHP',
+    startDate,
+    endDate,
+    searchedAt,
+    searchSuggestionHtml,
+    totalLowPhp: priced.length ? priced.reduce((sum, cost) => sum + cost.lowPhp, 0) : null,
+    totalHighPhp: priced.length ? priced.reduce((sum, cost) => sum + cost.highPhp, 0) : null,
+    pricedActivityCount: priced.length,
+    totalActivityCount: activities.length,
+    missingActivityPriceCount: Math.max(0, activities.length - priced.length),
+    sources: sources || [],
+  };
 }
 
 function lookupPlaceByActivity(activity) {
@@ -923,6 +1016,7 @@ document.addEventListener("DOMContentLoaded", () => {
     destinationSuggestions?.replaceChildren();
     closeDestinationSuggestions();
     await showDestinationSuggestionOnMap(suggestion);
+    document.dispatchEvent(new CustomEvent('sidekick:destination-chosen', { detail: suggestion }));
   };
   const renderDestinationSuggestions = (suggestions, isDevelopmentMock = false, emptyMessage = 'No tourist places found') => {
     if (!destinationSuggestions) return;
@@ -1133,6 +1227,7 @@ document.addEventListener("DOMContentLoaded", () => {
         container.innerHTML = `<div id="no-itinerary-message" style="padding:24px;color:#6B7280">You don't have an itinerary yet. Use the builder above to create one.</div><button class="add-activity-btn" id="add-activity-btn" type="button" style="display:none">+ Add Activity</button>`;
       }
       if (monitoringStatus) monitoringStatus.hidden = true;
+      window.SidekickItineraryEdit?.setCurrent(null);
       removeAllBtn.disabled = false;
       showBuilder(true);
     });
@@ -1159,6 +1254,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const addBtn = document.getElementById('add-activity-btn');
     if (addBtn) addBtn.style.display = 'block';
     attachAddActivityHandler(existing, prefs, email, startDate);
+    window.SidekickItineraryEdit?.setCurrent(existing);
     showBuilder(false);
   } else {
     // show builder UI so user explicitly builds the itinerary
@@ -1209,8 +1305,44 @@ document.addEventListener("DOMContentLoaded", () => {
     const confirmation = `Build a ${durationDays}-day itinerary from ${startVal.toDateString()} through ${endVal.toDateString()}?\nTotal budget: ${budgetLabel}\nDestination: ${destinationName}${originText ? `\nStarting location: ${originText}` : ''}`;
     if (!window.confirm(confirmation)) return;
 
+    // Offer hotels that fit the budget before generating.
+    let chosenStay = null;
+    if (window.SidekickBudgetPickers?.askHotel) {
+      const pickedPlaceId = destinationInput?.dataset.placeId || '';
+      const destinationPlace = pickedPlaceId && _selectedPlace?.placeId === pickedPlaceId && hasPlaceCoordinates(_selectedPlace) ? _selectedPlace : null;
+      buildBtn.disabled = true;
+      let choice;
+      try {
+        choice = await window.SidekickBudgetPickers.askHotel({
+          destination: destinationName,
+          lat: destinationPlace ? Number(destinationPlace.lat) : null,
+          lng: destinationPlace ? Number(destinationPlace.lng) : null,
+          startDate: formatDateInput(startVal),
+          endDate: formatDateInput(endVal),
+          budgetAmountPhp: rawBudget,
+        });
+      } finally {
+        buildBtn.disabled = false;
+      }
+      if (choice?.status === 'cancel') return;
+      if (choice?.status === 'chosen' && choice.hotel) {
+        const hotel = choice.hotel;
+        chosenStay = {
+          name: hotel.name,
+          address: hotel.address || '',
+          placeId: hotel.placeId || '',
+          lat: hotel.lat,
+          lng: hotel.lng,
+          rating: hotel.rating,
+          photoResource: hotel.photoResource || '',
+          nightlyLowPhp: hotel.nightlyLowPhp,
+          nightlyHighPhp: hotel.nightlyHighPhp,
+        };
+      }
+    }
+
     buildBtn.disabled = true;
-    buildBtn.textContent = 'Building budget-aware plan…';
+    buildBtn.textContent = 'Building itinerary (this might take a while)…';
     try {
       const generated = await window.SidekickCore.apiRequest('/api/itinerary/generate', {
         method: 'POST',
@@ -1218,7 +1350,7 @@ document.addEventListener("DOMContentLoaded", () => {
           email,
           message: `Plan a ${durationDays}-day trip to ${destinationName}. Total budget: PHP ${rawBudget}. Keep the full trip within this budget when possible. Start date: ${formatDateInput(startVal)}. End date: ${formatDateInput(endVal)}.`,
           selectedDestination: { name: destinationName, placeId: destinationInput?.dataset.placeId || '' },
-          profile: { ...tempPrefs, startDate: formatDateInput(startVal), endDate: formatDateInput(endVal), durationDays },
+          profile: { ...tempPrefs, startDate: formatDateInput(startVal), endDate: formatDateInput(endVal), durationDays, ...(chosenStay ? { stay: chosenStay } : {}) },
           origin: originText ? { name: originText, address: originText } : null,
         }),
       });
@@ -1234,6 +1366,7 @@ document.addEventListener("DOMContentLoaded", () => {
           budget: budgetLabel,
           budgetAmountPhp: rawBudget,
           serverTripId: generated.tripId,
+          ...(chosenStay ? { stay: { ...chosenStay, ...(generated.meta?.stay || {}) } } : {}),
         },
       };
       if (itineraryData.meta.liveTripBudget && Array.isArray(itineraryData.meta.liveActivityCosts)) {
@@ -1248,6 +1381,8 @@ document.addEventListener("DOMContentLoaded", () => {
       const addBtn = document.getElementById('add-activity-btn');
       if (addBtn) addBtn.style.display = 'block';
       attachAddActivityHandler(itineraryData, tempPrefs, email, startVal);
+      window.SidekickItineraryEdit?.setCurrent(itineraryData);
+      if (chosenStay) window.SidekickStayEat?.setStay(chosenStay, destinationName);
       showBuilder(false);
       window.SidekickAppRating?.afterItineraryGenerated();
       try { window.SidekickCore?.syncRemindersFromItinerary?.(email); } catch (error) {}

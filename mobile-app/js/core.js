@@ -95,6 +95,41 @@ function setPreferencesForEmail(email, prefs) {
   const all = getPreferencesByEmail();
   all[email] = prefs;
   localStorage.setItem(SIDEKICK_KEYS.preferencesByEmail, JSON.stringify(all));
+  void syncPreferencesToServer(email, prefs);
+}
+
+// Saves the user's travel preferences to their account so the admin website shows
+// the same preferences the app uses. Skips the request when nothing changed.
+const PREFS_SYNCED_KEY = "sidekick.prefsSynced.v1";
+const preferenceSyncsInFlight = new Map();
+function syncPreferencesToServer(email, prefs) {
+  const session = getAuthSession();
+  if (!email || !prefs || !session?.apiToken || normalizeEmail(session.email) !== normalizeEmail(email)) return Promise.resolve(false);
+  const payload = {
+    travelTypes: Array.isArray(prefs.travelTypes) ? prefs.travelTypes : [],
+    interests: Array.isArray(prefs.interests) ? prefs.interests : [],
+    preferredPlaces: Array.isArray(prefs.preferredPlaces) ? prefs.preferredPlaces : [],
+  };
+  const snapshot = JSON.stringify(payload);
+  const synced = safeJsonParse(localStorage.getItem(PREFS_SYNCED_KEY), {});
+  if (synced[email] === snapshot) return Promise.resolve(true);
+  if (preferenceSyncsInFlight.get(email)?.snapshot === snapshot) return preferenceSyncsInFlight.get(email).request;
+  const request = apiRequest(`/api/preferences/${encodeURIComponent(email)}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  }).then(() => {
+    const latest = safeJsonParse(localStorage.getItem(PREFS_SYNCED_KEY), {});
+    latest[email] = snapshot;
+    localStorage.setItem(PREFS_SYNCED_KEY, JSON.stringify(latest));
+    return true;
+  }).catch((error) => {
+    console.warn("Unable to save preferences to your account:", error.message);
+    return false;
+  }).finally(() => {
+    if (preferenceSyncsInFlight.get(email)?.request === request) preferenceSyncsInFlight.delete(email);
+  });
+  preferenceSyncsInFlight.set(email, { snapshot, request });
+  return request;
 }
 
 function resetPreferencesForEmail(email) {
@@ -203,6 +238,7 @@ async function apiRequest(path, options = {}) {
     // Use the HTTP status below rather than exposing an HTML error page.
   }
   if (!response.ok) {
+    if (payload.maintenance === true) showMaintenanceBanner(payload.error);
     const message = typeof payload.error === "string" && payload.error.trim()
       ? payload.error
       : response.status === 404
@@ -216,6 +252,36 @@ async function apiRequest(path, options = {}) {
     throw error;
   }
   return payload;
+}
+
+// Shown on every screen while the backend is in maintenance mode.
+function showMaintenanceBanner(message) {
+  if (!document.body) return;
+  let banner = document.getElementById("maintenance-banner");
+  if (!banner) {
+    banner = document.createElement("div");
+    banner.id = "maintenance-banner";
+    banner.className = "maintenance-banner";
+    banner.setAttribute("role", "status");
+    document.body.prepend(banner);
+  }
+  banner.textContent = String(message || "").trim()
+    || "Sidekick is under maintenance right now. Please try again later.";
+}
+
+async function checkMaintenanceStatus() {
+  try {
+    const status = await apiRequest("/api/maintenance-status");
+    if (status?.maintenance) showMaintenanceBanner(status.message);
+  } catch (error) {
+    // Older backend or offline: nothing to show.
+  }
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", () => { void checkMaintenanceStatus(); }, { once: true });
+} else {
+  void checkMaintenanceStatus();
 }
 
 let appSessionInvalidationInProgress = false;
@@ -291,6 +357,7 @@ function getItinerarySyncPayload(itineraryData) {
       startDate: String(meta.startDate || new Date().toISOString()).slice(0, 10),
       endDate: meta.endDate ? String(meta.endDate).slice(0, 10) : "",
       budget: meta.budget || "",
+      title: meta.title ? String(meta.title).slice(0, 200) : "",
     },
   };
 }
@@ -549,31 +616,70 @@ function scorePlaceByInterests(place, interests) {
   return score;
 }
 
+// Top, widely known tourist spots across the Philippines. Used for the general
+// "Popular destinations" section (independent of the user's preferences).
+const POPULAR_PH_SPOTS = [
+  { name: "Boracay", region: "Aklan", lat: 11.9674, lng: 121.9248 },
+  { name: "El Nido", region: "Palawan", lat: 11.1784, lng: 119.3932 },
+  { name: "Puerto Princesa Underground River", region: "Palawan", lat: 10.1666, lng: 118.9201 },
+  { name: "Chocolate Hills", region: "Bohol", lat: 9.8293, lng: 124.1694 },
+  { name: "Banaue Rice Terraces", region: "Ifugao", lat: 16.9230, lng: 121.0561 },
+  { name: "Mayon Volcano", region: "Albay", lat: 13.2574, lng: 123.6856 },
+  { name: "Vigan Heritage Village", region: "Ilocos Sur", lat: 17.5747, lng: 120.3869 },
+  { name: "Intramuros", region: "Manila", lat: 14.5896, lng: 120.9747 },
+  { name: "Siargao Island", region: "Surigao del Norte", lat: 9.8482, lng: 126.0458 },
+  { name: "Coron Island", region: "Palawan", lat: 11.9986, lng: 120.2043 },
+  { name: "Taal Volcano", region: "Batangas", lat: 14.0113, lng: 120.9980 },
+  { name: "Kawasan Falls", region: "Cebu", lat: 9.8000, lng: 123.3750 },
+];
+
+function buildPopularDestinations() {
+  return POPULAR_PH_SPOTS.map((spot) => ({ ...spot, tags: ["Tourist Attraction"] }));
+}
+
+// Normalizes a user's selected destinations. Supports the newer
+// preferredDestinations objects and the legacy preferredPlaces name list.
+function getPreferredDestinations(prefs) {
+  const out = [];
+  const seen = new Set();
+  const push = (dest) => {
+    const key = String(dest.name || "").trim().toLowerCase();
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    out.push(dest);
+  };
+  for (const d of Array.isArray(prefs?.preferredDestinations) ? prefs.preferredDestinations : []) {
+    if (d && d.name) push({ ...d, name: String(d.name) });
+  }
+  for (const name of Array.isArray(prefs?.preferredPlaces) ? prefs.preferredPlaces : []) {
+    const label = String(name || "").trim();
+    if (!label) continue;
+    const known = PLACES.find((p) => p.name.toLowerCase() === label.toLowerCase() || p.region.toLowerCase() === label.toLowerCase());
+    push(known ? { name: label, region: known.region, lat: known.lat, lng: known.lng } : { name: label });
+  }
+  return out.slice(0, 5);
+}
+
 function buildDashboardRecommendations(prefs) {
   const interests = prefs?.interests || [];
   const budget = prefs?.budget || "";
   const travelTypes = prefs?.travelTypes || [];
 
-  const recommended = PLACES
-    .slice()
-    .sort((a, b) => scorePlaceByInterests(b, interests) - scorePlaceByInterests(a, interests))
-    .slice(0, 5);
+  // The user's chosen destinations come first, then interest-matched places.
+  const preferredDestinations = getPreferredDestinations(prefs).map((d) => ({
+    ...d,
+    region: d.region || "Philippines",
+    tags: d.tags || ["Preferred destination"],
+  }));
+  const preferredNames = new Set(preferredDestinations.map((d) => d.name.toLowerCase()));
+  const recommended = preferredDestinations.concat(
+    PLACES
+      .filter((p) => !preferredNames.has(p.name.toLowerCase()))
+      .sort((a, b) => scorePlaceByInterests(b, interests) - scorePlaceByInterests(a, interests)),
+  ).slice(0, 8);
 
-  // “Popular” can be slightly nudged by travel style.
-  let popular = PLACES.slice();
-  if (travelTypes.includes("Food Tour")) {
-    popular = popular.sort((a, b) => scorePlaceByInterests(b, ["Local Cuisine"]) - scorePlaceByInterests(a, ["Local Cuisine"]));
-  } else if (travelTypes.includes("Adventure")) {
-    popular = popular.sort((a, b) => scorePlaceByInterests(b, ["Hiking", "Mountains"]) - scorePlaceByInterests(a, ["Hiking", "Mountains"]));
-  } else if (travelTypes.includes("City Exploration")) {
-    popular = popular.sort((a, b) => scorePlaceByInterests(b, ["Historical Sites", "Shopping"]) - scorePlaceByInterests(a, ["Historical Sites", "Shopping"]));
-  }
-
-  if (budget === "Ultra Luxury") {
-    popular = popular.slice().sort((a, b) => (b.tags.includes("Photography") ? 1 : 0) - (a.tags.includes("Photography") ? 1 : 0));
-  }
-
-  const popularDestinations = popular.slice(0, 6);
+  // "Popular" is a general list of top Philippine tourist spots.
+  const popularDestinations = buildPopularDestinations();
 
   return { recommended, popularDestinations };
 }
@@ -734,7 +840,23 @@ function normalizeItineraryData(itineraryData) {
   });
 
   const sortedDayKeys = Array.from(dayGroups.keys()).sort((a, b) => a - b);
-  const normalizedDays = sortedDayKeys.map((dayKey, index) => {
+  // Keep empty days between the first and last day so dates stay consecutive (as the
+  // server stores them), but only while the trip fits the 14-day limit.
+  let orderedDayKeys = sortedDayKeys;
+  if (sortedDayKeys.length > 1) {
+    const lastKey = sortedDayKeys[sortedDayKeys.length - 1];
+    if (Math.round((lastKey - sortedDayKeys[0]) / 86400000) + 1 <= 14) {
+      const filled = [];
+      const cursor = new Date(sortedDayKeys[0]);
+      while (cursor.getTime() <= lastKey && filled.length < 15) {
+        filled.push(cursor.getTime());
+        cursor.setDate(cursor.getDate() + 1);
+        cursor.setHours(0, 0, 0, 0);
+      }
+      if (sortedDayKeys.every((key) => filled.includes(key))) orderedDayKeys = filled;
+    }
+  }
+  const normalizedDays = orderedDayKeys.map((dayKey, index) => {
     const activities = (dayGroups.get(dayKey) || []).slice().sort((a, b) => Number(a.dueAt || 0) - Number(b.dueAt || 0));
     return {
       dayNumber: index + 1,
@@ -752,6 +874,26 @@ function normalizeItineraryData(itineraryData) {
     },
     itinerary: normalizedDays,
   };
+}
+
+// The backend labels generated activities with local clock times ("9:00 AM") but
+// computes their timestamps in UTC. Rebuild each timestamp from its label on the
+// trip's local dates so times, reminders and the synced admin record match.
+function applyLocalScheduleTimes(itinerary, startDate) {
+  if (!Array.isArray(itinerary)) return itinerary;
+  const dateMatch = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(startDate || ""));
+  if (!dateMatch) return itinerary;
+  return itinerary.map((day, dayIndex) => ({
+    ...day,
+    activities: (Array.isArray(day?.activities) ? day.activities : []).map((activity) => {
+      const match = String(activity?.timeLabel || "").match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+      if (!match) return activity;
+      let hour = Number(match[1]) % 12;
+      if (match[3].toUpperCase() === "PM") hour += 12;
+      const date = new Date(Number(dateMatch[1]), Number(dateMatch[2]) - 1, Number(dateMatch[3]) + dayIndex, hour, Number(match[2]), 0, 0);
+      return { ...activity, dueAt: date.getTime(), iso: date.toISOString() };
+    }),
+  }));
 }
 
 function updateItineraryActivitySchedule(email, { activityId, parentDueAt, parentTitle, newDueAt } = {}) {
@@ -974,6 +1116,7 @@ window.SidekickCore = {
   normalizeEmail,
   getPreferences,
   setPreferencesForEmail,
+  syncPreferencesToServer,
   resetPreferencesForEmail,
   requireAuth,
   requirePreferences,
@@ -991,9 +1134,14 @@ window.SidekickCore = {
   getApiBaseUrl,
   formatDateRange,
   buildDashboardRecommendations,
+  buildPopularDestinations,
+  getPreferredDestinations,
+  POPULAR_PH_SPOTS,
   getApiBaseUrl,
   generateItinerary,
   updateItineraryActivitySchedule,
+  normalizeItineraryData,
+  applyLocalScheduleTimes,
   // expose place database for UI builders
   PLACES,
   buildAssistantReply,
@@ -1057,6 +1205,11 @@ function startAppPresenceHeartbeat() {
 
   void sendHeartbeat();
   void verifyStoredItinerary();
+  try {
+    const session = getAuthSession();
+    const prefs = session?.email ? getPreferencesByEmail()[session.email] : null;
+    if (prefs) void syncPreferencesToServer(session.email, prefs);
+  } catch (error) {}
   window.setInterval(sendHeartbeat, 30_000);
   window.setInterval(verifyStoredItinerary, 5 * 60_000);
   document.addEventListener("visibilitychange", () => {

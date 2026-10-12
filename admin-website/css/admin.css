@@ -6,7 +6,7 @@
   --admin-card: #ffffff;
   --admin-border: #e2eaf0;
   --admin-text: #2c3e50;
-  --admin-muted: #66788a;
+  --admin-muted: #56708a; /* was #66788a (4.4:1) -> 5.2:1 for WCAG AA */
   --admin-primary: #6b8cae;
   --admin-primary-dark: #4f718f;
   --admin-accent: #eaf3f8;
@@ -966,4 +966,12 @@ button:disabled {
     align-items: flex-start;
     flex-direction: column;
   }
+}
+
+/* Notice under the admin sign-in form */
+.admin-legal-notice {
+  margin: 16px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #4b5563;
 }

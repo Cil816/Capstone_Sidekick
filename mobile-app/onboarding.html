@@ -6,12 +6,13 @@
     <title>Sidekick AI - Onboarding</title>
     <link rel="stylesheet" href="css/common.css">
     <link rel="stylesheet" href="css/onboarding.css">
+    <link rel="stylesheet" href="css/a11y.css">
 </head>
 <body>
     <div class="app-container">
         <div class="screen">
             <div class="header">
-                <button class="back-btn" id="onboarding-back" onclick="handleBack()" style="display: none;">
+                <button type="button" class="back-btn" id="onboarding-back" onclick="handleBack()" aria-label="Previous step" style="display: none;">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <path d="M15 18l-6-6 6-6"/>
                     </svg>

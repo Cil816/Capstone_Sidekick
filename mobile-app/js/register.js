@@ -29,7 +29,9 @@ function bindRegisterForm() {
   const otpInput = document.getElementById("registration-otp");
   const nameInput = document.getElementById("register-name");
   const passwordInput = document.getElementById("register-password");
+  const confirmPasswordInput = document.getElementById("register-password-confirm");
   const termsInput = document.getElementById("terms-accepted");
+  const ageInput = document.getElementById("age-confirmed");
   const requestCodeButton = document.getElementById("send-registration-code");
   const confirmCodeButton = document.getElementById("confirm-registration-code");
   const resendCodeButton = document.getElementById("resend-registration-code");
@@ -150,8 +152,18 @@ function bindRegisterForm() {
       passwordInput.focus();
       return;
     }
+    if (confirmPasswordInput && String(confirmPasswordInput.value || "") !== password) {
+      setRegisterError("Passwords do not match. Please type the same password twice.");
+      confirmPasswordInput.focus();
+      return;
+    }
+    if (ageInput && !ageInput.checked) {
+      setRegisterError("You must be 18 or older to use Sidekick. Please confirm your age.");
+      ageInput.focus();
+      return;
+    }
     if (!termsInput.checked) {
-      setRegisterError("You must agree to the Terms and Conditions to register.");
+      setRegisterError("You must agree to the Terms and Conditions and the Privacy Policy to register.");
       termsInput.focus();
       return;
     }
@@ -168,6 +180,7 @@ function bindRegisterForm() {
           name,
           password,
           termsAccepted: true,
+          ageConfirmed: true,
         }),
       });
       window.SidekickCore.setAuthSession({
@@ -190,9 +203,22 @@ function bindRegisterForm() {
   });
 
   form.dataset.sidekickBound = "1";
-  document.getElementById("terms-link")?.addEventListener("click", () => {
-    document.getElementById("terms-dialog")?.showModal();
-  });
+  // Show the full Terms or Privacy Policy inside the dialog, so the user keeps
+  // their place in the registration steps.
+  const openPolicy = (page, title) => {
+    const dialog = document.getElementById("terms-dialog");
+    const frame = document.getElementById("terms-frame");
+    const heading = document.getElementById("terms-dialog-title");
+    if (!dialog) return;
+    if (heading) heading.textContent = title;
+    if (frame) {
+      frame.title = title;
+      frame.src = `${page}?embed=1`;
+    }
+    dialog.showModal();
+  };
+  document.getElementById("terms-link")?.addEventListener("click", () => openPolicy("terms.html", "Terms and Conditions"));
+  document.getElementById("privacy-link")?.addEventListener("click", () => openPolicy("privacy.html", "Privacy Policy"));
   document.getElementById("terms-close")?.addEventListener("click", () => {
     document.getElementById("terms-dialog")?.close();
   });

@@ -7,6 +7,8 @@
   <link rel="stylesheet" href="css/common.css">
   <link rel="stylesheet" href="css/login.css">
   <link rel="stylesheet" href="css/register.css">
+  <link rel="stylesheet" href="css/otp.css">
+    <link rel="stylesheet" href="css/a11y.css">
 </head>
 <body>
   <div class="app-container">
@@ -18,7 +20,7 @@
         <form class="form" id="verify-form">
           <div class="form-group">
             <label for="verify-otp">Verification code</label>
-            <input type="text" id="verify-otp" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required>
+            <input type="text" id="verify-otp" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required data-otp-boxes>
           </div>
           <button type="submit" class="btn btn-primary btn-full">Verify email</button>
         </form>
@@ -29,6 +31,7 @@
   </div>
   <script src="js/config.local.js"></script>
   <script src="js/core.js"></script>
+  <script src="js/otp-input.js"></script>
   <script src="js/verify.js"></script>
 </body>
 </html>

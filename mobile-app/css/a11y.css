@@ -1,0 +1,146 @@
+/* Accessibility layer – loaded LAST on every page.
+   Brings text and controls up to WCAG 2.1 AA contrast (4.5:1 for text, 3:1 for
+   icons/controls) while keeping the same teal/slate look, adds visible keyboard
+   focus, keeps navigation labels available to screen readers, and respects the
+   "reduce motion" setting. Each colour was checked against its background. */
+
+:root {
+    --sidekick-muted: #56708a;          /* was #668096 (4.1:1) -> 5.2:1 */
+    --sidekick-gradient: linear-gradient(135deg, #1b6e84 0%, #1f7a8c 100%); /* white text 5.0:1+ */
+    --itinerary-muted: #56708a;
+    --itinerary-blue: #1f7a8c;           /* was #2c91b0 (3.6:1) -> 5.0:1 */
+}
+
+/* Primary buttons: white text on a darker teal (was down to 1.8:1). */
+.btn-primary,
+.send-btn,
+.register-screen .btn-primary {
+    background: linear-gradient(135deg, #1b6e84 0%, #1f7a8c 100%) !important;
+    color: #fff !important;
+}
+
+.btn-primary:hover:not(:disabled),
+.send-btn:hover:not(:disabled),
+.register-screen .btn-primary:hover:not(:disabled) {
+    background: linear-gradient(135deg, #165d70 0%, #1b6e84 100%) !important;
+}
+
+.btn-outline {
+    color: #4a6f96;                      /* was #557da6 (4.3:1) -> 5.2:1 */
+    border-color: #8aa6c4;
+}
+
+/* Slate-blue links and labels (were #6B8CAE, 3.5:1 -> 5.2:1). */
+.forgot-link,
+.see-all,
+.footer-text a,
+.activity-time span,
+.add-activity-btn,
+.onboarding-content .dest-counter,
+.see-all-rank {
+    color: #4f6f91;
+}
+
+.activity-time svg { color: #4f6f91; }
+
+.chip.selected { background: #4f6f91; }
+
+.bottom-nav .nav-item.active,
+.bottom-nav.overlay .nav-item.active { color: #4f6f91; }
+.bottom-nav .nav-item.active svg { stroke: #4f6f91; }
+
+/* Muted text that was below 4.5:1. */
+.register-screen .footer-text { color: #5f6b7a; }
+.destination-search-status,
+.dashboard-loading,
+.chat-place-card small,
+.chat-place-address,
+.chat-place-fact span,
+.chat-place-hours ul { color: #56708a; }
+
+/* Teal text on light backgrounds (was #2c91b0). */
+.chat-place-tag,
+.chat-place-hours summary { color: #1f7a8c; }
+
+/* Red "remove" actions (was #b15e6d, 4.48:1). */
+#remove-all-itinerary,
+.stay-eat-link,
+.itinerary-edit-link.danger { color: #9e4757; }
+
+/* Icon-only controls need 3:1 against their background. */
+.clear-chat-btn { color: #5f6b7a; }
+.chat-place-media { color: #5f7f99; }
+.stay-eat-chevron,
+.see-all-chevron { color: #7b8794; }
+
+/* Visible focus for keyboard users (inputs keep their own focus ring). */
+a:focus-visible,
+button:focus-visible,
+summary:focus-visible,
+[role="button"]:focus-visible,
+[tabindex]:focus-visible,
+input[type="checkbox"]:focus-visible,
+input[type="radio"]:focus-visible,
+select:focus-visible {
+    outline: 3px solid #1f7a8c !important;
+    outline-offset: 2px;
+}
+
+/* On narrow phones the nav hides its text labels; keep them for screen readers
+   instead of removing them (display:none removed the links' names). */
+@media (max-width: 420px) {
+    .bottom-nav .nav-item span {
+        display: block !important;
+        position: absolute !important;
+        width: 1px !important;
+        height: 1px !important;
+        padding: 0 !important;
+        margin: -1px !important;
+        overflow: hidden !important;
+        clip: rect(0 0 0 0) !important;
+        clip-path: inset(50%) !important;
+        white-space: nowrap !important;
+        border: 0 !important;
+    }
+}
+
+/* Text only for screen readers. */
+.sr-only {
+    position: absolute !important;
+    width: 1px !important;
+    height: 1px !important;
+    padding: 0 !important;
+    margin: -1px !important;
+    overflow: hidden !important;
+    clip: rect(0 0 0 0) !important;
+    clip-path: inset(50%) !important;
+    white-space: nowrap !important;
+    border: 0 !important;
+}
+
+/* Small "data from Google Maps" attribution lines. */
+.data-attribution {
+    margin: 8px 0 0;
+    font-size: 11px;
+    color: #56708a;
+}
+
+/* AI notice under the chat title. */
+.chat-ai-note {
+    margin: 2px 0 0;
+    font-size: 11px;
+    font-weight: 500;
+    color: #56708a;
+}
+
+/* Respect the system "reduce motion" setting. */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+    }
+}

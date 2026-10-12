@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import sql from 'mssql';
 import bcrypt from 'bcryptjs';
 import crypto from 'node:crypto';
+import dns from 'node:dns';
 import nodemailer from 'nodemailer';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -62,6 +63,31 @@ app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.static(mobileAppDir, { index: false }));
 
+// ---- Maintenance mode -----------------------------------------------------------
+// MAINTENANCE_MODE=true in backend/.env pauses the app's API with a friendly
+// message (restart the backend after changing it). App pages still load, saved
+// data is untouched, and the admin website (/api/admin/*) keeps working.
+function isMaintenanceMode() {
+  return String(process.env.MAINTENANCE_MODE || '').trim().toLowerCase() === 'true';
+}
+
+function getMaintenanceMessage() {
+  return String(process.env.MAINTENANCE_MESSAGE || '').trim().slice(0, 300)
+    || 'Sidekick is under maintenance right now. Your saved trips are safe. Please try again later.';
+}
+
+app.use('/api', (req, res, next) => {
+  if (!isMaintenanceMode()) return next();
+  if (req.path === '/maintenance-status' || req.path === '/admin' || req.path.startsWith('/admin/')) return next();
+  res.set('Retry-After', '3600');
+  return sendJson(res, 503, { error: getMaintenanceMessage(), maintenance: true });
+});
+
+app.get('/api/maintenance-status', (req, res) => {
+  const maintenance = isMaintenanceMode();
+  return sendJson(res, 200, { maintenance, message: maintenance ? getMaintenanceMessage() : '' });
+});
+
 app.get('/', (req, res) => {
   res.sendFile(path.join(mobileAppDir, 'index.html'));
 });
@@ -98,6 +124,14 @@ function requireAppAuth(req, res, next) {
     return sendJson(res, 401, { error: 'Your app session has expired. Please sign in again.' });
   }
   req.appUser = session;
+  return next();
+}
+
+// For legacy routes keyed by email: the signed-in user may only use their own email.
+function requireOwnEmail(req, res, next) {
+  if (normalizeEmail(req.params.email) !== normalizeEmail(req.appUser?.email)) {
+    return sendJson(res, 403, { error: 'You can only access your own account data.' });
+  }
   return next();
 }
 
@@ -177,6 +211,28 @@ function getAiModel() {
   return String(process.env.GEMINI_MODEL || 'gemini-3.8-flash').trim();
 }
 
+function mapPriceRange(range) {
+  const toAmount = (money) => (money && money.units !== undefined
+    ? Number(money.units || 0) + Number(money.nanos || 0) / 1e9
+    : null);
+  const start = range?.startPrice;
+  if (!start || String(start.currencyCode || '').toUpperCase() !== 'PHP') return null;
+  const lowPhp = toAmount(start);
+  const end = range.endPrice;
+  const highPhp = end && String(end.currencyCode || '').toUpperCase() === 'PHP' ? toAmount(end) : null;
+  if (!Number.isFinite(lowPhp) || lowPhp < 0) return null;
+  return { lowPhp: Math.round(lowPhp), highPhp: Number.isFinite(highPhp) && highPhp >= lowPhp ? Math.round(highPhp) : null };
+}
+
+function haversineKm(a, b) {
+  const toRad = (deg) => (Number(deg) * Math.PI) / 180;
+  if (![a?.lat, a?.lng, b?.lat, b?.lng].every((value) => Number.isFinite(Number(value)))) return Infinity;
+  const dLat = toRad(b.lat) - toRad(a.lat);
+  const dLng = toRad(b.lng) - toRad(a.lng);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return 6371 * 2 * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
 function mapPlace(place) {
   const location = place.location || place.geometry?.location;
   const photo = place.photos?.[0];
@@ -196,6 +252,7 @@ function mapPlace(place) {
     rating: place.rating ?? null,
     ratingCount: place.userRatingCount ?? place.ratingCount ?? null,
     priceLevel: place.priceLevel ?? null,
+    priceRange: mapPriceRange(place.priceRange),
     openingHours: place.regularOpeningHours?.weekdayDescriptions || [],
     types: Array.isArray(place.types) ? place.types.slice(0, 6) : [],
     photoResource,
@@ -296,7 +353,7 @@ async function callGooglePlacesApi(path, payload) {
       headers: {
         'Content-Type': 'application/json',
         'X-Goog-Api-Key': apiKey,
-        'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.priceLevel,places.regularOpeningHours.weekdayDescriptions,places.types,places.photos.name,places.photos.authorAttributions,places.photos.googleMapsUri',
+        'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.priceLevel,places.priceRange,places.regularOpeningHours.weekdayDescriptions,places.types,places.photos.name,places.photos.authorAttributions,places.photos.googleMapsUri',
       },
       body: JSON.stringify(payload),
     });
@@ -544,7 +601,7 @@ function createItineraryFallback(userProfile, prompt) {
   };
 }
 
-async function callGeminiApi({ message, contextText, systemInstruction, responseMimeType = 'text/plain', maxOutputTokens = 1200 }) {
+async function callGeminiApi({ message, contextText, systemInstruction, responseMimeType = 'text/plain', maxOutputTokens = 1200, thinkingLevel = '' }) {
   const apiKey = getAiApiKey();
   if (!apiKey) {
     throw new Error('AI_API_KEY is missing. Add your Gemini API key in backend/.env.');
@@ -561,6 +618,8 @@ async function callGeminiApi({ message, contextText, systemInstruction, response
     generationConfig: {
       maxOutputTokens,
       responseMimeType,
+      // Gemini 3 models accept a thinking level; older models would reject it.
+      ...(thinkingLevel && /^gemini-3/i.test(getAiModel()) ? { thinkingConfig: { thinkingLevel } } : {}),
     },
   };
 
@@ -1044,6 +1103,37 @@ async function fetchGooglePlaceReviewData(placeId) {
   };
 }
 
+// Picks up to four verified places from the agent's map searches for photo cards:
+// places named in the reply first, otherwise the top search results.
+function pickChatPlaces(uiActions, replyText) {
+  const found = Array.from(new Map((uiActions || [])
+    .filter((action) => action?.type === 'SHOW_PLACES' && Array.isArray(action.places))
+    .flatMap((action) => action.places)
+    .filter((place) => place?.placeId && place?.name)
+    .map((place) => [place.placeId, place])).values());
+  if (!found.length) return [];
+  const text = String(replyText || '').toLowerCase();
+  const nameKey = (name) => String(name || '').split(/[-,(|]/)[0].trim().toLowerCase();
+  const mentioned = found.filter((place) => {
+    const key = nameKey(place.name);
+    return key.length >= 4 && text.includes(key);
+  });
+  return (mentioned.length ? mentioned : found).slice(0, 4).map((place) => ({
+    placeId: place.placeId,
+    name: place.name,
+    address: place.address || '',
+    lat: place.lat,
+    lng: place.lng,
+    rating: place.rating,
+    ratingCount: place.ratingCount,
+    priceLevel: place.priceLevel,
+    types: Array.isArray(place.types) ? place.types.slice(0, 6) : [],
+    openingHours: Array.isArray(place.openingHours) ? place.openingHours.slice(0, 7) : [],
+    photoResource: place.photoResource || '',
+    photoAttribution: place.photoAttribution || null,
+  }));
+}
+
 async function generateAgentReply({ email, message, selectedDestination, history, profile }) {
   const currentProfile = await getUserProfileContext(email);
   const effectiveProfile = {
@@ -1109,7 +1199,7 @@ async function generateAgentReply({ email, message, selectedDestination, history
     `Current preferences: ${JSON.stringify(currentProfile)}`,
     `Conversation history: ${(history || []).slice(-3).map((item) => `${item.role}: ${String(item.content || '').slice(0, 500)}`).join(' | ') || 'none'}`,
   ].join('\n');
-  const systemInstruction = 'You are Sidekick, a friendly and practical Philippine travel companion. Sound natural and conversational, like a helpful person. Avoid canned greetings, repeated "How can I help?" questions, stiff phrases, and unnecessary recaps. Do not greet again in the middle of a conversation. If the user already named a destination, respond to it with useful, specific information instead of asking what they want to do. Ask at most one focused question when needed. Match answer length to the request: answer simple questions briefly, but give enough detail for planning, comparisons, budgets, and explanations. For itinerary requests, include specific places, scheduled times, estimated time at each stop, and route durations only when verified. Do not invent prices or route times; say when they are unavailable. Format answers with short paragraphs separated by blank lines, simple bullet lists for multiple options or steps, and **bold** sparingly for important places, times, or decisions. Avoid headings for short replies and never output raw JSON, Markdown fences, or decorative symbols. Use Sidekick tools for current user data and mutations. Never claim a mutation succeeded unless its tool succeeds. Ask for confirmation before destructive deletion. Do not reveal credentials or internal tool details.';
+  const systemInstruction = 'You are Sidekick, a friendly Philippine travel companion. Write so anyone can understand on a phone screen: simple, everyday words, short sentences, no jargon. Start with the direct answer. Keep most replies to 2-4 short sentences; when listing options or steps, use at most 5 bullets of one short line each, with the place name in **bold** at the start. Only give longer answers when the user asks for a plan, comparison, or detailed explanation. Do not greet again in the middle of a conversation, avoid canned phrases such as "How can I help?", and do not repeat what the user said. Ask at most one short question, only when you truly need it. When the user asks about tourist spots, places to visit, or what a place is like, call searchPlaces with a precise query that includes the area (for example "Kawasan Falls, Badian, Cebu") so the app can show real photos, and mention those places by their exact names. For itinerary requests, include specific places and times, and route durations only when verified. Do not invent prices, opening hours, or route times; say plainly when they are unavailable. Never output headings for short replies, raw JSON, Markdown fences, or decorative symbols. Use Sidekick tools for current user data and mutations. Never claim a mutation succeeded unless its tool succeeds. Ask for confirmation before destructive deletion. Do not reveal credentials or internal tool details.';
   const reviewSystemInstruction = `${systemInstruction} When asked what visitors think or to assess a place from reviews, use only supplied Google rating and review excerpts, summarize praise or criticism only when supported, distinguish the aggregate rating from the sample of up to five excerpts, and clearly say when review details are unavailable. Paraphrase reviews rather than quoting them, and include the supplied Google Maps listing link when available.`;
   const contents = [{ role: 'user', parts: [{ text: `${contextText}\n\nUser request:\n${message}` }] }];
   const uiActions = [];
@@ -1162,7 +1252,8 @@ async function generateAgentReply({ email, message, selectedDestination, history
           reply = `${trimmedReply}\n\nI was interrupted before I could finish. Ask me to continue and I’ll pick up from here.`;
         }
       }
-      return { reply: sanitizePlanText(reply), actions: uiActions, meta: { source: 'gemini-agent', model: getAiModel() } };
+      const finalReply = sanitizePlanText(reply);
+      return { reply: finalReply, actions: uiActions, places: pickChatPlaces(uiActions, finalReply), meta: { source: 'gemini-agent', model: getAiModel() } };
     }
     contents.push(candidate.content);
     const functionResponses = [];
@@ -1400,6 +1491,15 @@ async function generateVerifiedItineraryFromAi({ email, message, selectedDestina
     : null;
   const activityBudgetTargetPhp = budgetAmountPhp ? Math.floor(budgetAmountPhp * 0.25) : null;
   const dailyActivityBudgetTargetPhp = activityBudgetTargetPhp ? Math.floor(activityBudgetTargetPhp / durationDays) : null;
+  const stay = profile?.stay && String(profile.stay.name || '').trim() ? {
+    name: String(profile.stay.name).trim().slice(0, 160),
+    address: String(profile.stay.address || '').trim().slice(0, 240),
+    placeId: String(profile.stay.placeId || '').slice(0, 180),
+    lat: Number.isFinite(Number(profile.stay.lat)) ? Number(profile.stay.lat) : null,
+    lng: Number.isFinite(Number(profile.stay.lng)) ? Number(profile.stay.lng) : null,
+    nightlyLowPhp: Number.isFinite(Number(profile.stay.nightlyLowPhp)) ? Number(profile.stay.nightlyLowPhp) : null,
+    nightlyHighPhp: Number.isFinite(Number(profile.stay.nightlyHighPhp)) ? Number(profile.stay.nightlyHighPhp) : null,
+  } : null;
 
   if (isDevelopmentMode) {
     const request = String(message || '').toLowerCase();
@@ -1477,14 +1577,17 @@ async function generateVerifiedItineraryFromAi({ email, message, selectedDestina
     `Pace: ${profile?.pace || 'not provided'}`,
     `Must-see: ${(profile?.mustSee || []).join(', ') || 'none'}`,
     `Avoid: ${(profile?.avoid || []).join(', ') || 'none'}`,
+    ...(stay ? [`Lodging: the traveler is staying at ${stay.name}${stay.address ? ` (${stay.address})` : ''}. Prefer stops that are practical to reach from there.`] : []),
     `Request: ${message}`,
   ].join('\n');
   const preliminaryText = await callGeminiApi({
     message,
     contextText: planningContext,
-    systemInstruction: `Return JSON only: {"destination":"...","durationDays":${durationDays},"days":[{"day":1,"theme":"...","activities":[{"searchQuery":"specific real place or category","category":"attraction|restaurant|cafe|museum|hotel|shopping|activity","durationMinutes":90,"notes":"..."}]}]}. Return exactly ${durationDays} days from ${startDate} through ${endDate}, with 2-${maxActivitiesPerDay} activities per day. Keep activities within the selected destination area and match the user's interests. Treat the stated budget as the ceiling for the whole trip, not just admission tickets. When the user provided a numeric budget, use the activity allowance as a target across the days: favor worthwhile free or low-cost places, then include the best paid experiences that fit. Use the allowance deliberately without forcing the user to spend it all; leave the rest for transport, lodging, meals, and contingency. Avoid repeating places. Never invent place IDs, addresses, ratings, opening hours, ticket prices, transportation fares, or travel times. Leave unverified prices unavailable.`,
+    systemInstruction: `Return JSON only: {"destination":"...","durationDays":${durationDays},"days":[{"day":1,"theme":"...","activities":[{"searchQuery":"exact name of one real place","category":"attraction|museum|park|beach|landmark|activity|shopping","durationMinutes":90,"notes":"..."}]}]}. Return exactly ${durationDays} days from ${startDate} through ${endDate}, with 2-${maxActivitiesPerDay} activities per day. Every searchQuery must be the exact, official name of one specific, real, currently operating tourist spot in or near the selected destination (never a generic category such as "beach" or "museum"), because it is looked up on Google Maps and the top match is used. Do not include restaurants, cafes, or hotels; the traveler picks meals and lodging separately. Order each day's activities so consecutive stops are close to each other. Keep activities within the selected destination area and match the user's interests.`
+      + ` Treat the stated budget as the ceiling for the whole trip, not just admission tickets. When the user provided a numeric budget, use the activity allowance as a target across the days: favor worthwhile free or low-cost places, then include the best paid experiences that fit. Use the allowance deliberately without forcing the user to spend it all; leave the rest for transport, lodging, meals, and contingency. Avoid repeating places. Never invent place IDs, addresses, ratings, opening hours, ticket prices, transportation fares, or travel times. Leave unverified prices unavailable.`,
     responseMimeType: 'application/json',
     maxOutputTokens: 3000,
+    thinkingLevel: 'low',
   });
   const preliminary = extractJsonObject(preliminaryText);
   if (!preliminary?.days?.length) throw new Error('The AI returned an invalid preliminary itinerary.');
@@ -1525,10 +1628,10 @@ async function generateVerifiedItineraryFromAi({ email, message, selectedDestina
     const seenCandidateIds = new Set();
     // Price each activity's best candidate first, then alternatives, with a
     // bounded request so long trips do not create an unbounded Search call.
-    for (let candidateRank = 0; candidateRank < 3 && researchCandidates.length < 40; candidateRank++) {
+    for (let candidateRank = 0; candidateRank < 2 && researchCandidates.length < 30; candidateRank++) {
       for (const set of candidateSets) {
         const place = set.candidates[candidateRank];
-        if (!place || seenCandidateIds.has(place.placeId) || researchCandidates.length >= 40) continue;
+        if (!place || seenCandidateIds.has(place.placeId) || researchCandidates.length >= 30) continue;
         seenCandidateIds.add(place.placeId);
         researchCandidates.push({
           placeId: place.placeId,
@@ -1568,46 +1671,57 @@ async function generateVerifiedItineraryFromAi({ email, message, selectedDestina
   }));
   const candidateSetsByKey = new Map(pricedCandidateSets.map((item) => [item.sourceKey, item]));
 
-  const finalBudgetContext = budgetAmountPhp
-    ? `The user's whole-trip ceiling is PHP ${budgetAmountPhp.toLocaleString()}. Keep admission and ticket spending around PHP ${activityBudgetTargetPhp.toLocaleString()} total (about PHP ${dailyActivityBudgetTargetPhp.toLocaleString()} per day), leaving the remaining budget for intercity travel, lodging, meals, local transport, and contingency. This activity allowance is an initial planning allocation, not a verified full-trip quote.`
-    : `Budget style: ${userProfile.budget || 'not provided'}. Prefer good value and include free/low-cost alternatives when a venue's price is unknown.`;
-
-  const finalText = await callGeminiApi({
-    message: JSON.stringify({ preliminary, candidateSets: pricedCandidateSets }),
-    contextText: `Create the final structured itinerary only from the Google Places candidates grouped under each sourceKey for the user's selected destination: ${destination}. ${finalBudgetContext} A candidate can only be used for its own sourceKey. Candidate admission estimates, when present, come from web price research; unknown prices are not free. Group each day geographically, avoid duplicates, and use each day's activity allowance as a target while staying within the total allowance where verified prices make that possible. Prefer well-rated, worthwhile activities and use the available budget intentionally; do not add weak stops just to spend more. If the budget is tight, choose publicly free or lower-priced activities and reduce paid experiences while keeping the user's must-see places where possible. For restaurants, use Google price level only as a rough meal-cost signal, not as an admission fee. Do not invent business hours, prices, addresses, or travel times. Route times will be calculated separately from the final chosen stop order.`,
-    systemInstruction: `Return JSON only with {"trip":{"destination":"","startDate":"${startDate}","endDate":"${endDate}","durationDays":${durationDays},"budget":"","currency":"PHP"},"days":[{"day":1,"theme":"","activities":[{"sourceKey":"d1a1","placeId":"exact candidate id","durationMinutes":90,"category":"attraction|restaurant|cafe|museum|hotel|shopping|activity","notes":""}]}]}. Return exactly ${durationDays} days and 1-${maxActivitiesPerDay} activities per day. Every placeId must be one of the candidates listed under that activity's sourceKey. Treat the budget as a whole-trip ceiling, not permission to spend it all on attractions. Use supplied admission estimates to plan paid activities around both the daily and total allowance, favoring the best experiences for the money. For unknown admission prices, prefer publicly free places and never assume an unknown price is free. For restaurants, Google price level is only a rough meal-cost signal, not an admission price. Preserve time and money for transport, lodging, meals, and contingency. Use the allowance intentionally without forcing the user to spend it all. Return no cost or schedule times; the app will add estimated schedules and researched costs. Do not include unsupported factual claims.`,
-    responseMimeType: 'application/json',
-    maxOutputTokens: 5000,
-  });
-  const finalPlan = extractJsonObject(finalText);
-  if (!finalPlan?.days?.length) throw new Error('The AI returned an invalid final itinerary.');
-  if (finalPlan.days.length !== durationDays) throw new Error(`The AI returned ${finalPlan.days.length} final days, but ${durationDays} days were requested.`);
-
+  // Choose each stop without a second AI call. The planning call already named a
+  // specific real place per slot, so Google's top verified match for that exact
+  // name is used, skipping duplicates and results of the wrong kind (for example a
+  // hotel returned for an attraction search). Stops are then ordered by distance.
+  const isLodging = (place) => (place.types || []).some((type) => /(^|_)(lodging|hotel|motel|hostel|guest_house|bed_and_breakfast)$/.test(String(type)));
+  const isFood = (place) => (place.types || []).some((type) => /restaurant|cafe|food|bakery|meal_/.test(String(type)));
+  const fitsSlot = (place, category) => {
+    const wanted = String(category || '').toLowerCase();
+    if (/hotel/.test(wanted)) return true;
+    if (/restaurant|cafe|food/.test(wanted)) return !isLodging(place);
+    return !isLodging(place) && !isFood(place);
+  };
+  const orderByProximity = (entries) => {
+    if (entries.length < 3) return entries;
+    const remaining = entries.slice(1);
+    const ordered = [entries[0]];
+    while (remaining.length) {
+      const last = ordered[ordered.length - 1].place;
+      let bestIndex = 0;
+      let bestDistance = Infinity;
+      remaining.forEach((entry, index) => {
+        const distance = haversineKm(last, entry.place);
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          bestIndex = index;
+        }
+      });
+      ordered.push(remaining.splice(bestIndex, 1)[0]);
+    }
+    return ordered;
+  };
   const verifiedById = new Map(verifiedPlaces.map((place) => [place.placeId, place]));
+  const requestedByKey = new Map(requestedActivities.map((activity) => [activity.sourceKey, activity]));
   const usedPlaces = new Set();
-  const selectedDays = finalPlan.days.map((day, dayIndex) => {
+  const selectedDays = preliminary.days.map((day, dayIndex) => {
     const selected = [];
-    for (const activity of (Array.isArray(day.activities) ? day.activities : []).slice(0, maxActivitiesPerDay)) {
-      const candidateSet = candidateSetsByKey.get(String(activity.sourceKey || ''));
-      if (candidateSet?.day !== dayIndex + 1) continue;
-      const candidates = candidateSet.candidates;
-      const requestedId = String(activity.placeId || '');
-      const place = candidates.find((candidate) => candidate.placeId === requestedId && !usedPlaces.has(candidate.placeId))
-        || candidates.find((candidate) => !usedPlaces.has(candidate.placeId));
+    for (const set of pricedCandidateSets.filter((item) => item.day === dayIndex + 1)) {
+      const requested = requestedByKey.get(set.sourceKey) || {};
+      const place = set.candidates.find((candidate) => !usedPlaces.has(candidate.placeId) && fitsSlot(candidate, set.category))
+        || set.candidates.find((candidate) => !usedPlaces.has(candidate.placeId) && !isLodging(candidate));
       if (!place || !verifiedById.has(place.placeId)) continue;
       usedPlaces.add(place.placeId);
-      selected.push({ activity, place, sourceKey: String(activity.sourceKey || '') });
-    }
-    if (!selected.length) {
-      const fallback = candidateSets.find((set) => set.day === dayIndex + 1 && set.candidates.some((place) => !usedPlaces.has(place.placeId)));
-      const place = fallback?.candidates.find((candidate) => !usedPlaces.has(candidate.placeId));
-      if (place) {
-        usedPlaces.add(place.placeId);
-        selected.push({ activity: { durationMinutes: 90, category: fallback.category, notes: '' }, place, sourceKey: fallback.sourceKey });
-      }
+      selected.push({
+        activity: { durationMinutes: requested.durationMinutes, category: set.category || requested.category || '', notes: requested.notes || '' },
+        // Keep the full verified record (photo, etc.) together with the priced candidate fields.
+        place: { ...verifiedById.get(place.placeId), ...place },
+        sourceKey: set.sourceKey,
+      });
     }
     if (!selected.length) throw new Error(`Google Places could not verify activities for day ${dayIndex + 1}.`);
-    return selected;
+    return orderByProximity(selected);
   });
 
   if (candidatePriceResearch && activityBudgetTargetPhp) {
@@ -1656,13 +1770,13 @@ async function generateVerifiedItineraryFromAi({ email, message, selectedDestina
       return cost || { placeId: place.placeId, lowPhp: null, highPhp: null, sourceUrls: [] };
     });
     const pricedBands = liveActivityCosts.filter((cost) => Number.isFinite(cost.lowPhp) && Number.isFinite(cost.highPhp));
-    if (pricedBands.length) {
-      const total = addPriceBands(pricedBands);
+    {
+      const total = pricedBands.length ? addPriceBands(pricedBands) : null;
       const sourceMap = new Map(liveActivityCosts.flatMap((cost) => cost.sources || []).map((source) => [source.url, source]));
       selectedBudgetResearch = {
         liveActivityCosts,
         liveTripBudget: {
-          status: pricedBands.length === selectedActivities.length ? 'complete-estimate' : 'partial-estimate',
+          status: pricedBands.length && pricedBands.length === selectedActivities.length ? 'complete-estimate' : 'partial-estimate',
           currency: 'PHP',
           startDate,
           endDate,
@@ -1749,13 +1863,14 @@ async function generateVerifiedItineraryFromAi({ email, message, selectedDestina
       durationDays,
       source: 'gemini-google-verified',
       generatedAt: new Date().toISOString(),
-      budget: finalPlan.trip?.budget || (budgetAmountPhp ? `PHP ${budgetAmountPhp.toLocaleString()} total` : userProfile.budget || null),
+      budget: budgetAmountPhp ? `PHP ${budgetAmountPhp.toLocaleString()} total` : userProfile.budget || null,
       budgetAmountPhp,
       activityBudgetTargetPhp,
       dailyActivityBudgetTargetPhp,
       ...(selectedBudgetResearch || {}),
-      currency: finalPlan.trip?.currency || 'PHP',
+      currency: 'PHP',
       verifiedPlaceCount: verifiedPlaces.length,
+      ...(stay ? { stay } : {}),
       origin: origin ? {
         name: String(origin.name || '').slice(0, 120),
         address: String(origin.address || '').slice(0, 240),
@@ -1904,6 +2019,15 @@ async function sendOtpEmail(email, otp) {
   });
 }
 
+async function sendPasswordResetEmail(email, otp) {
+  await getMailer().sendMail({
+    from: process.env.SMTP_FROM || process.env.SMTP_USER,
+    to: email,
+    subject: 'Your Sidekick password reset code',
+    text: `Your Sidekick password reset code is ${otp}. It expires in 10 minutes. If you did not ask to reset your password, you can ignore this email.`,
+  });
+}
+
 async function validateRegistrationEmail(email) {
   const apiKey = String(process.env.ZEROBOUNCE_API_KEY || '').trim();
   if (!apiKey) {
@@ -1934,6 +2058,141 @@ async function validateRegistrationEmail(email) {
     throw new Error('Email verification service returned an unexpected response.');
   }
   return { status: result.status, subStatus: result.sub_status || '' };
+}
+
+// ---- Registration email checks ------------------------------------------------
+// 1) Free DNS check of the domain, 2) Reoon "power" mailbox check, 3) ZeroBounce
+// only as a backup. A check that fails or times out never blocks sign-up: the
+// emailed code still proves the inbox exists.
+const registrationEmailCheckCache = new Map();
+const REGISTRATION_EMAIL_REJECTIONS = {
+  domain: 'This email address does not exist. Check the part after "@" for typos and try again.',
+  mailbox: 'This email address does not exist. Check it for typos and try again.',
+  disabled: 'This email account has been disabled and cannot receive email. Please use another address.',
+  disposable: 'Temporary or disposable email addresses cannot be used. Please use your regular email.',
+  blocked: 'This email address cannot be used for registration. Please use another address.',
+};
+
+function withTimeout(promise, ms, label) {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(Object.assign(new Error(`${label} timed out.`), { code: 'ETIMEOUT' })), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+// Public DNS used when the computer's configured DNS server does not answer
+// (some machines point Node at a local DNS proxy that refuses these queries).
+const publicDnsResolver = new dns.promises.Resolver({ timeout: 3000, tries: 1 });
+publicDnsResolver.setServers(['1.1.1.1', '8.8.8.8']);
+
+// Runs a DNS query on the system resolver, then on public DNS if the system one fails.
+async function resolveWithFallback(method, domain) {
+  try {
+    return await withTimeout(dns.promises[method](domain), 5000, 'DNS lookup');
+  } catch (error) {
+    if (['ENODATA', 'ENOTFOUND'].includes(error?.code)) throw error;
+    return withTimeout(publicDnsResolver[method](domain), 5000, 'DNS lookup');
+  }
+}
+
+// 'ok' when the domain can receive mail, 'no-mail' when it provably cannot,
+// 'unknown' when DNS could not answer.
+async function checkEmailDomain(domain) {
+  const missing = (error) => ['ENODATA', 'ENOTFOUND'].includes(error?.code);
+  try {
+    const records = await resolveWithFallback('resolveMx', domain);
+    const usable = records.filter((record) => record.exchange && record.exchange !== '.');
+    if (usable.length) return 'ok';
+    // A "null MX" record means the domain explicitly accepts no mail.
+    if (records.length) return 'no-mail';
+  } catch (error) {
+    if (!missing(error)) return 'unknown';
+  }
+  // Without MX records, mail falls back to the domain's own address.
+  for (const method of ['resolve4', 'resolve6']) {
+    try {
+      const addresses = await resolveWithFallback(method, domain);
+      if (addresses.length) return 'ok';
+    } catch (error) {
+      if (!missing(error)) return 'unknown';
+    }
+  }
+  return 'no-mail';
+}
+
+async function verifyEmailWithReoon(email, apiKey) {
+  const url = new URL('https://emailverifier.reoon.com/api/v1/verify');
+  url.searchParams.set('email', email);
+  url.searchParams.set('key', apiKey);
+  url.searchParams.set('mode', 'power');
+  const controller = new AbortController();
+  // Power mode can be slow for some mail servers; do not keep the user waiting too long.
+  const timeout = setTimeout(() => controller.abort(), 25000);
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    const data = await response.json().catch(() => ({}));
+    const status = String(data?.status || '').toLowerCase();
+    if (!response.ok || !status || status === 'error') {
+      throw new Error(data?.reason || data?.message || `Reoon returned HTTP ${response.status}.`);
+    }
+    return status;
+  } catch (error) {
+    if (error?.name === 'AbortError') throw new Error('Reoon verification timed out.');
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+// Returns { ok: true } or { ok: false, error } with a message for the user.
+async function checkRegistrationEmail(email) {
+  const cached = registrationEmailCheckCache.get(email);
+  if (cached && cached.expiresAt > Date.now()) return cached.result;
+  const remember = (result) => {
+    if (registrationEmailCheckCache.size >= 1000) {
+      registrationEmailCheckCache.delete(registrationEmailCheckCache.keys().next().value);
+    }
+    registrationEmailCheckCache.set(email, { result, expiresAt: Date.now() + 24 * 60 * 60 * 1000 });
+    return result;
+  };
+  const reject = (reason) => remember({ ok: false, error: REGISTRATION_EMAIL_REJECTIONS[reason] });
+
+  const domain = email.split('@')[1] || '';
+  if (await checkEmailDomain(domain) === 'no-mail') return reject('domain');
+
+  const reoonKey = String(process.env.REOON_API_KEY || '').trim();
+  if (reoonKey) {
+    try {
+      const status = await verifyEmailWithReoon(email, reoonKey);
+      if (status === 'invalid') return reject('mailbox');
+      if (status === 'disabled') return reject('disabled');
+      if (status === 'disposable') return reject('disposable');
+      if (status === 'spamtrap') return reject('blocked');
+      // safe, catch_all, role_account, inbox_full: the address exists or cannot be
+      // disproven. unknown is not cached so a later attempt can check again.
+      return status === 'unknown' ? { ok: true } : remember({ ok: true });
+    } catch (error) {
+      console.warn('Reoon email check unavailable:', error.message);
+    }
+  }
+
+  if (String(process.env.ZEROBOUNCE_API_KEY || '').trim()) {
+    try {
+      const check = await validateRegistrationEmail(email);
+      if (check.status === 'invalid') return reject(check.subStatus === 'mailbox_not_found' || !check.subStatus ? 'mailbox' : 'blocked');
+      if (['spamtrap', 'abuse', 'do_not_mail'].includes(check.status)) {
+        return reject(check.subStatus === 'disposable' ? 'disposable' : 'blocked');
+      }
+      return check.status === 'unknown' ? { ok: true } : remember({ ok: true });
+    } catch (error) {
+      console.warn('ZeroBounce email check unavailable:', error.message);
+    }
+  }
+
+  return { ok: true };
 }
 
 function isUndeliverableEmailError(error) {
@@ -2651,7 +2910,7 @@ app.get('/api/admin/settings', requireAdminAuth, async (req, res) => {
     const pool = await getPool();
     return sendJson(res, 200, {
       appMode: isDevelopmentMode ? 'development' : 'production',
-      maintenanceMode: Boolean(process.env.MAINTENANCE_MODE === 'true'),
+      maintenanceMode: isMaintenanceMode(),
       aiModel: getAiModel(),
       googleMapsConfigured: Boolean(getMapsApiKey()),
       geminiConfigured: Boolean(getAiApiKey()),
@@ -2693,22 +2952,8 @@ app.post('/api/register/start', async (req, res) => {
   let stagedUserId = null;
   let createdPendingUser = false;
   try {
-    let emailCheck;
-    try {
-      emailCheck = await validateRegistrationEmail(email);
-    } catch (error) {
-      console.error('Registration email validation failed:', error.message);
-      return sendJson(res, 503, { error: 'We could not check this email address right now. Please try again shortly.' });
-    }
-    if (emailCheck.status === 'invalid') {
-      const error = emailCheck.subStatus === 'mailbox_not_found'
-        ? 'This email address does not exist. Check it and try again.'
-        : 'This email address appears unable to receive email. Check it and try another address.';
-      return sendJson(res, 422, { error });
-    }
-    if (['spamtrap', 'abuse', 'do_not_mail'].includes(emailCheck.status)) {
-      return sendJson(res, 422, { error: 'This email address cannot be used for registration. Please use another address.' });
-    }
+    const emailCheck = await checkRegistrationEmail(email);
+    if (!emailCheck.ok) return sendJson(res, 422, { error: emailCheck.error });
 
     const pool = await getPool();
     const existing = await pool.query`
@@ -2823,6 +3068,7 @@ app.post('/api/register/complete', async (req, res) => {
   if (trimmedName.length > 200) return sendJson(res, 400, { error: 'Name must be 200 characters or less.' });
   if (String(password).length < 8) return sendJson(res, 400, { error: 'Password must be at least 8 characters.' });
   if (termsAccepted !== true) return sendJson(res, 400, { error: 'You must agree to the Terms and Conditions to register.' });
+  if (req.body?.ageConfirmed !== true) return sendJson(res, 400, { error: 'You must be 18 or older to use Sidekick.' });
 
   const passwordHash = await bcrypt.hash(String(password), 10);
   const transaction = new sql.Transaction(await getPool());
@@ -2989,6 +3235,151 @@ app.post('/api/resend-otp', async (req, res) => {
   }
 });
 
+// ---- Password reset (verified accounts) -------------------------------------
+// Reset codes use the same otp_verifications table as registration, but only for
+// verified users; registration codes only ever belong to unverified users.
+async function findPasswordResetCode(requestOrPool, email, lock = false) {
+  const query = `
+    SELECT TOP 1 o.otp_id, o.user_id, o.otp_code_hash, o.expires_at, o.is_used, o.verification_attempts
+    FROM dbo.otp_verifications o${lock ? ' WITH (UPDLOCK, HOLDLOCK)' : ''}
+    JOIN dbo.users u${lock ? ' WITH (UPDLOCK, HOLDLOCK)' : ''} ON u.user_id = o.user_id
+    WHERE u.email = @email AND u.is_verified = 1
+    ORDER BY o.created_at DESC
+  `;
+  const result = await requestOrPool.input('email', sql.NVarChar(255), email).query(query);
+  return result.recordset[0] || null;
+}
+
+function isPasswordResetCodeValid(code, otp) {
+  return Boolean(code)
+    && !code.is_used
+    && code.verification_attempts < 5
+    && new Date(code.expires_at).getTime() > Date.now()
+    && crypto.timingSafeEqual(Buffer.from(code.otp_code_hash), Buffer.from(hashOtp(otp)));
+}
+
+app.post('/api/password/forgot', async (req, res) => {
+  const email = normalizeEmail(req.body?.email);
+  if (!emailPattern.test(email)) {
+    return sendJson(res, 400, { error: 'Please enter a valid email address.' });
+  }
+  if (isRateLimited(`password-forgot:${req.ip}`, 5, 15 * 60 * 1000)
+    || isRateLimited(`password-forgot-email:${email}`, 3, 60 * 60 * 1000)) {
+    return sendJson(res, 429, { error: 'Too many reset requests. Please try again later.' });
+  }
+  // The same reply is sent whether or not the account exists, so this cannot be
+  // used to find out which emails are registered.
+  const genericReply = { sent: true, message: 'If an account exists for this email, a 6-digit code has been sent.' };
+  try {
+    const pool = await getPool();
+    const userResult = await pool.query`
+      SELECT user_id FROM dbo.users WHERE email = ${email} AND is_verified = 1
+    `;
+    const userId = userResult.recordset[0]?.user_id;
+    if (!userId) return sendJson(res, 200, genericReply);
+
+    const otp = createOtp();
+    await pool.query`UPDATE dbo.otp_verifications SET is_used = 1 WHERE user_id = ${userId} AND is_used = 0`;
+    const otpInsert = await pool.query`
+      INSERT INTO dbo.otp_verifications (user_id, otp_code_hash, expires_at)
+      OUTPUT INSERTED.otp_id
+      VALUES (${userId}, ${hashOtp(otp)}, DATEADD(minute, 10, SYSUTCDATETIME()))
+    `;
+    try {
+      await sendPasswordResetEmail(email, otp);
+    } catch (error) {
+      const otpId = otpInsert.recordset?.[0]?.otp_id;
+      if (otpId) await pool.query`UPDATE dbo.otp_verifications SET is_used = 1 WHERE otp_id = ${otpId}`;
+      console.error('Password reset email failed:', error.message);
+      return sendJson(res, 503, { error: 'We could not send a reset code right now. Please try again later.' });
+    }
+    return sendJson(res, 200, genericReply);
+  } catch (error) {
+    console.error('Password reset request failed:', error.message);
+    return sendJson(res, 500, { error: 'Unable to start a password reset right now. Please try again.' });
+  }
+});
+
+app.post('/api/password/verify-code', async (req, res) => {
+  const email = normalizeEmail(req.body?.email);
+  const otp = String(req.body?.otp || '').trim();
+  if (isRateLimited(`password-verify:${req.ip}`, 10, 15 * 60 * 1000)) {
+    return sendJson(res, 429, { error: 'Too many attempts. Please try again later.' });
+  }
+  if (!emailPattern.test(email) || !/^\d{6}$/.test(otp)) {
+    return sendJson(res, 400, { error: 'Invalid or expired code. Please try again.' });
+  }
+  try {
+    const pool = await getPool();
+    const code = await findPasswordResetCode(pool.request(), email);
+    if (!isPasswordResetCodeValid(code, otp)) {
+      if (code && !code.is_used) {
+        await pool.query`UPDATE dbo.otp_verifications SET verification_attempts = verification_attempts + 1 WHERE otp_id = ${code.otp_id}`;
+      }
+      return sendJson(res, 400, { error: 'Invalid or expired code. Please try again.' });
+    }
+    return sendJson(res, 200, { verified: true });
+  } catch (error) {
+    console.error('Password reset code check failed:', error.message);
+    return sendJson(res, 500, { error: 'Unable to check that code right now. Please try again.' });
+  }
+});
+
+app.post('/api/password/reset', async (req, res) => {
+  const email = normalizeEmail(req.body?.email);
+  const otp = String(req.body?.otp || '').trim();
+  const password = String(req.body?.password || '');
+  if (isRateLimited(`password-reset:${req.ip}`, 5, 15 * 60 * 1000)) {
+    return sendJson(res, 429, { error: 'Too many attempts. Please try again later.' });
+  }
+  if (!emailPattern.test(email) || !/^\d{6}$/.test(otp)) {
+    return sendJson(res, 400, { error: 'Invalid or expired code. Request a new code and try again.' });
+  }
+  if (password.length < 8) return sendJson(res, 400, { error: 'Password must be at least 8 characters.' });
+
+  const passwordHash = await bcrypt.hash(password, 10);
+  const transaction = new sql.Transaction(await getPool());
+  let transactionStarted = false;
+  let transactionFinished = false;
+  try {
+    await transaction.begin();
+    transactionStarted = true;
+    const code = await findPasswordResetCode(new sql.Request(transaction), email, true);
+    if (!isPasswordResetCodeValid(code, otp)) {
+      if (code && !code.is_used) {
+        await new sql.Request(transaction).input('otpId', sql.Int, code.otp_id)
+          .query('UPDATE dbo.otp_verifications SET verification_attempts = verification_attempts + 1 WHERE otp_id = @otpId');
+      }
+      await transaction.commit();
+      transactionFinished = true;
+      return sendJson(res, 400, { error: 'Invalid or expired code. Request a new code and try again.' });
+    }
+    await new sql.Request(transaction)
+      .input('userId', sql.Int, code.user_id)
+      .input('otpId', sql.Int, code.otp_id)
+      .input('passwordHash', sql.NVarChar(255), passwordHash)
+      .query(`
+        UPDATE dbo.users SET password_hash = @passwordHash WHERE user_id = @userId AND is_verified = 1;
+        UPDATE dbo.otp_verifications SET is_used = 1 WHERE otp_id = @otpId;
+      `);
+    await transaction.commit();
+    transactionFinished = true;
+    // Sign the account out everywhere so an old session cannot keep using it.
+    for (const [token, session] of appSessions) {
+      if (session.userId === Number(code.user_id)) appSessions.delete(token);
+    }
+    return sendJson(res, 200, { reset: true });
+  } catch (error) {
+    if (transactionStarted && !transactionFinished) {
+      try { await transaction.rollback(); } catch (rollbackError) {
+        console.error('Password reset rollback failed:', rollbackError.message);
+      }
+    }
+    console.error('Password reset failed:', error.message);
+    return sendJson(res, 500, { error: 'Unable to change the password right now. Please try again.' });
+  }
+});
+
 app.post('/api/login', async (req, res) => {
   const { email, password } = req.body || {};
   const normalizedEmail = normalizeEmail(email);
@@ -2996,13 +3387,17 @@ app.post('/api/login', async (req, res) => {
   if (!normalizedEmail || !password) {
     return sendJson(res, 400, { error: 'Email and password are required.' });
   }
+  if (isRateLimited(`login:${req.ip}`, 20, 15 * 60 * 1000)
+    || isRateLimited(`login-email:${normalizedEmail}`, 10, 15 * 60 * 1000)) {
+    return sendJson(res, 429, { error: 'Too many sign-in attempts. Please wait a few minutes and try again.' });
+  }
 
   try {
     const pool = await getPool();
     const result = await pool.query`SELECT * FROM dbo.users WHERE email = ${normalizedEmail}`;
 
     if (!result.recordset.length) {
-      return sendJson(res, 404, { error: 'User not found.' });
+      return sendJson(res, 404, { error: 'Incorrect email or password.' });
     }
 
     const user = result.recordset[0];
@@ -3012,7 +3407,7 @@ app.post('/api/login', async (req, res) => {
     const valid = await bcrypt.compare(String(password), user.password_hash);
 
     if (!valid) {
-      return sendJson(res, 401, { error: 'Invalid password.' });
+      return sendJson(res, 401, { error: 'Incorrect email or password.' });
     }
 
     if (await hasUserLastActiveColumn(pool)) {
@@ -3050,6 +3445,82 @@ app.post('/api/app-presence/heartbeat', requireAppAuth, async (req, res) => {
   return sendJson(res, 200, { online: true });
 });
 
+// Lets a signed-in user permanently delete their own account and linked data
+// (Data Privacy Act right to erasure). Same cleanup as the admin delete action.
+app.post('/api/account/delete', requireAppAuth, async (req, res) => {
+  const userId = Number(req.appUser.userId);
+  const password = String(req.body?.password || '');
+  if (!password) return sendJson(res, 400, { error: 'Enter your password to confirm.' });
+  if (isRateLimited(`account-delete:${userId}`, 5, 15 * 60 * 1000)) {
+    return sendJson(res, 429, { error: 'Too many attempts. Please try again later.' });
+  }
+
+  let transaction;
+  let transactionStarted = false;
+  try {
+    const pool = await getPool();
+    const userResult = await new sql.Request()
+      .input('userId', sql.Int, userId)
+      .query('SELECT user_id, password_hash FROM dbo.users WHERE user_id = @userId AND is_verified = 1');
+    const user = userResult.recordset[0];
+    if (!user) return sendJson(res, 404, { error: 'Account not found.' });
+    // 403 (not 401) so the app does not treat a wrong password as an expired session.
+    if (!(await bcrypt.compare(password, user.password_hash))) {
+      return sendJson(res, 403, { error: 'Incorrect password. Please try again.' });
+    }
+
+    const optionalTables = await pool.query`
+      SELECT
+        CASE WHEN OBJECT_ID(N'dbo.reminders', N'U') IS NULL THEN 0 ELSE 1 END AS reminders_available,
+        CASE WHEN OBJECT_ID(N'dbo.app_reviews', N'U') IS NULL THEN 0 ELSE 1 END AS app_reviews_available,
+        CASE WHEN OBJECT_ID(N'dbo.otp_verifications', N'U') IS NULL THEN 0 ELSE 1 END AS otp_verifications_available
+    `;
+    const optionalTableState = optionalTables.recordset[0] || {};
+
+    transaction = new sql.Transaction(pool);
+    await transaction.begin();
+    transactionStarted = true;
+    const deleteStatements = [
+      ...(optionalTableState.reminders_available ? ['DELETE FROM dbo.reminders WHERE user_id = @userId;'] : []),
+      `
+        DELETE FROM dbo.itinerary_activities
+        WHERE trip_day_id IN (
+          SELECT d.trip_day_id
+          FROM dbo.trip_days d
+          JOIN dbo.trips t ON t.trip_id = d.trip_id
+          WHERE t.user_id = @userId
+        );
+        DELETE FROM dbo.trip_days
+        WHERE trip_id IN (SELECT trip_id FROM dbo.trips WHERE user_id = @userId);
+        DELETE FROM dbo.trips WHERE user_id = @userId;
+        DELETE FROM dbo.user_travel_styles WHERE user_id = @userId;
+        DELETE FROM dbo.user_interests WHERE user_id = @userId;
+        DELETE FROM dbo.user_preferred_places WHERE user_id = @userId;
+      `,
+      ...(optionalTableState.app_reviews_available ? ['DELETE FROM dbo.app_reviews WHERE user_id = @userId;'] : []),
+      ...(optionalTableState.otp_verifications_available ? ['DELETE FROM dbo.otp_verifications WHERE user_id = @userId;'] : []),
+      'DELETE FROM dbo.users WHERE user_id = @userId;',
+    ];
+    await new sql.Request(transaction).input('userId', sql.Int, userId).query(deleteStatements.join('\n'));
+    await transaction.commit();
+    transactionStarted = false;
+
+    for (const [token, session] of appSessions) {
+      if (session.userId === userId) appSessions.delete(token);
+    }
+    appPresence.delete(userId);
+    return sendJson(res, 200, { ok: true, deleted: true });
+  } catch (error) {
+    if (transactionStarted) {
+      try { await transaction.rollback(); } catch (rollbackError) {
+        console.error('Account deletion rollback failed:', rollbackError.message);
+      }
+    }
+    console.error('Account deletion failed:', error.message);
+    return sendJson(res, 500, { error: 'Your account could not be deleted right now. Nothing was deleted; please try again.' });
+  }
+});
+
 app.post('/api/app-session/logout', requireAppAuth, (req, res) => {
   const token = getAppTokenFromRequest(req);
   if (token) appSessions.delete(token);
@@ -3062,6 +3533,8 @@ app.post('/api/app-session/logout', requireAppAuth, (req, res) => {
 
 async function persistItineraryForUser(userId, itinerary, meta = {}, existingTripId = null) {
   const destination = String(meta.destination || '').trim().slice(0, 200);
+  // Users can rename their itinerary; fall back to the default title otherwise.
+  const tripTitle = String(meta.title || '').trim().slice(0, 200) || `${destination} itinerary`.slice(0, 200);
   const startDateText = String(meta.startDate || '').slice(0, 10);
   let endDateText = String(meta.endDate || '').slice(0, 10);
   const datePattern = /^\d{4}-\d{2}-\d{2}$/;
@@ -3132,7 +3605,7 @@ async function persistItineraryForUser(userId, itinerary, meta = {}, existingTri
       }
       await new sql.Request(transaction)
         .input('tripId', sql.Int, existingTripId)
-        .input('title', sql.NVarChar(200), `${destination} itinerary`.slice(0, 200))
+        .input('title', sql.NVarChar(200), tripTitle)
         .input('destination', sql.NVarChar(200), destination)
         .input('startDate', sql.Date, new Date(`${startDateText}T00:00:00Z`))
         .input('endDate', sql.Date, new Date(`${endDateText}T00:00:00Z`))
@@ -3172,7 +3645,7 @@ async function persistItineraryForUser(userId, itinerary, meta = {}, existingTri
     } else {
       const tripResult = await new sql.Request(transaction)
         .input('userId', sql.Int, userId)
-        .input('title', sql.NVarChar(200), `${destination} itinerary`.slice(0, 200))
+        .input('title', sql.NVarChar(200), tripTitle)
         .input('destination', sql.NVarChar(200), destination)
         .input('startDate', sql.Date, new Date(`${startDateText}T00:00:00Z`))
         .input('endDate', sql.Date, new Date(`${endDateText}T00:00:00Z`))
@@ -3593,7 +4066,7 @@ app.post('/api/app-reviews', requireAppAuth, async (req, res) => {
   }
 });
 
-app.get('/api/preferences/:email', async (req, res) => {
+app.get('/api/preferences/:email', requireAppAuth, requireOwnEmail, async (req, res) => {
   const email = normalizeEmail(req.params.email);
   try {
     const pool = await getPool();
@@ -3635,58 +4108,73 @@ app.get('/api/preferences/:email', async (req, res) => {
   }
 });
 
-app.put('/api/preferences/:email', async (req, res) => {
+app.put('/api/preferences/:email', requireAppAuth, requireOwnEmail, async (req, res) => {
   const email = normalizeEmail(req.params.email);
-  const { travelTypes = [], interests = [], preferredPlaces = [] } = req.body || {};
+  // Clean each list: strings only, trimmed, no duplicates, bounded.
+  const cleanList = (value, max) => Array.from(new Set((Array.isArray(value) ? value : [])
+    .map((item) => String(item ?? '').trim().slice(0, 200))
+    .filter(Boolean))).slice(0, max);
+  const travelTypes = cleanList(req.body?.travelTypes, 20);
+  const interests = cleanList(req.body?.interests, 30);
+  const preferredPlaces = cleanList(req.body?.preferredPlaces, 10);
 
+  let transaction;
+  let transactionStarted = false;
   try {
     const pool = await getPool();
     const userResult = await pool.query`SELECT user_id FROM dbo.users WHERE email = ${email}`;
     if (!userResult.recordset.length) {
       return sendJson(res, 404, { error: 'User not found.' });
     }
-
     const userId = userResult.recordset[0].user_id;
 
-    await pool.query`DELETE FROM dbo.user_travel_styles WHERE user_id = ${userId}`;
-    await pool.query`DELETE FROM dbo.user_interests WHERE user_id = ${userId}`;
-    await pool.query`DELETE FROM dbo.user_preferred_places WHERE user_id = ${userId}`;
-
+    // Replace the saved preferences in one transaction so a failure never leaves them half-written.
+    transaction = new sql.Transaction(pool);
+    await transaction.begin();
+    transactionStarted = true;
+    const run = () => new sql.Request(transaction).input('userId', sql.Int, userId);
+    await run().query(`
+      DELETE FROM dbo.user_travel_styles WHERE user_id = @userId;
+      DELETE FROM dbo.user_interests WHERE user_id = @userId;
+      DELETE FROM dbo.user_preferred_places WHERE user_id = @userId;
+    `);
     for (const styleName of travelTypes) {
-      const result = await pool.query`SELECT style_id FROM dbo.travel_styles WHERE style_name = ${String(styleName)}`;
-      const styleId = result.recordset[0]?.style_id;
-      if (styleId) {
-        await pool.query`INSERT INTO dbo.user_travel_styles (user_id, style_id) VALUES (${userId}, ${styleId})`;
-      }
+      await run().input('name', sql.NVarChar(200), styleName).query(`
+        INSERT INTO dbo.user_travel_styles (user_id, style_id)
+        SELECT @userId, style_id FROM dbo.travel_styles WHERE style_name = @name
+      `);
     }
-
     for (const interestName of interests) {
-      const result = await pool.query`SELECT interest_id FROM dbo.interests WHERE interest_name = ${String(interestName)}`;
-      const interestId = result.recordset[0]?.interest_id;
-      if (interestId) {
-        await pool.query`INSERT INTO dbo.user_interests (user_id, interest_id) VALUES (${userId}, ${interestId})`;
-      }
+      await run().input('name', sql.NVarChar(200), interestName).query(`
+        INSERT INTO dbo.user_interests (user_id, interest_id)
+        SELECT @userId, interest_id FROM dbo.interests WHERE interest_name = @name
+      `);
     }
-
     for (const placeName of preferredPlaces) {
-      const result = await pool.query`SELECT place_id FROM dbo.preferred_places WHERE place_name = ${String(placeName)}`;
-      const placeId = result.recordset[0]?.place_id;
-      if (placeId) {
-        await pool.query`INSERT INTO dbo.user_preferred_places (user_id, place_id) VALUES (${userId}, ${placeId})`;
+      // Users can pick any destination, so add new place names to the list first.
+      await run().input('name', sql.NVarChar(200), placeName).query(`
+        IF NOT EXISTS (SELECT 1 FROM dbo.preferred_places WITH (UPDLOCK, HOLDLOCK) WHERE place_name = @name)
+          INSERT INTO dbo.preferred_places (place_name, country) VALUES (@name, N'Philippines');
+        INSERT INTO dbo.user_preferred_places (user_id, place_id)
+        SELECT @userId, place_id FROM dbo.preferred_places WHERE place_name = @name;
+      `);
+    }
+    await transaction.commit();
+    transactionStarted = false;
+
+    return sendJson(res, 200, { travelTypes, interests, preferredPlaces });
+  } catch (error) {
+    if (transactionStarted) {
+      try { await transaction.rollback(); } catch (rollbackError) {
+        console.error('Preference save rollback failed:', rollbackError.message);
       }
     }
-
-    return sendJson(res, 200, {
-      travelTypes,
-      interests,
-      preferredPlaces,
-    });
-  } catch (error) {
-    return sendJson(res, 500, { error: error.message });
+    console.error('Preference save failed:', error.message);
+    return sendJson(res, 500, { error: 'Unable to save your preferences right now.' });
   }
 });
 
-app.get('/api/trips/:email', async (req, res) => {
+app.get('/api/trips/:email', requireAppAuth, requireOwnEmail, async (req, res) => {
   const email = normalizeEmail(req.params.email);
   try {
     const pool = await getPool();
@@ -3704,7 +4192,7 @@ app.get('/api/trips/:email', async (req, res) => {
   }
 });
 
-app.post('/api/trips/:email', async (req, res) => {
+app.post('/api/trips/:email', requireAppAuth, requireOwnEmail, async (req, res) => {
   const email = normalizeEmail(req.params.email);
   const { trip_title, destination, start_date, end_date, budget, status } = req.body || {};
 
@@ -3732,7 +4220,7 @@ app.post('/api/trips/:email', async (req, res) => {
   }
 });
 
-app.get('/api/reminders/:email', async (req, res) => {
+app.get('/api/reminders/:email', requireAppAuth, requireOwnEmail, async (req, res) => {
   const email = normalizeEmail(req.params.email);
   try {
     const pool = await getPool();
@@ -3750,7 +4238,7 @@ app.get('/api/reminders/:email', async (req, res) => {
   }
 });
 
-app.post('/api/reminders/:email', async (req, res) => {
+app.post('/api/reminders/:email', requireAppAuth, requireOwnEmail, async (req, res) => {
   const email = normalizeEmail(req.params.email);
   const reminder = req.body || {};
 
@@ -3801,8 +4289,14 @@ app.post('/api/reminders/:email', async (req, res) => {
   }
 });
 
-app.post('/api/maps/places', async (req, res) => {
-  const { queries = [], seeds = [] } = req.body || {};
+app.post('/api/maps/places', requireAppAuth, async (req, res) => {
+  const { queries = [], seeds = [], touristOnly = false } = req.body || {};
+  // Recommendation searches ask Google to prefer tourist attractions. If Google rejects
+  // the type filter, fall back to the plain search so results still load.
+  const searchText = (payload) => (touristOnly === true
+    ? callGooglePlacesApi('places:searchText', { ...payload, includedType: 'tourist_attraction' })
+      .catch(() => callGooglePlacesApi('places:searchText', payload))
+    : callGooglePlacesApi('places:searchText', payload));
   const safeQueries = Array.isArray(queries) ? queries.map((query) => String(query || '').trim()).filter(Boolean).slice(0, 4) : [];
   const safeSeeds = Array.isArray(seeds) ? seeds.slice(0, 3) : [];
 
@@ -3819,14 +4313,14 @@ app.post('/api/maps/places', async (req, res) => {
     for (const query of safeQueries) {
       if (safeSeeds.length) {
         for (const seed of safeSeeds) {
-          jobs.push(callGooglePlacesApi('places:searchText', {
+          jobs.push(searchText({
             textQuery: `${query} in Philippines`,
             locationBias: { circle: { center: { latitude: Number(seed.lat), longitude: Number(seed.lng) }, radius: 50000 } },
             maxResultCount: 8,
           }));
         }
       } else {
-        jobs.push(callGooglePlacesApi('places:searchText', { textQuery: `${query} in Philippines`, maxResultCount: 8 }));
+        jobs.push(searchText({ textQuery: `${query} in Philippines`, maxResultCount: 8 }));
       }
     }
 
@@ -3841,7 +4335,7 @@ app.post('/api/maps/places', async (req, res) => {
   }
 });
 
-app.post('/api/maps/place-suggestions', async (req, res) => {
+app.post('/api/maps/place-suggestions', requireAppAuth, async (req, res) => {
   const input = String(req.body?.input || '').trim().slice(0, 160);
   const suppliedSessionToken = String(req.body?.sessionToken || '');
   const sessionToken = /^[A-Za-z0-9_-]{1,36}$/.test(suppliedSessionToken) ? suppliedSessionToken : '';
@@ -3867,30 +4361,33 @@ app.post('/api/maps/place-suggestions', async (req, res) => {
     }
     const apiKey = getMapsApiKey();
     if (!apiKey) throw new Error('Google Maps is not configured on the backend.');
-    const response = await fetch('https://places.googleapis.com/v1/places:autocomplete', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Goog-Api-Key': apiKey,
-        'X-Goog-FieldMask': 'suggestions.placePrediction.placeId,suggestions.placePrediction.text,suggestions.placePrediction.structuredFormat,suggestions.placePrediction.types',
-      },
-      body: JSON.stringify({
-        input,
-        ...(sessionToken ? { sessionToken } : {}),
-        includedRegionCodes: ['PH'],
-        includedPrimaryTypes: ['tourist_attraction', 'landmark', 'national_park', 'museum', 'park'],
-        languageCode: 'en',
-        regionCode: 'PH',
-        includeQueryPredictions: false,
-      }),
-    });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      const reason = data?.error?.message || data?.error?.status;
-      throw new Error(reason ? `Google place suggestions failed: ${reason}` : 'Google place suggestions are unavailable.');
-    }
     const touristTypeOrder = ['tourist_attraction', 'landmark', 'national_park', 'museum', 'park'];
-    const suggestions = (data.suggestions || []).map((item, index) => {
+    const requestSuggestions = async (includedPrimaryTypes) => {
+      const response = await fetch('https://places.googleapis.com/v1/places:autocomplete', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Goog-Api-Key': apiKey,
+          'X-Goog-FieldMask': 'suggestions.placePrediction.placeId,suggestions.placePrediction.text,suggestions.placePrediction.structuredFormat,suggestions.placePrediction.types',
+        },
+        body: JSON.stringify({
+          input,
+          ...(sessionToken ? { sessionToken } : {}),
+          includedRegionCodes: ['PH'],
+          includedPrimaryTypes,
+          languageCode: 'en',
+          regionCode: 'PH',
+          includeQueryPredictions: false,
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const reason = data?.error?.message || data?.error?.status;
+        throw new Error(reason ? `Google place suggestions failed: ${reason}` : 'Google place suggestions are unavailable.');
+      }
+      return data;
+    };
+    const mapSuggestions = (data) => (data.suggestions || []).map((item, index) => {
       const prediction = item.placePrediction;
       if (!prediction?.placeId) return null;
       const types = Array.isArray(prediction.types) ? prediction.types : [];
@@ -3906,15 +4403,29 @@ app.post('/api/maps/place-suggestions', async (req, res) => {
         touristRank: rank < 0 ? touristTypeOrder.length : rank,
         originalRank: index,
       };
-    }).filter(Boolean).sort((a, b) => a.touristRank - b.touristRank || a.originalRank - b.originalRank)
-      .slice(0, 5).map(({ touristRank, originalRank, ...suggestion }) => suggestion);
+    }).filter(Boolean).sort((a, b) => a.touristRank - b.touristRank || a.originalRank - b.originalRank);
+
+    let suggestions;
+    if (req.body?.scope === 'destination') {
+      // Onboarding destination picker: allow cities/towns as well as attractions.
+      const [attractionData, cityData] = await Promise.all([
+        requestSuggestions(touristTypeOrder),
+        requestSuggestions(['(cities)']).catch(() => ({})),
+      ]);
+      const merged = [...mapSuggestions(cityData), ...mapSuggestions(attractionData)];
+      suggestions = Array.from(new Map(merged.map((item) => [item.placeId, item])).values())
+        .slice(0, 6).map(({ touristRank, originalRank, ...suggestion }) => suggestion);
+    } else {
+      suggestions = mapSuggestions(await requestSuggestions(touristTypeOrder))
+        .slice(0, 5).map(({ touristRank, originalRank, ...suggestion }) => suggestion);
+    }
     return sendJson(res, 200, { suggestions });
   } catch (error) {
     return sendJson(res, 503, { error: error.message || 'Google place suggestions are unavailable.' });
   }
 });
 
-app.post('/api/maps/place-details', async (req, res) => {
+app.post('/api/maps/place-details', requireAppAuth, async (req, res) => {
   const placeId = String(req.body?.placeId || '').trim();
   const suppliedSessionToken = String(req.body?.sessionToken || '');
   const sessionToken = /^[A-Za-z0-9_-]{1,36}$/.test(suppliedSessionToken) ? suppliedSessionToken : '';
@@ -3948,7 +4459,7 @@ app.post('/api/maps/place-details', async (req, res) => {
   }
 });
 
-app.post('/api/maps/route', async (req, res) => {
+app.post('/api/maps/route', requireAppAuth, async (req, res) => {
   const { origin, destination, travelMode = 'DRIVE' } = req.body || {};
   try {
     const route = await calculateRoute({ origin, destination, travelMode });
@@ -4099,10 +4610,158 @@ app.post('/api/itinerary/generate', requireAppAuth, async (req, res) => {
   }
 });
 
-app.post('/api/itinerary/estimate-budget', async (req, res) => {
+const hotelRateCache = new Map();
+const HOTEL_TYPE_PATTERN = /(^|_)(lodging|hotel|resort_hotel|motel|hostel|inn|guest_house|bed_and_breakfast|extended_stay_hotel|cottage|villa)(_|$)/;
+
+function hotelRateResponseSchema() {
+  return {
+    type: 'object',
+    properties: {
+      hotelRates: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            placeId: { type: 'string' },
+            lowPhp: { type: ['number', 'null'] },
+            highPhp: { type: ['number', 'null'] },
+            basis: { type: 'string' },
+            sourceUrls: { type: 'array', items: { type: 'string' } },
+          },
+          required: ['placeId', 'lowPhp', 'highPhp', 'basis', 'sourceUrls'],
+        },
+      },
+    },
+    required: ['hotelRates'],
+  };
+}
+
+// Lists real hotels near the destination whose researched nightly rate fits the
+// lodging share of the user's budget. Uses one grounded web search per hotel list,
+// cached for 6 hours so changing the budget does not search again.
+app.post('/api/hotels/budget-options', requireAppAuth, async (req, res) => {
+  const destination = String(req.body?.destination || '').trim().slice(0, 180);
+  const startDate = String(req.body?.startDate || '').slice(0, 10);
+  const endDate = String(req.body?.endDate || '').slice(0, 10);
+  const budgetAmountPhp = Number(req.body?.budgetAmountPhp);
+  if (!destination) return sendJson(res, 400, { error: 'A destination is required to find hotels.' });
+  let days;
+  try {
+    days = inclusiveDayCount(startDate, endDate);
+  } catch (error) {
+    return sendJson(res, 400, { error: error.message });
+  }
+  if (days < 1 || days > 14) return sendJson(res, 400, { error: 'Trips can cover between 1 and 14 days.' });
+  if (!Number.isSafeInteger(budgetAmountPhp) || budgetAmountPhp < 1 || budgetAmountPhp > 100000000) {
+    return sendJson(res, 400, { error: 'A whole-number trip budget in PHP is required.' });
+  }
+  const nights = Math.max(1, days - 1);
+  // About 40% of a whole-trip budget is a common lodging share; the rest covers
+  // activities, meals, transport, and contingency.
+  const lodgingAllowancePhp = Math.floor(budgetAmountPhp * 0.4);
+  const nightlyCapPhp = Math.floor(lodgingAllowancePhp / nights);
+  const base = { nights, lodgingAllowancePhp, nightlyCapPhp };
+  if (isDevelopmentMode) {
+    return sendJson(res, 200, { ...base, hotels: [], isDevelopmentMock: true, message: 'Hotel prices need live Google data, which is not available in development mode.' });
+  }
+  if (isRateLimited(`hotel-options:${req.appUser.userId}`, 12, 60 * 60 * 1000)) {
+    return sendJson(res, 429, { error: 'Too many hotel searches. Please try again later.' });
+  }
+  try {
+    let center = Number.isFinite(Number(req.body?.lat)) && Number.isFinite(Number(req.body?.lng))
+      && req.body.lat !== null && req.body.lng !== null && req.body.lat !== '' && req.body.lng !== ''
+      ? { lat: Number(req.body.lat), lng: Number(req.body.lng) }
+      : null;
+    if (!center) {
+      const located = await callGooglePlacesApi('places:searchText', { textQuery: `${destination}, Philippines`, maxResultCount: 1 });
+      const first = (located.places || []).map(mapPlace).find((place) => Number.isFinite(place.lat) && Number.isFinite(place.lng));
+      if (first) center = { lat: first.lat, lng: first.lng };
+    }
+    const bias = center ? { locationBias: { circle: { center: { latitude: center.lat, longitude: center.lng }, radius: 30000 } } } : {};
+    const searches = await Promise.all(['hotels', 'resorts', 'budget hotels and inns'].map((query) => (
+      callGooglePlacesApi('places:searchText', { textQuery: `${query} in ${destination}`, maxResultCount: 10, ...bias }).catch(() => ({ places: [] }))
+    )));
+    const candidates = Array.from(new Map(searches.flatMap((data) => data.places || []).map(mapPlace)
+      .filter((place) => place.placeId && Number.isFinite(place.lat) && Number.isFinite(place.lng))
+      .filter((place) => place.types.some((type) => HOTEL_TYPE_PATTERN.test(String(type).toLowerCase())))
+      .filter((place) => !center || haversineKm(center, place) <= 40)
+      .map((place) => [place.placeId, place])).values())
+      .sort((a, b) => (Number(b.rating) || 0) - (Number(a.rating) || 0) || (Number(b.ratingCount) || 0) - (Number(a.ratingCount) || 0))
+      .slice(0, 12);
+    if (!candidates.length) {
+      return sendJson(res, 200, { ...base, hotels: [], message: 'No hotels were found near this destination.' });
+    }
+
+    const cacheKey = JSON.stringify([destination.toLowerCase(), startDate, endDate, candidates.map((place) => place.placeId)]);
+    let rates = hotelRateCache.get(cacheKey);
+    if (!rates || rates.expiresAt <= Date.now()) {
+      const grounded = await callGeminiSearchApi({
+        contextText: [
+          `Destination: ${destination}, Philippines`,
+          `Stay: ${startDate} to ${endDate} (${nights} night${nights === 1 ? '' : 's'})`,
+          `Hotels verified by Google Places: ${JSON.stringify(candidates.map((place) => ({ placeId: place.placeId, name: place.name, address: place.address })))}`,
+        ].join('\n'),
+        message: 'Search the web now for the current price of a standard room for one night at each listed hotel, for stays around these dates. Prefer the hotel\'s official site and major booking sites. Return one JSON object only, without markdown, shaped as {"hotelRates":[{"placeId":"exact supplied placeId","lowPhp":null,"highPhp":null,"basis":"brief price basis","sourceUrls":[]}]}, one item per supplied hotel, preserving each exact placeId. Give a realistic low and high nightly rate in PHP (convert with a current rate if needed) only when a current source supports it, and include the URL(s) of the pages that support it. Use null for both bounds when you cannot find evidence. Never invent a price or a source URL.',
+        responseSchema: hotelRateResponseSchema(),
+      });
+      const parsed = extractJsonObject(grounded.text);
+      if (!parsed) throw new Error('Hotel price search returned data that could not be read.');
+      const allowedSources = new Set(grounded.sources.map((source) => source.url));
+      const byPlaceId = {};
+      for (const entry of Array.isArray(parsed.hotelRates) ? parsed.hotelRates : []) {
+        const band = normalizeSourcedPriceBand(entry, allowedSources);
+        const placeId = String(entry?.placeId || '');
+        if (placeId && band && band.lowPhp > 0) byPlaceId[placeId] = { ...band, basis: String(entry.basis || '').slice(0, 200) };
+      }
+      rates = { byPlaceId, expiresAt: Date.now() + 6 * 60 * 60 * 1000 };
+      if (hotelRateCache.size >= 200) hotelRateCache.delete(hotelRateCache.keys().next().value);
+      hotelRateCache.set(cacheKey, rates);
+    }
+
+    const priced = candidates
+      .map((place) => ({ place, rate: rates.byPlaceId[place.placeId] }))
+      .filter(({ rate }) => rate);
+    const affordable = priced.filter(({ rate }) => rate.lowPhp <= nightlyCapPhp);
+    // Best-rated hotels the budget can cover come first; cheaper wins a tie.
+    affordable.sort((a, b) => (Number(b.place.rating) || 0) - (Number(a.place.rating) || 0) || a.rate.lowPhp - b.rate.lowPhp);
+    const hotels = affordable.map(({ place, rate }) => ({
+      placeId: place.placeId,
+      name: place.name,
+      address: place.address,
+      lat: place.lat,
+      lng: place.lng,
+      rating: place.rating,
+      ratingCount: place.ratingCount,
+      types: place.types,
+      photoResource: place.photoResource,
+      photoAttribution: place.photoAttribution,
+      nightlyLowPhp: rate.lowPhp,
+      nightlyHighPhp: rate.highPhp,
+      stayLowPhp: rate.lowPhp * nights,
+      stayHighPhp: rate.highPhp * nights,
+      fullyWithinBudget: rate.highPhp <= nightlyCapPhp,
+      basis: rate.basis,
+      sourceUrls: rate.sourceUrls.slice(0, 3),
+    }));
+    return sendJson(res, 200, {
+      ...base,
+      hotels,
+      overBudgetCount: priced.length - affordable.length,
+      unpricedCount: candidates.length - priced.length,
+    });
+  } catch (error) {
+    console.error('Hotel budget search error:', error.message);
+    return sendJson(res, 503, { error: error.message || 'Hotel search is currently unavailable.' });
+  }
+});
+
+app.post('/api/itinerary/estimate-budget', requireAppAuth, async (req, res) => {
   const { email, itinerary, destination, startDate, endDate } = req.body || {};
-  const normalizedEmail = normalizeEmail(email);
+  const normalizedEmail = normalizeEmail(email || req.appUser.email);
   if (!normalizedEmail) return sendJson(res, 401, { error: 'Authentication is required to estimate a trip budget.' });
+  if (normalizedEmail !== normalizeEmail(req.appUser.email)) {
+    return sendJson(res, 403, { error: 'You can only estimate costs for your own itinerary.' });
+  }
   if (!Array.isArray(itinerary) || itinerary.length < 1 || itinerary.length > 14) {
     return sendJson(res, 400, { error: 'The itinerary must contain between 1 and 14 days.' });
   }
@@ -4139,6 +4798,31 @@ app.post('/api/itinerary/estimate-budget', async (req, res) => {
     console.error('Trip cost research error:', error.message);
     return sendJson(res, 503, { error: error.message || 'Live trip cost research is currently unavailable.' });
   }
+});
+
+// ---- Not found and error responses (registered after every route) -------------
+// Unknown API routes answer in JSON so the app and admin site can show a message.
+app.use('/api', (req, res) => sendJson(res, 404, { error: 'This Sidekick API endpoint does not exist.' }));
+
+// Unknown pages show the app's "Page not found" page instead of Express's default text.
+app.use((req, res) => {
+  if (req.method === 'GET' && req.accepts('html')) {
+    return res.status(404).sendFile(path.join(mobileAppDir, '404.html'));
+  }
+  return sendJson(res, 404, { error: 'Not found.' });
+});
+
+// Errors never reveal stack traces or server file paths to the caller.
+app.use((error, req, res, next) => {
+  if (res.headersSent) return next(error);
+  const status = error?.type === 'entity.parse.failed' ? 400
+    : error?.type === 'entity.too.large' ? 413
+      : Number(error?.status) >= 400 && Number(error?.status) < 600 ? Number(error.status) : 500;
+  const message = status === 400 ? 'The request was not valid. Please try again.'
+    : status === 413 ? 'The request is too large.'
+      : 'Something went wrong on the server. Please try again.';
+  if (status >= 500) console.error('Unhandled server error:', error?.message || error);
+  return sendJson(res, status, { error: message });
 });
 
 setInterval(cleanUnverifiedUsers, 60 * 60 * 1000).unref();

@@ -164,3 +164,109 @@
     padding: 12px;
   }
 }
+
+/* Keep the dark logout button (a11y.css darkens all primary buttons). */
+.settings-card.danger .btn-primary {
+  background: #334155 !important;
+}
+
+.settings-card.danger .btn-danger-outline {
+  margin-top: 10px;
+  background: #fff;
+  color: #9e4757;
+  border: 2px solid #9e4757;
+}
+
+.settings-card.danger .btn-danger-outline:hover {
+  background: #fdf4f6;
+}
+
+.settings-legal-links {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.settings-legal-links a,
+.settings-legal-note a {
+  color: #1f7a8c;
+  font-weight: 600;
+}
+
+.settings-legal-note {
+  margin: 12px 0 0;
+  font-size: 13px;
+  color: #56708a;
+  overflow-wrap: anywhere;
+}
+
+/* Delete-account confirmation */
+.delete-account-dialog {
+  width: min(420px, calc(100vw - 32px));
+  border: 1px solid #e3ebf1;
+  border-radius: 18px;
+  padding: 22px;
+  color: #1f2d3d;
+  box-shadow: 0 24px 70px rgb(22 39 56 / 22%);
+}
+
+.delete-account-dialog::backdrop {
+  background: rgb(20 35 50 / 48%);
+}
+
+.delete-account-dialog h2 {
+  margin: 0 0 8px;
+  font-size: 20px;
+  color: #163457;
+}
+
+.delete-account-dialog p {
+  margin: 0 0 14px;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.delete-account-dialog label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.delete-account-dialog input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 12px;
+  border: 1px solid #cfd9e3;
+  border-radius: 10px;
+  font: inherit;
+}
+
+.delete-account-dialog .auth-error {
+  margin: 10px 0 0;
+}
+
+.delete-account-dialog .auth-error[hidden] {
+  display: none;
+}
+
+.delete-account-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.btn-danger {
+  background: #9e4757;
+  color: #fff;
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: #873a49;
+}
+
+.btn-danger:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
