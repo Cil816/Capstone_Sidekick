@@ -36,6 +36,8 @@ form.addEventListener("submit", async (event) => {
       apiToken: result.session?.token || "",
       loggedInAt: Date.now(),
     });
+    // Verifying completes a brand-new account: start onboarding fresh for this email.
+    window.SidekickCore.recordAccountForEmail(result.user.email, result.user.user_id, { newAccount: true });
     const destination = window.SidekickCore.getPreferences() ? "dashboard.html" : "onboarding.html";
     window.location.href = destination;
   } catch (error) {

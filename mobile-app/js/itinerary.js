@@ -805,9 +805,9 @@ function renderItinerary(itinerary, isDevelopmentMock = false) {
     const dayHtml = `
       <div class="day-section">
         <div class="day-header">
-          <div class="day-number">${day.dayNumber}</div>
+          <div class="day-number">${window.SidekickCore.escapeHtml(day.dayNumber)}</div>
           <div class="day-info">
-            <h2>Day ${day.dayNumber}</h2>
+            <h2>Day ${window.SidekickCore.escapeHtml(day.dayNumber)}</h2>
             <p>${window.SidekickCore.escapeHtml(day.dateLabel)}</p>
             ${dayCostText ? `<p class="day-cost-estimate">${window.SidekickCore.escapeHtml(dayCostText)}</p>` : ''}
           </div>

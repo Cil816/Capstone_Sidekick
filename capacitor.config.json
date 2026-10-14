@@ -6,6 +6,10 @@
     "Keyboard": {
       "resize": "body",
       "resizeOnFullScreen": true
+    },
+    "LocalNotifications": {
+      "smallIcon": "ic_stat_sidekick",
+      "iconColor": "#2C91B0"
     }
   }
 }

@@ -85,6 +85,9 @@ async function handleLogin(event) {
       apiToken: result.session.token,
       loggedInAt: Date.now(),
     });
+    // A re-created account (deleted, then registered again) gets a new user ID:
+    // its old onboarding answers on this device are cleared so onboarding runs again.
+    window.SidekickCore.recordAccountForEmail(email, user?.user_id);
 
     const prefs = window.SidekickCore.getPreferences();
     logLoginDebug("Login success, redirecting", {

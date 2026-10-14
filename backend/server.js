@@ -7,6 +7,7 @@ import crypto from 'node:crypto';
 import dns from 'node:dns';
 import nodemailer from 'nodemailer';
 import path from 'node:path';
+import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 dotenv.config();
@@ -17,6 +18,11 @@ const projectRoot = path.resolve(__dirname, '..');
 const mobileAppDir = path.join(projectRoot, 'mobile-app');
 
 const app = express();
+// Behind a load balancer (AWS ALB), set TRUST_PROXY=1 so req.ip is the visitor's
+// address (from X-Forwarded-For) instead of the load balancer's. Leave it unset
+// when the server is reached directly, or visitors could fake their address.
+const trustProxy = String(process.env.TRUST_PROXY || '').trim();
+if (trustProxy) app.set('trust proxy', /^\d+$/.test(trustProxy) ? Number(trustProxy) : trustProxy);
 const port = Number(process.env.PORT || 3001);
 const configuredServer = process.env.DB_SERVER || 'localhost\\SQLEXPRESS';
 const [serverName, configuredInstance] = configuredServer.split('\\', 2);
@@ -39,6 +45,11 @@ const config = {
     : {}),
   server: serverName || 'localhost',
   database: configuredDatabase,
+  // A small database server (e.g. RDS db.t3.micro) can pause for several seconds
+  // when it is short on memory; 30 s (instead of the 15 s default) rides that out
+  // instead of showing an error.
+  requestTimeout: 30000,
+  connectionTimeout: 30000,
   ...(useWindowsAuthentication
     ? { options: { trustedConnection: true } }
     : {
@@ -49,7 +60,8 @@ const config = {
     ? { port: Number(process.env.DB_PORT || 1433) }
     : {}),
   options: {
-    encrypt: false,
+    // DB_ENCRYPT=true encrypts the connection (recommended for Amazon RDS).
+    encrypt: ['1', 'true', 'yes'].includes(String(process.env.DB_ENCRYPT || '').trim().toLowerCase()),
     trustServerCertificate: true,
     enableArithAbort: true,
     ...(useWindowsAuthentication ? { trustedConnection: true } : {}),
@@ -59,9 +71,161 @@ const config = {
   },
 };
 
-app.use(cors());
-app.use(express.json({ limit: '10mb' }));
-app.use(express.static(mobileAppDir, { index: false }));
+// ---- Security settings --------------------------------------------------------
+// Production values live on the server, never in the app or website:
+//   NODE_ENV=production   FORCE_HTTPS=1   TRUST_PROXY=1
+//   CORS_ALLOWED_ORIGINS=https://your-domain,https://localhost,capacitor://localhost
+// Left unset (local development), the server behaves as before.
+const isProduction = String(process.env.NODE_ENV || '').trim().toLowerCase() === 'production';
+const isEnabled = (value) => ['1', 'true', 'yes'].includes(String(value || '').trim().toLowerCase());
+const forceHttps = isEnabled(process.env.FORCE_HTTPS);
+const corsAllowedOrigins = String(process.env.CORS_ALLOWED_ORIGINS || '')
+  .split(',')
+  .map((origin) => origin.trim().replace(/\/+$/, ''))
+  .filter(Boolean);
+
+app.disable('x-powered-by');
+
+// Send plain-HTTP visitors to HTTPS. The load balancer's health check (/health)
+// stays on HTTP. Non-GET requests over HTTP are refused rather than redirected,
+// so passwords and tokens are never sent unencrypted twice.
+if (forceHttps) {
+  app.use((req, res, next) => {
+    const secure = req.secure || String(req.get('x-forwarded-proto') || '').toLowerCase() === 'https';
+    if (secure || req.path === '/health') return next();
+    if (req.method === 'GET' || req.method === 'HEAD') {
+      const origin = String(process.env.PUBLIC_ORIGIN || '').trim().replace(/\/+$/, '') || `https://${req.get('host')}`;
+      return res.redirect(301, `${origin}${req.originalUrl}`);
+    }
+    return res.status(403).json({ error: 'HTTPS is required.' });
+  });
+}
+
+// Security headers. The admin website gets a strict Content-Security-Policy (it
+// loads only its own scripts); API responses are never cached or framed.
+const ADMIN_CONTENT_SECURITY_POLICY = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  "font-src 'self' https://fonts.gstatic.com",
+  "img-src 'self' data:",
+  "connect-src 'self'",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+].join('; ');
+app.use((req, res, next) => {
+  res.set('X-Content-Type-Options', 'nosniff');
+  res.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.set('X-Frame-Options', 'SAMEORIGIN');
+  res.set('Cross-Origin-Opener-Policy', 'same-origin');
+  res.set('Permissions-Policy', 'camera=(), microphone=(), payment=(), usb=(), interest-cohort=()');
+  if (forceHttps) res.set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  // In production every page on the site is the admin website (served at /).
+  if (req.path === '/admin' || req.path.startsWith('/admin/') || (isProduction && !req.path.startsWith('/api/'))) {
+    res.set('Content-Security-Policy', ADMIN_CONTENT_SECURITY_POLICY);
+    res.set('X-Frame-Options', 'DENY');
+  }
+  if (req.path.startsWith('/api/')) {
+    // Routes such as /api/maps/photo may replace this with their own caching.
+    res.set('Cache-Control', 'no-store');
+    res.set('Content-Security-Policy', "default-src 'none'; frame-ancestors 'none'");
+  }
+  next();
+});
+
+// CORS: with CORS_ALLOWED_ORIGINS set, only those websites and the mobile app may
+// call the API from a browser. Requests without an Origin header (the app's own
+// page navigation, health checks, server tools) are unaffected. Logins use
+// Authorization/X-Admin-Token headers, never cookies, so cross-site request
+// forgery (CSRF) cannot use a visitor's login.
+app.use(cors(corsAllowedOrigins.length ? {
+  origin(origin, callback) {
+    callback(null, !origin || corsAllowedOrigins.includes(origin));
+  },
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Admin-Token'],
+  maxAge: 600,
+} : undefined));
+// 2 MB comfortably fits the largest request (a 14-day itinerary) and limits abuse.
+app.use(express.json({ limit: '2mb' }));
+
+// Spam protection: an overall per-visitor limit for the whole API, on top of the
+// per-route limits (sign-in, registration, AI, maps).
+app.use('/api', (req, res, next) => {
+  if (isRateLimited(`api:${req.ip}`, 3000, 15 * 60 * 1000)) {
+    res.set('Retry-After', '900');
+    return sendJson(res, 429, { error: 'Too many requests. Please wait a few minutes and try again.' });
+  }
+  return next();
+});
+// In production only the admin website is public: the phone app ships inside the APK
+// and talks to /api only. Locally the app's pages stay available for browser testing.
+if (!isProduction) app.use(express.static(mobileAppDir, { index: false }));
+// The admin website is static files; serving them here means no separate web server
+// is needed. /admin redirects to /admin/, whose index page opens the admin sign-in.
+const adminWebsiteDir = path.join(projectRoot, 'admin-website');
+if (isProduction) {
+  // Production: the admin website lives at the site root with clean addresses
+  // (app.sidekickph.me/users instead of /admin/admin-users.html). Old .html and
+  // /admin/... addresses redirect to the clean ones, and only the pages below plus
+  // the css, js and assets folders are public.
+  const ADMIN_PAGES = {
+    '/': 'admin-login.html',
+    '/dashboard': 'admin.html',
+    '/users': 'admin-users.html',
+    '/travel-plans': 'admin-itineraries.html',
+    '/reports': 'admin-analytics.html',
+    '/reviews': 'admin-reviews.html',
+    '/activity': 'admin-activity.html',
+    '/connections': 'admin-integrations.html',
+    '/setup': 'admin-settings.html',
+  };
+  const ADMIN_PAGE_ROUTES = Object.fromEntries(Object.entries(ADMIN_PAGES).map(([route, file]) => [file, route]));
+  ADMIN_PAGE_ROUTES['index.html'] = '/';
+  const queryOf = (req) => {
+    const index = req.originalUrl.indexOf('?');
+    return index === -1 ? '' : req.originalUrl.slice(index);
+  };
+
+  app.use((req, res, next) => {
+    if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+    // Old addresses: /admin/... and /<page>.html -> the clean address.
+    if (req.path === '/admin' || req.path.startsWith('/admin/')) {
+      const rest = req.path.slice('/admin'.length) || '/';
+      const file = rest.replace(/^\/+/, '');
+      return res.redirect(302, (ADMIN_PAGE_ROUTES[file] || rest) + queryOf(req));
+    }
+    const file = req.path.replace(/^\/+/, '');
+    if (ADMIN_PAGE_ROUTES[file]) return res.redirect(302, ADMIN_PAGE_ROUTES[file] + queryOf(req));
+    // "/users/" -> "/users", so the page's relative css/js links still resolve.
+    const trimmed = req.path.replace(/\/+$/, '');
+    if (trimmed && trimmed !== req.path && ADMIN_PAGES[trimmed]) return res.redirect(302, trimmed + queryOf(req));
+    return next();
+  });
+
+  // Links inside the pages point at the clean addresses, so clicking around never
+  // shows ".html" (the files themselves keep their names for local development).
+  const toCleanLinks = (html) => html.replace(/href="([a-z-]+\.html)(#[^"]*)?"/g,
+    (match, file, hash = '') => (ADMIN_PAGE_ROUTES[file] ? `href="${ADMIN_PAGE_ROUTES[file]}${hash}"` : match));
+  Object.entries(ADMIN_PAGES).forEach(([route, file]) => {
+    app.get(route, async (req, res, next) => {
+      try {
+        const html = await readFile(path.join(adminWebsiteDir, file), 'utf8');
+        res.set('Cache-Control', 'no-cache');
+        return res.type('html').send(toCleanLinks(html));
+      } catch (error) {
+        return next(error);
+      }
+    });
+  });
+  ['css', 'js', 'assets'].forEach((folder) => {
+    app.use(`/${folder}`, express.static(path.join(adminWebsiteDir, folder), { index: false }));
+  });
+} else {
+  app.use('/admin', express.static(adminWebsiteDir));
+}
 
 // ---- Maintenance mode -----------------------------------------------------------
 // MAINTENANCE_MODE=true in backend/.env pauses the app's API with a friendly
@@ -89,7 +253,7 @@ app.get('/api/maintenance-status', (req, res) => {
 });
 
 app.get('/', (req, res) => {
-  res.sendFile(path.join(mobileAppDir, 'index.html'));
+  return res.sendFile(path.join(mobileAppDir, 'index.html'));
 });
 
 const adminSessions = new Map();
@@ -104,7 +268,34 @@ function getAppTokenFromRequest(req) {
   return authorization.startsWith('Bearer ') ? authorization.slice(7).trim() : '';
 }
 
-function createAppSession(user) {
+// ---- Shared login sessions ---------------------------------------------------
+// After backend/migrations/004_shared_sessions.sql, sessions are stored in SQL
+// Server so every server behind a load balancer recognises them, and restarts or
+// deployments do not sign anyone out. Until then they stay in this process's
+// memory (the original behaviour). Only a SHA-256 hash of each token is stored.
+const SESSION_TOKEN_PATTERN = /^[a-f0-9]{64}$/;
+let sessionTablesKnown = false;
+let sessionTablesCheckedAt = 0;
+
+function hashSessionToken(token) {
+  return crypto.createHash('sha256').update(String(token)).digest('hex');
+}
+
+async function hasSessionTables() {
+  // Once present they stay; while missing, re-check at most once a minute so
+  // running the migration takes effect without a restart.
+  if (sessionTablesKnown || Date.now() - sessionTablesCheckedAt < 60 * 1000) return sessionTablesKnown;
+  const pool = await getPool();
+  const result = await pool.query`
+    SELECT CASE WHEN OBJECT_ID(N'dbo.app_sessions', N'U') IS NOT NULL
+                 AND OBJECT_ID(N'dbo.admin_api_sessions', N'U') IS NOT NULL THEN 1 ELSE 0 END AS available
+  `;
+  sessionTablesKnown = Boolean(result.recordset[0]?.available);
+  sessionTablesCheckedAt = Date.now();
+  return sessionTablesKnown;
+}
+
+async function createAppSession(user) {
   const token = crypto.randomBytes(32).toString('hex');
   const session = {
     userId: Number(user.user_id),
@@ -112,15 +303,82 @@ function createAppSession(user) {
     name: String(user.name || ''),
     expiresAt: Date.now() + APP_SESSION_TTL_MS,
   };
-  appSessions.set(token, session);
+  if (await hasSessionTables()) {
+    await new sql.Request()
+      .input('tokenHash', sql.Char(64), hashSessionToken(token))
+      .input('userId', sql.Int, session.userId)
+      .input('email', sql.NVarChar(255), session.email.slice(0, 255))
+      .input('name', sql.NVarChar(150), session.name.slice(0, 150))
+      .input('expiresAt', sql.DateTime2, new Date(session.expiresAt))
+      .query(`
+        INSERT INTO dbo.app_sessions (token_hash, user_id, email, name, expires_at)
+        VALUES (@tokenHash, @userId, @email, @name, @expiresAt)
+      `);
+  } else {
+    appSessions.set(token, session);
+  }
   return { token, expiresAt: session.expiresAt };
 }
 
-function requireAppAuth(req, res, next) {
+// Returns { userId, email, name, expiresAt } or null. Throws only if the database fails.
+async function findAppSession(token) {
+  if (!SESSION_TOKEN_PATTERN.test(token)) return null;
+  const local = appSessions.get(token);
+  if (local) {
+    if (local.expiresAt > Date.now()) return local;
+    appSessions.delete(token);
+    return null;
+  }
+  if (!await hasSessionTables()) return null;
+  const result = await new sql.Request()
+    .input('tokenHash', sql.Char(64), hashSessionToken(token))
+    .query(`
+      SELECT user_id, email, name, expires_at
+      FROM dbo.app_sessions
+      WHERE token_hash = @tokenHash AND expires_at > SYSUTCDATETIME()
+    `);
+  const row = result.recordset[0];
+  return row ? {
+    userId: Number(row.user_id),
+    email: String(row.email || ''),
+    name: String(row.name || ''),
+    expiresAt: new Date(row.expires_at).getTime(),
+  } : null;
+}
+
+async function deleteAppSession(token) {
+  appSessions.delete(token);
+  if (SESSION_TOKEN_PATTERN.test(token) && await hasSessionTables()) {
+    await new sql.Request()
+      .input('tokenHash', sql.Char(64), hashSessionToken(token))
+      .query('DELETE FROM dbo.app_sessions WHERE token_hash = @tokenHash');
+  }
+}
+
+// Signs a user out everywhere (password reset, account deletion).
+async function deleteUserAppSessions(userId) {
+  const id = Number(userId);
+  for (const [token, session] of appSessions) {
+    if (session.userId === id) appSessions.delete(token);
+  }
+  if (Number.isSafeInteger(id) && await hasSessionTables()) {
+    await new sql.Request()
+      .input('userId', sql.Int, id)
+      .query('DELETE FROM dbo.app_sessions WHERE user_id = @userId');
+  }
+}
+
+async function requireAppAuth(req, res, next) {
   const token = getAppTokenFromRequest(req);
-  const session = token ? appSessions.get(token) : null;
-  if (!session || session.expiresAt <= Date.now()) {
-    if (token) appSessions.delete(token);
+  let session = null;
+  try {
+    session = token ? await findAppSession(token) : null;
+  } catch (error) {
+    // A database problem is not an expired login: do not sign the user out.
+    console.error('App session check failed:', error.message);
+    return sendJson(res, 503, { error: 'Sidekick could not check your sign-in right now. Please try again.' });
+  }
+  if (!session) {
     return sendJson(res, 401, { error: 'Your app session has expired. Please sign in again.' });
   }
   req.appUser = session;
@@ -174,15 +432,72 @@ function matchesAdminSecret(provided, configured) {
     && crypto.timingSafeEqual(providedBuffer, configuredBuffer);
 }
 
-function requireAdminAuth(req, res, next) {
+const ADMIN_SESSION_TTL_MS = 8 * 60 * 60 * 1000;
+
+async function createAdminSession(username) {
+  const token = crypto.randomBytes(32).toString('hex');
+  const session = { username, role: 'super-admin', issuedAt: Date.now(), expiresAt: Date.now() + ADMIN_SESSION_TTL_MS };
+  if (await hasSessionTables()) {
+    await new sql.Request()
+      .input('tokenHash', sql.Char(64), hashSessionToken(token))
+      .input('username', sql.NVarChar(128), String(username).slice(0, 128))
+      .input('role', sql.NVarChar(32), session.role)
+      .input('expiresAt', sql.DateTime2, new Date(session.expiresAt))
+      .query(`
+        INSERT INTO dbo.admin_api_sessions (token_hash, username, role, expires_at)
+        VALUES (@tokenHash, @username, @role, @expiresAt)
+      `);
+  } else {
+    adminSessions.set(token, session);
+  }
+  return token;
+}
+
+// Returns { username, role, expiresAt } or null. Throws only if the database fails.
+async function findAdminSession(token) {
+  if (!SESSION_TOKEN_PATTERN.test(token)) return null;
+  const local = adminSessions.get(token);
+  if (local) {
+    if (local.expiresAt > Date.now()) return local;
+    adminSessions.delete(token);
+    return null;
+  }
+  if (!await hasSessionTables()) return null;
+  const result = await new sql.Request()
+    .input('tokenHash', sql.Char(64), hashSessionToken(token))
+    .query(`
+      SELECT username, role, expires_at
+      FROM dbo.admin_api_sessions
+      WHERE token_hash = @tokenHash AND expires_at > SYSUTCDATETIME()
+    `);
+  const row = result.recordset[0];
+  return row ? { username: row.username, role: row.role, expiresAt: new Date(row.expires_at).getTime() } : null;
+}
+
+async function deleteAdminSession(token) {
+  adminSessions.delete(token);
+  if (SESSION_TOKEN_PATTERN.test(token) && await hasSessionTables()) {
+    await new sql.Request()
+      .input('tokenHash', sql.Char(64), hashSessionToken(token))
+      .query('DELETE FROM dbo.admin_api_sessions WHERE token_hash = @tokenHash');
+  }
+}
+
+async function requireAdminAuth(req, res, next) {
   const providedToken = getAdminTokenFromRequest(req);
   if (providedToken) {
-    const session = adminSessions.get(providedToken);
-    if (session && session.expiresAt > Date.now()) {
+    let session = null;
+    try {
+      session = await findAdminSession(providedToken);
+    } catch (error) {
+      // A database problem is not an expired login: do not sign the admin out.
+      console.error('Admin session check failed:', error.message);
+      return sendJson(res, 503, { error: 'Sidekick could not check your admin sign-in right now. Please try again.' });
+    }
+    if (session) {
       req.admin = session;
       return next();
     }
-    adminSessions.delete(providedToken);
   }
 
   const configured = getAdminCredentials();
@@ -1919,6 +2234,18 @@ async function generateChatReply({ email, message, selectedDestination, history,
 }
 
 function sendJson(res, status, payload) {
+  // In production, unexpected server errors (500) never reveal internal details
+  // such as SQL messages; the details go to the server log instead.
+  if (isProduction && status === 500 && payload && typeof payload === 'object') {
+    const internal = payload.error || payload.meta?.error;
+    if (internal) console.error('Server error (hidden from client):', internal);
+    const { meta, ...rest } = payload;
+    payload = {
+      ...rest,
+      ...(payload.error ? { error: 'Something went wrong on the server. Please try again.' } : {}),
+      ...(meta ? { meta: { ...meta, error: undefined } } : {}),
+    };
+  }
   return res.status(status).json(payload);
 }
 
@@ -1957,6 +2284,45 @@ async function hasUserLastActiveColumn(pool) {
   return Boolean(result.recordset[0]?.available);
 }
 
+// Usage events (sign-ins and chatbot messages) need
+// backend/migrations/003_app_usage_events.sql. Until it is run, nothing is
+// recorded and the admin site shows these metrics as not tracked.
+const APP_USAGE_EVENT_TYPES = new Set(['sign_in', 'chat_message']);
+let appUsageEventsTableKnown = false;
+let appUsageEventsCheckedAt = 0;
+
+async function hasAppUsageEventsTable(pool) {
+  // Once the table exists it stays; while missing, re-check at most once a minute
+  // so running the migration takes effect without a restart.
+  if (appUsageEventsTableKnown || Date.now() - appUsageEventsCheckedAt < 60 * 1000) {
+    return appUsageEventsTableKnown;
+  }
+  const result = await pool.query`
+    SELECT CASE WHEN OBJECT_ID(N'dbo.app_usage_events', N'U') IS NULL THEN 0 ELSE 1 END AS available
+  `;
+  appUsageEventsTableKnown = Boolean(result.recordset[0]?.available);
+  appUsageEventsCheckedAt = Date.now();
+  return appUsageEventsTableKnown;
+}
+
+// Fire-and-forget: a failed write is logged and never affects the user's request.
+function recordAppUsageEvent(userId, eventType) {
+  const id = Number(userId);
+  if (!Number.isSafeInteger(id) || id < 1 || !APP_USAGE_EVENT_TYPES.has(eventType)) return;
+  void (async () => {
+    try {
+      const pool = await getPool();
+      if (!await hasAppUsageEventsTable(pool)) return;
+      await new sql.Request()
+        .input('userId', sql.Int, id)
+        .input('eventType', sql.VarChar(32), eventType)
+        .query('INSERT INTO dbo.app_usage_events (user_id, event_type) VALUES (@userId, @eventType)');
+    } catch (error) {
+      console.warn(`Usage event (${eventType}) was not recorded:`, error.message);
+    }
+  })();
+}
+
 async function recordAdminAudit(req, eventType, outcome, username = null) {
   try {
     const pool = await getPool();
@@ -1976,6 +2342,28 @@ async function recordAdminAudit(req, eventType, outcome, username = null) {
     return false;
   }
 }
+
+const MINUTE_MS = 60 * 1000;
+const HOUR_MS = 60 * MINUTE_MS;
+
+// Per-user limit for costly routes (AI and Google Maps). Use after requireAppAuth.
+function limitPerUser(name, limit, windowMs) {
+  return (req, res, next) => {
+    if (isRateLimited(`${name}:${req.appUser.userId}`, limit, windowMs)) {
+      res.set('Retry-After', String(Math.ceil(windowMs / 1000)));
+      return sendJson(res, 429, { error: 'You’re doing that too often. Please wait a few minutes and try again.' });
+    }
+    return next();
+  };
+}
+
+// Forget rate-limit history older than the longest window (1 hour) so memory stays small.
+setInterval(() => {
+  const cutoff = Date.now() - HOUR_MS;
+  for (const [key, times] of rateLimits) {
+    if (!times.length || times[times.length - 1] < cutoff) rateLimits.delete(key);
+  }
+}, 10 * MINUTE_MS).unref();
 
 function isRateLimited(key, limit, windowMs) {
   const now = Date.now();
@@ -2202,6 +2590,20 @@ function isUndeliverableEmailError(error) {
     || /5\.1\.1|5\.1\.0|unknown user|user unknown|mailbox.*not found|recipient.*not found|address.*not found/i.test(message);
 }
 
+// Removes expired login sessions from the database (hourly).
+async function cleanExpiredSessions() {
+  try {
+    if (!await hasSessionTables()) return;
+    const pool = await getPool();
+    await pool.query`
+      DELETE FROM dbo.app_sessions WHERE expires_at <= SYSUTCDATETIME();
+      DELETE FROM dbo.admin_api_sessions WHERE expires_at <= SYSUTCDATETIME();
+    `;
+  } catch (error) {
+    console.error('Expired session cleanup failed:', error.message);
+  }
+}
+
 async function cleanUnverifiedUsers() {
   try {
     const pool = await getPool();
@@ -2236,6 +2638,13 @@ app.post('/api/admin/login', async (req, res) => {
     });
   }
 
+  // A short admin password is too easy to guess on a public website.
+  if (isProduction && configured.password.length < 12) {
+    return sendJson(res, 503, {
+      error: 'Admin sign-in is turned off: ADMIN_PASSWORD must be at least 12 characters in production.',
+    });
+  }
+
   if (!username || !password
     || !matchesAdminSecret(username, configured.username)
     || !matchesAdminSecret(password, configured.password)) {
@@ -2243,13 +2652,13 @@ app.post('/api/admin/login', async (req, res) => {
     return sendJson(res, 401, { error: 'Invalid administrator credentials.' });
   }
 
-  const token = crypto.randomBytes(32).toString('hex');
-  adminSessions.set(token, {
-    username,
-    role: 'super-admin',
-    issuedAt: Date.now(),
-    expiresAt: Date.now() + 8 * 60 * 60 * 1000,
-  });
+  let token;
+  try {
+    token = await createAdminSession(username);
+  } catch (error) {
+    console.error('Admin session could not be created:', error.message);
+    return sendJson(res, 503, { error: 'Sidekick could not start your admin session right now. Please try again.' });
+  }
   await recordAdminAudit(req, 'admin_login', 'success', username);
 
   return sendJson(res, 200, { token, user: { username, role: 'super-admin' } });
@@ -2257,7 +2666,12 @@ app.post('/api/admin/login', async (req, res) => {
 
 app.post('/api/admin/logout', requireAdminAuth, async (req, res) => {
   const token = getAdminTokenFromRequest(req);
-  if (token) adminSessions.delete(token);
+  try {
+    if (token) await deleteAdminSession(token);
+  } catch (error) {
+    console.error('Admin session could not be ended:', error.message);
+    return sendJson(res, 503, { error: 'Sidekick could not end your admin session right now. Please try again.' });
+  }
   await recordAdminAudit(req, 'admin_logout', 'success', req.admin?.username || null);
   return sendJson(res, 200, { ok: true, message: 'Admin session closed.' });
 });
@@ -2272,16 +2686,42 @@ app.get('/api/admin/session', requireAdminAuth, (req, res) => {
 app.get('/api/admin/summary', requireAdminAuth, async (req, res) => {
   try {
     const pool = await getPool();
-    const [userSummary, tripSummary, itinerarySummary, adminAuditAvailable] = await Promise.all([
+    const lastActiveTrackingAvailable = await hasUserLastActiveColumn(pool);
+    const usageTrackingAvailable = await hasAppUsageEventsTable(pool);
+    const [userSummary, tripSummary, itinerarySummary, adminAuditAvailable, recentActivitySummary, usageSummary] = await Promise.all([
       pool.query`SELECT COUNT_BIG(*) AS total_users, SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END) AS active_users, SUM(CASE WHEN is_active = 0 THEN 1 ELSE 0 END) AS inactive_users, SUM(CASE WHEN is_verified = 1 THEN 1 ELSE 0 END) AS verified_users, SUM(CASE WHEN is_verified = 0 THEN 1 ELSE 0 END) AS unverified_users FROM dbo.users`,
       pool.query`SELECT COUNT_BIG(*) AS total_trips, SUM(CASE WHEN created_at >= DATEADD(day, -30, SYSUTCDATETIME()) THEN 1 ELSE 0 END) AS trips_last_30_days FROM dbo.trips`,
       pool.query`SELECT (SELECT COUNT_BIG(*) FROM dbo.trip_days) AS total_trip_days, (SELECT COUNT_BIG(*) FROM dbo.itinerary_activities) AS total_activities`,
       hasAdminAuditLogTable(pool),
+      lastActiveTrackingAvailable
+        // Online = checked in within 90 seconds. Read from the database so it is
+        // correct when several servers share the load.
+        ? pool.query(`
+            SELECT COUNT_BIG(*) AS recently_active_users,
+                   SUM(CASE WHEN last_active_at >= DATEADD(second, -90, SYSUTCDATETIME()) THEN 1 ELSE 0 END) AS online_users
+            FROM dbo.users WHERE last_active_at >= DATEADD(day, -30, SYSUTCDATETIME())
+          `)
+        : Promise.resolve(null),
+      usageTrackingAvailable
+        ? pool.query(`
+            SELECT
+              SUM(CASE WHEN event_type = 'sign_in' THEN 1 ELSE 0 END) AS total_sign_ins,
+              SUM(CASE WHEN event_type = 'sign_in' AND created_at >= DATEADD(day, -30, SYSUTCDATETIME()) THEN 1 ELSE 0 END) AS sign_ins_last_30_days,
+              SUM(CASE WHEN event_type = 'chat_message' THEN 1 ELSE 0 END) AS total_chat_messages,
+              SUM(CASE WHEN event_type = 'chat_message' AND created_at >= DATEADD(day, -30, SYSUTCDATETIME()) THEN 1 ELSE 0 END) AS chat_messages_last_30_days,
+              COUNT(DISTINCT CASE WHEN event_type = 'chat_message' AND created_at >= DATEADD(day, -30, SYSUTCDATETIME()) THEN user_id END) AS chat_users_last_30_days,
+              MIN(created_at) AS first_event_at
+            FROM dbo.app_usage_events
+          `)
+        : Promise.resolve(null),
     ]);
 
     const userRow = userSummary.recordset[0] || {};
     const tripRow = tripSummary.recordset[0] || {};
     const itineraryRow = itinerarySummary.recordset[0] || {};
+    const recentActivityRow = recentActivitySummary?.recordset?.[0] || {};
+    const usageRow = usageSummary?.recordset?.[0] || {};
+    const usageCount = (value) => (usageTrackingAvailable ? Number(value || 0) : null);
 
     return sendJson(res, 200, {
       generatedAt: new Date().toISOString(),
@@ -2293,13 +2733,28 @@ app.get('/api/admin/summary', requireAdminAuth, async (req, res) => {
         totalUsers: Number(userRow.total_users || 0),
         activeUsers: Number(userRow.active_users || 0),
         inactiveUsers: Number(userRow.inactive_users || 0),
-        onlineUsers: getOnlineAppUserCount(),
+        onlineUsers: lastActiveTrackingAvailable ? Number(recentActivityRow.online_users || 0) : getOnlineAppUserCount(),
         verifiedUsers: Number(userRow.verified_users || 0),
         unverifiedUsers: Number(userRow.unverified_users || 0),
         totalTrips: Number(tripRow.total_trips || 0),
         tripsLast30Days: Number(tripRow.trips_last_30_days || 0),
         totalTripDays: Number(itineraryRow.total_trip_days || 0),
         totalActivities: Number(itineraryRow.total_activities || 0),
+        // null when dbo.users.last_active_at has not been added yet.
+        recentlyActiveUsers30Days: lastActiveTrackingAvailable
+          ? Number(recentActivityRow.recently_active_users || 0)
+          : null,
+        // null when backend/migrations/003_app_usage_events.sql has not been run.
+        totalSignIns: usageCount(usageRow.total_sign_ins),
+        signInsLast30Days: usageCount(usageRow.sign_ins_last_30_days),
+        totalChatMessages: usageCount(usageRow.total_chat_messages),
+        chatMessagesLast30Days: usageCount(usageRow.chat_messages_last_30_days),
+        chatUsersLast30Days: usageCount(usageRow.chat_users_last_30_days),
+      },
+      lastActiveTrackingAvailable,
+      usageTracking: {
+        available: usageTrackingAvailable,
+        firstEventAt: usageRow.first_event_at || null,
       },
       flags: {
         aiConfigured: Boolean(getAiApiKey()),
@@ -2323,6 +2778,7 @@ app.get('/api/admin/users', requireAdminAuth, async (req, res) => {
   try {
     const pool = await getPool();
     const lastActiveTrackingAvailable = await hasUserLastActiveColumn(pool);
+    const usageTrackingAvailable = await hasAppUsageEventsTable(pool);
     const search = String(req.query.search || '').trim();
     const pagination = parseAdminPagination(req.query);
     const status = String(req.query.status || 'all').trim().toLowerCase();
@@ -2330,6 +2786,24 @@ app.get('/api/admin/users', requireAdminAuth, async (req, res) => {
     if (search.length > 100) return sendJson(res, 400, { error: 'Search must be 100 characters or fewer.' });
     if (!['all', 'active', 'inactive', 'verified', 'unverified'].includes(status)) {
       return sendJson(res, 400, { error: 'Choose a supported user status filter.' });
+    }
+    // Optional sort for the Reports page. Every value maps to a fixed ORDER BY clause.
+    const sort = String(req.query.sort || 'newest').trim().toLowerCase();
+    const sortClauses = {
+      newest: 'u.created_at DESC, u.user_id DESC',
+      oldest: 'u.created_at ASC, u.user_id ASC',
+      name: 'u.name ASC, u.user_id ASC',
+      itineraries: 'ts.saved_itinerary_count DESC, u.created_at DESC, u.user_id DESC',
+      'recent-itinerary': 'ts.last_itinerary_saved_at DESC, u.created_at DESC, u.user_id DESC',
+      ...(lastActiveTrackingAvailable ? { 'last-active': 'u.last_active_at DESC, u.user_id DESC' } : {}),
+      ...(usageTrackingAvailable ? {
+        chat: 'us.chat_message_count DESC, u.created_at DESC, u.user_id DESC',
+        'sign-ins': 'us.sign_in_count DESC, u.created_at DESC, u.user_id DESC',
+        'last-sign-in': 'us.last_sign_in_at DESC, u.user_id DESC',
+      } : {}),
+    };
+    if (!sortClauses[sort]) {
+      return sendJson(res, 400, { error: 'Choose a supported sort order.' });
     }
 
     const request = new sql.Request();
@@ -2343,12 +2817,32 @@ app.get('/api/admin/users', requireAdminAuth, async (req, res) => {
     if (status === 'verified') filters.push('is_verified = 1');
     if (status === 'unverified') filters.push('is_verified = 0');
     const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
+    // OUTER APPLY aggregates each user's trips separately, so one user is never
+    // repeated (or double-counted) because they own several trips.
     const query = `
-      SELECT user_id, name, email, created_at, is_active, is_verified,
-             ${lastActiveTrackingAvailable ? 'last_active_at' : 'CAST(NULL AS datetime2(7)) AS last_active_at'}
-      FROM dbo.users
+      SELECT u.user_id, u.name, u.email, u.created_at, u.is_active, u.is_verified,
+             ${lastActiveTrackingAvailable
+    ? 'u.last_active_at, CASE WHEN u.last_active_at >= DATEADD(second, -90, SYSUTCDATETIME()) THEN 1 ELSE 0 END AS is_online'
+    : 'CAST(NULL AS datetime2(7)) AS last_active_at, CAST(0 AS int) AS is_online'},
+             ts.saved_itinerary_count, ts.last_itinerary_saved_at,
+             ${usageTrackingAvailable
+    ? 'us.chat_message_count, us.sign_in_count, us.last_sign_in_at'
+    : 'CAST(NULL AS bigint) AS chat_message_count, CAST(NULL AS bigint) AS sign_in_count, CAST(NULL AS datetime2(7)) AS last_sign_in_at'}
+      FROM dbo.users u
+      OUTER APPLY (
+        SELECT COUNT_BIG(*) AS saved_itinerary_count, MAX(t.created_at) AS last_itinerary_saved_at
+        FROM dbo.trips t
+        WHERE t.user_id = u.user_id
+      ) ts
+      ${usageTrackingAvailable ? `OUTER APPLY (
+        SELECT SUM(CASE WHEN e.event_type = 'chat_message' THEN 1 ELSE 0 END) AS chat_message_count,
+               SUM(CASE WHEN e.event_type = 'sign_in' THEN 1 ELSE 0 END) AS sign_in_count,
+               MAX(CASE WHEN e.event_type = 'sign_in' THEN e.created_at END) AS last_sign_in_at
+        FROM dbo.app_usage_events e
+        WHERE e.user_id = u.user_id
+      ) us` : ''}
       ${where}
-      ORDER BY created_at DESC, user_id DESC
+      ORDER BY ${sortClauses[sort]}
       OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY
     `;
     request.input('offset', sql.Int, pagination.offset);
@@ -2373,9 +2867,17 @@ app.get('/api/admin/users', requireAdminAuth, async (req, res) => {
         isActive: Boolean(user.is_active),
         isVerified: Boolean(user.is_verified),
         lastActiveAt: user.last_active_at,
-        isOnline: isAppUserOnline(user.user_id),
+        isOnline: lastActiveTrackingAvailable ? Boolean(user.is_online) : isAppUserOnline(user.user_id),
         accountState: user.is_active ? 'active' : 'inactive',
+        savedItineraryCount: Number(user.saved_itinerary_count || 0),
+        lastItinerarySavedAt: user.last_itinerary_saved_at || null,
+        chatMessageCount: usageTrackingAvailable ? Number(user.chat_message_count || 0) : null,
+        signInCount: usageTrackingAvailable ? Number(user.sign_in_count || 0) : null,
+        lastSignInAt: user.last_sign_in_at || null,
       })),
+      usageTrackingAvailable,
+      sort,
+      availableSorts: Object.keys(sortClauses),
     });
   } catch (error) {
     return sendJson(res, 500, { error: error.message || 'Unable to list users.' });
@@ -2470,6 +2972,67 @@ app.get('/api/admin/users/:userId', requireAdminAuth, async (req, res) => {
     ]);
     const user = userResult.recordset[0];
     if (!user) return sendJson(res, 404, { error: 'User not found.' });
+    // Saved itinerary history for the Reports page (most recent 100 records).
+    const itineraryHistory = await new sql.Request().input('userId', sql.Int, userId).query(`
+      SELECT TOP 100 t.trip_id, t.trip_title, t.destination, t.start_date, t.budget,
+             COALESCE(t.end_date, (SELECT MAX(d.day_date) FROM dbo.trip_days d WHERE d.trip_id = t.trip_id)) AS end_date,
+             t.created_at, t.updated_at,
+             (SELECT COUNT_BIG(*) FROM dbo.trip_days d WHERE d.trip_id = t.trip_id) AS day_count,
+             (SELECT COUNT_BIG(*) FROM dbo.trip_days d
+              JOIN dbo.itinerary_activities a ON a.trip_day_id = d.trip_day_id
+              WHERE d.trip_id = t.trip_id) AS activity_count
+      FROM dbo.trips t
+      WHERE t.user_id = @userId
+      ORDER BY t.created_at DESC, t.trip_id DESC
+    `);
+    // This user's picks from their saved itineraries (same rules as /api/admin/insights).
+    const userPicks = (typeFilter, nameSql) => new sql.Request().input('userId', sql.Int, userId).query(`
+      SELECT TOP 50 ${nameSql} AS name, COUNT_BIG(*) AS picks, MAX(t.created_at) AS last_picked_at
+      FROM dbo.itinerary_activities a
+      JOIN dbo.trip_days d ON d.trip_day_id = a.trip_day_id
+      JOIN dbo.trips t ON t.trip_id = d.trip_id
+      WHERE t.user_id = @userId AND ${typeFilter} AND ${nameSql} <> ''
+      GROUP BY ${nameSql}
+      ORDER BY picks DESC, last_picked_at DESC, name ASC
+    `);
+    const [pickedActivities, pickedRestaurants, pickedHotels, plannedDestinations] = await Promise.all([
+      userPicks(`${PICK_TYPE_SQL} NOT IN ('restaurant', 'hotel')`, 'LTRIM(RTRIM(a.title))'),
+      userPicks(`${PICK_TYPE_SQL} = 'restaurant'`, PICK_NAME_SQL),
+      userPicks(`${PICK_TYPE_SQL} = 'hotel'`, PICK_NAME_SQL),
+      new sql.Request().input('userId', sql.Int, userId).query(`
+        SELECT TOP 50 LTRIM(RTRIM(t.destination)) AS name, COUNT_BIG(*) AS picks, MAX(t.created_at) AS last_picked_at
+        FROM dbo.trips t
+        WHERE t.user_id = @userId AND LTRIM(RTRIM(ISNULL(t.destination, ''))) <> ''
+        GROUP BY LTRIM(RTRIM(t.destination))
+        ORDER BY picks DESC, last_picked_at DESC, name ASC
+      `),
+    ]);
+    const pickList = (result) => (result.recordset || []).map((row) => ({
+      name: row.name, picks: Number(row.picks || 0), lastPickedAt: row.last_picked_at,
+    }));
+    const usageTrackingAvailable = await hasAppUsageEventsTable(pool);
+    const [usageTotals, usageByDay] = usageTrackingAvailable
+      ? await Promise.all([
+        new sql.Request().input('userId', sql.Int, userId).query(`
+          SELECT SUM(CASE WHEN event_type = 'chat_message' THEN 1 ELSE 0 END) AS chat_messages,
+                 SUM(CASE WHEN event_type = 'sign_in' THEN 1 ELSE 0 END) AS sign_ins,
+                 MAX(CASE WHEN event_type = 'sign_in' THEN created_at END) AS last_sign_in_at,
+                 MAX(CASE WHEN event_type = 'chat_message' THEN created_at END) AS last_chat_message_at
+          FROM dbo.app_usage_events
+          WHERE user_id = @userId
+        `),
+        new sql.Request().input('userId', sql.Int, userId).query(`
+          SELECT CONVERT(date, created_at) AS day,
+                 SUM(CASE WHEN event_type = 'chat_message' THEN 1 ELSE 0 END) AS chat_messages,
+                 SUM(CASE WHEN event_type = 'sign_in' THEN 1 ELSE 0 END) AS sign_ins
+          FROM dbo.app_usage_events
+          WHERE user_id = @userId AND created_at >= DATEADD(day, -89, CONVERT(date, SYSUTCDATETIME()))
+          GROUP BY CONVERT(date, created_at)
+          ORDER BY day ASC
+        `),
+      ])
+      : [null, null];
+    const usageRow = usageTotals?.recordset?.[0] || {};
 
     return sendJson(res, 200, {
       user: {
@@ -2486,6 +3049,37 @@ app.get('/api/admin/users/:userId', requireAdminAuth, async (req, res) => {
         travelStyles: travelStyles.recordset.map((row) => row.name),
         interests: interests.recordset.map((row) => row.name),
         preferredPlaces: preferredPlaces.recordset.map((row) => row.name),
+        itineraries: (itineraryHistory.recordset || []).map((trip) => ({
+          tripId: trip.trip_id,
+          title: trip.trip_title,
+          destination: trip.destination,
+          startDate: trip.start_date,
+          endDate: trip.end_date,
+          budget: trip.budget,
+          createdAt: trip.created_at,
+          updatedAt: trip.updated_at,
+          dayCount: Number(trip.day_count || 0),
+          activityCount: Number(trip.activity_count || 0),
+        })),
+        picks: {
+          activities: pickList(pickedActivities),
+          restaurants: pickList(pickedRestaurants),
+          hotels: pickList(pickedHotels),
+          destinations: pickList(plannedDestinations),
+        },
+        // null when backend/migrations/003_app_usage_events.sql has not been run.
+        usageTrackingAvailable,
+        chatMessageCount: usageTrackingAvailable ? Number(usageRow.chat_messages || 0) : null,
+        signInCount: usageTrackingAvailable ? Number(usageRow.sign_ins || 0) : null,
+        lastSignInAt: usageRow.last_sign_in_at || null,
+        lastChatMessageAt: usageRow.last_chat_message_at || null,
+        usageByDay: usageTrackingAvailable
+          ? (usageByDay.recordset || []).map((row) => ({
+            date: new Date(row.day).toISOString().slice(0, 10),
+            chatMessages: Number(row.chat_messages || 0),
+            signIns: Number(row.sign_ins || 0),
+          }))
+          : null,
       },
     });
   } catch (error) {
@@ -2566,8 +3160,11 @@ app.delete('/api/admin/users/:userId', requireAdminAuth, async (req, res) => {
     await transaction.commit();
     transactionStarted = false;
 
-    for (const [token, session] of appSessions) {
-      if (session.userId === userId) appSessions.delete(token);
+    try {
+      await deleteUserAppSessions(userId);
+    } catch (error) {
+      // Stored sessions were already removed with the account (ON DELETE CASCADE).
+      console.error('Session cleanup after account deletion failed:', error.message);
     }
     appPresence.delete(userId);
     await recordAdminAudit(req, `user_delete_${userId}`, 'success', req.admin?.username || null);
@@ -2801,12 +3398,75 @@ app.get('/api/admin/itineraries/:tripId', requireAdminAuth, async (req, res) => 
 });
 
 app.get('/api/admin/analytics', requireAdminAuth, async (req, res) => {
+  // Optional window for the dashboard range picker; defaults to the original 30 days.
+  const windowDays = req.query.days === undefined ? 30 : Number(req.query.days);
+  if (![7, 30, 90].includes(windowDays)) {
+    return sendJson(res, 400, { error: 'Choose a 7, 30, or 90 day range.' });
+  }
   try {
     const pool = await getPool();
-    const [registrationTrend, tripTrend] = await Promise.all([
-      pool.query`SELECT CONVERT(date, created_at) AS day, COUNT_BIG(*) AS count_value FROM dbo.users WHERE created_at >= DATEADD(day, -29, CONVERT(date, SYSUTCDATETIME())) GROUP BY CONVERT(date, created_at) ORDER BY day ASC`,
-      pool.query`SELECT CONVERT(date, created_at) AS day, COUNT_BIG(*) AS count_value FROM dbo.trips WHERE created_at >= DATEADD(day, -29, CONVERT(date, SYSUTCDATETIME())) GROUP BY CONVERT(date, created_at) ORDER BY day ASC`,
+    const today = new Date();
+    const toDate = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
+    const fromDate = new Date(toDate.getTime() - (windowDays - 1) * 24 * 60 * 60 * 1000);
+    const trendRequest = () => new sql.Request().input('fromDate', sql.Date, fromDate);
+    const [registrationTrend, tripTrend, travelStyles, interests, preferredPlaces, tripBudgets, preferenceCoverage] = await Promise.all([
+      trendRequest().query('SELECT CONVERT(date, created_at) AS day, COUNT_BIG(*) AS count_value FROM dbo.users WHERE created_at >= @fromDate GROUP BY CONVERT(date, created_at) ORDER BY day ASC'),
+      trendRequest().query('SELECT CONVERT(date, created_at) AS day, COUNT_BIG(*) AS count_value FROM dbo.trips WHERE created_at >= @fromDate GROUP BY CONVERT(date, created_at) ORDER BY day ASC'),
+      pool.query`
+        SELECT TOP 8 ts.style_name AS name, COUNT(DISTINCT uts.user_id) AS user_count
+        FROM dbo.user_travel_styles uts
+        JOIN dbo.travel_styles ts ON ts.style_id = uts.style_id
+        GROUP BY ts.style_name
+        ORDER BY user_count DESC, ts.style_name ASC
+      `,
+      pool.query`
+        SELECT TOP 8 i.interest_name AS name, COUNT(DISTINCT ui.user_id) AS user_count
+        FROM dbo.user_interests ui
+        JOIN dbo.interests i ON i.interest_id = ui.interest_id
+        GROUP BY i.interest_name
+        ORDER BY user_count DESC, i.interest_name ASC
+      `,
+      pool.query`
+        SELECT TOP 8 pp.place_name AS name, COUNT(DISTINCT upp.user_id) AS user_count
+        FROM dbo.user_preferred_places upp
+        JOIN dbo.preferred_places pp ON pp.place_id = upp.place_id
+        GROUP BY pp.place_name
+        ORDER BY user_count DESC, pp.place_name ASC
+      `,
+      pool.query`
+        SELECT TOP 6 LTRIM(RTRIM(budget)) AS name, COUNT_BIG(*) AS trip_count
+        FROM dbo.trips
+        WHERE budget IS NOT NULL AND LTRIM(RTRIM(budget)) <> ''
+        GROUP BY LTRIM(RTRIM(budget))
+        ORDER BY trip_count DESC, name ASC
+      `,
+      pool.query`
+        SELECT COUNT(*) AS users_with_preferences FROM (
+          SELECT user_id FROM dbo.user_travel_styles
+          UNION SELECT user_id FROM dbo.user_interests
+          UNION SELECT user_id FROM dbo.user_preferred_places
+        ) p
+      `,
     ]);
+    const toCounts = (result, key = 'user_count') => (result.recordset || []).map((row) => ({
+      name: row.name,
+      count: Number(row[key] || 0),
+    }));
+    const usageTrackingAvailable = await hasAppUsageEventsTable(pool);
+    const usageTrend = usageTrackingAvailable
+      ? await trendRequest().query(`
+          SELECT CONVERT(date, created_at) AS day,
+                 SUM(CASE WHEN event_type = 'sign_in' THEN 1 ELSE 0 END) AS sign_ins,
+                 SUM(CASE WHEN event_type = 'chat_message' THEN 1 ELSE 0 END) AS chat_messages
+          FROM dbo.app_usage_events
+          WHERE created_at >= @fromDate
+          GROUP BY CONVERT(date, created_at)
+          ORDER BY day ASC
+        `)
+      : null;
+    const usageSeries = (key) => (usageTrend?.recordset || [])
+      .map((row) => ({ label: new Date(row.day).toISOString().slice(0, 10), value: Number(row[key] || 0) }))
+      .filter((point) => point.value > 0);
 
     return sendJson(res, 200, {
       registrationTrend: (registrationTrend.recordset || []).map((row) => ({
@@ -2819,10 +3479,138 @@ app.get('/api/admin/analytics', requireAdminAuth, async (req, res) => {
       })),
       availableMetrics: ['user registrations by record creation date', 'saved trip records by record creation date'],
       unavailableMetrics: ['AI requests', 'route calculations', 'itinerary generation method', 'per-user activity'],
-      windowDays: 30,
+      // null when backend/migrations/003_app_usage_events.sql has not been run.
+      signInTrend: usageTrackingAvailable ? usageSeries('sign_ins') : null,
+      chatTrend: usageTrackingAvailable ? usageSeries('chat_messages') : null,
+      usageTrackingAvailable,
+      windowDays,
+      rangeStart: fromDate.toISOString().slice(0, 10),
+      rangeEnd: toDate.toISOString().slice(0, 10),
+      profileSummary: {
+        usersWithPreferences: Number(preferenceCoverage.recordset[0]?.users_with_preferences || 0),
+        travelStyles: toCounts(travelStyles),
+        interests: toCounts(interests),
+        preferredPlaces: toCounts(preferredPlaces),
+        savedItineraryBudgets: toCounts(tripBudgets, 'trip_count'),
+      },
     });
   } catch (error) {
     return sendJson(res, 500, { error: error.message || 'Unable to load analytics.' });
+  }
+});
+
+// What users plan: most planned activities, picked restaurants and hotels, and
+// destinations. Source: saved itineraries in SQL Server. Restaurants and hotels
+// are itinerary items the user added with category 'restaurant' or 'hotel' (the
+// AI never adds them itself). Itineraries are removed after the trip ends, so
+// these figures describe itineraries currently stored.
+const PICK_NAME_SQL = "COALESCE(NULLIF(LTRIM(RTRIM(a.location)), ''), LTRIM(RTRIM(a.title)))";
+const PICK_TYPE_SQL = "LOWER(LTRIM(RTRIM(ISNULL(a.activity_type, ''))))";
+
+app.get('/api/admin/insights', requireAdminAuth, async (req, res) => {
+  const limit = req.query.limit === undefined ? 10 : Number(req.query.limit);
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50) {
+    return sendJson(res, 400, { error: 'Limit must be a whole number from 1 to 50.' });
+  }
+  try {
+    await getPool();
+    const ranked = (sqlText) => new sql.Request().input('limit', sql.Int, limit).query(sqlText);
+    // users = distinct users who planned it; picks = how many times it appears in itineraries.
+    const pickRanking = (typeFilter, nameSql) => ranked(`
+      SELECT TOP (@limit) ${nameSql} AS name,
+             COUNT(DISTINCT t.user_id) AS users, COUNT_BIG(*) AS picks
+      FROM dbo.itinerary_activities a
+      JOIN dbo.trip_days d ON d.trip_day_id = a.trip_day_id
+      JOIN dbo.trips t ON t.trip_id = d.trip_id
+      WHERE ${typeFilter} AND ${nameSql} <> ''
+      GROUP BY ${nameSql}
+      ORDER BY users DESC, picks DESC, name ASC
+    `);
+    const [activities, activityTypes, restaurants, hotels, destinations, preferredDestinations, medians, perUserMedian, totals] = await Promise.all([
+      pickRanking(`${PICK_TYPE_SQL} NOT IN ('restaurant', 'hotel')`, 'LTRIM(RTRIM(a.title))'),
+      ranked(`
+        SELECT TOP (@limit) COALESCE(NULLIF(${PICK_TYPE_SQL}, ''), 'custom') AS name,
+               COUNT(DISTINCT t.user_id) AS users, COUNT_BIG(*) AS picks
+        FROM dbo.itinerary_activities a
+        JOIN dbo.trip_days d ON d.trip_day_id = a.trip_day_id
+        JOIN dbo.trips t ON t.trip_id = d.trip_id
+        WHERE ${PICK_TYPE_SQL} NOT IN ('restaurant', 'hotel')
+        GROUP BY COALESCE(NULLIF(${PICK_TYPE_SQL}, ''), 'custom')
+        ORDER BY picks DESC, users DESC, name ASC
+      `),
+      pickRanking(`${PICK_TYPE_SQL} = 'restaurant'`, PICK_NAME_SQL),
+      pickRanking(`${PICK_TYPE_SQL} = 'hotel'`, PICK_NAME_SQL),
+      ranked(`
+        SELECT TOP (@limit) LTRIM(RTRIM(t.destination)) AS name,
+               COUNT(DISTINCT t.user_id) AS users, COUNT_BIG(*) AS picks
+        FROM dbo.trips t
+        WHERE LTRIM(RTRIM(ISNULL(t.destination, ''))) <> ''
+        GROUP BY LTRIM(RTRIM(t.destination))
+        ORDER BY users DESC, picks DESC, name ASC
+      `),
+      ranked(`
+        SELECT TOP (@limit) pp.place_name AS name, COUNT(DISTINCT upp.user_id) AS users, COUNT(DISTINCT upp.user_id) AS picks
+        FROM dbo.user_preferred_places upp
+        JOIN dbo.preferred_places pp ON pp.place_id = upp.place_id
+        GROUP BY pp.place_name
+        ORDER BY users DESC, name ASC
+      `),
+      // Medians per saved itinerary. Each trip is counted once (per-trip subtotals first).
+      new sql.Request().query(`
+        WITH per_trip AS (
+          SELECT t.trip_id,
+                 COUNT(DISTINCT d.trip_day_id) AS days,
+                 SUM(CASE WHEN a.activity_id IS NOT NULL AND ${PICK_TYPE_SQL} NOT IN ('restaurant', 'hotel') THEN 1 ELSE 0 END) AS activities,
+                 SUM(CASE WHEN ${PICK_TYPE_SQL} = 'restaurant' THEN 1 ELSE 0 END) AS restaurants,
+                 SUM(CASE WHEN ${PICK_TYPE_SQL} = 'hotel' THEN 1 ELSE 0 END) AS hotels
+          FROM dbo.trips t
+          LEFT JOIN dbo.trip_days d ON d.trip_id = t.trip_id
+          LEFT JOIN dbo.itinerary_activities a ON a.trip_day_id = d.trip_day_id
+          GROUP BY t.trip_id
+        )
+        SELECT DISTINCT
+          PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY activities) OVER () AS activities,
+          PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY restaurants) OVER () AS restaurants,
+          PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY hotels) OVER () AS hotels,
+          PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY days) OVER () AS days
+        FROM per_trip
+      `),
+      new sql.Request().query(`
+        SELECT DISTINCT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY itineraries) OVER () AS itineraries
+        FROM (SELECT user_id, COUNT(*) AS itineraries FROM dbo.trips GROUP BY user_id) per_user
+      `),
+      new sql.Request().query('SELECT COUNT_BIG(*) AS itineraries, COUNT(DISTINCT user_id) AS users FROM dbo.trips'),
+    ]);
+    const list = (result) => (result.recordset || []).map((row) => ({
+      name: row.name, users: Number(row.users || 0), picks: Number(row.picks || 0),
+    }));
+    const medianRow = medians.recordset?.[0] || null;
+    const median = (value) => (value === null || value === undefined ? null : Number(value));
+    const totalsRow = totals.recordset?.[0] || {};
+    return sendJson(res, 200, {
+      totals: {
+        savedItineraries: Number(totalsRow.itineraries || 0),
+        usersWithItineraries: Number(totalsRow.users || 0),
+      },
+      // null when there are no saved itineraries to take a median of.
+      medians: {
+        activitiesPerItinerary: median(medianRow?.activities),
+        restaurantsPerItinerary: median(medianRow?.restaurants),
+        hotelsPerItinerary: median(medianRow?.hotels),
+        daysPerItinerary: median(medianRow?.days),
+        itinerariesPerUser: median(perUserMedian.recordset?.[0]?.itineraries),
+      },
+      activities: list(activities),
+      activityTypes: list(activityTypes),
+      restaurants: list(restaurants),
+      hotels: list(hotels),
+      destinations: list(destinations),
+      preferredDestinations: list(preferredDestinations),
+      limit,
+    });
+  } catch (error) {
+    console.error('Admin insights failed:', error.message);
+    return sendJson(res, 500, { error: 'Unable to load what users plan.' });
   }
 });
 
@@ -2860,8 +3648,16 @@ app.get('/api/admin/activity', requireAdminAuth, async (req, res) => {
       pool.query`SELECT TOP 8 user_id, created_at FROM dbo.users ORDER BY created_at DESC, user_id DESC`,
       pool.query`SELECT TOP 8 trip_id, created_at FROM dbo.trips ORDER BY created_at DESC, trip_id DESC`,
     ]);
+    const usage = await hasAppUsageEventsTable(pool)
+      ? await pool.query`SELECT TOP 8 event_type, created_at FROM dbo.app_usage_events ORDER BY created_at DESC, event_id DESC`
+      : null;
 
     return sendJson(res, 200, {
+      // Only the event kind and time; no user names or chat contents.
+      recentUsage: (usage?.recordset || []).map((event) => ({
+        label: event.event_type === 'sign_in' ? 'User signed in' : 'Chatbot message sent',
+        timestamp: event.created_at,
+      })),
       recentUsers: (users.recordset || []).map((user) => ({
         label: 'User account registered',
         timestamp: user.created_at,
@@ -3125,7 +3921,8 @@ app.post('/api/register/complete', async (req, res) => {
     await transaction.commit();
     transactionCommitted = true;
     const user = updateResult.recordset[0];
-    return sendJson(res, 201, { user, verified: true, session: createAppSession(user) });
+    const session = await createAppSession(user);
+    return sendJson(res, 201, { user, verified: true, session });
   } catch (error) {
     if (transactionStarted && !transactionCommitted) {
       try { await transaction.rollback(); } catch (rollbackError) {
@@ -3190,7 +3987,8 @@ app.post('/api/verify-otp', async (req, res) => {
       return sendJson(res, 400, { error: 'Invalid or expired code. Please try again.' });
     }
     const user = userResult.recordset[0];
-    return sendJson(res, 200, { verified: true, user, session: createAppSession(user) });
+    const session = await createAppSession(user);
+    return sendJson(res, 200, { verified: true, user, session });
   } catch (error) {
     return sendJson(res, 500, { error: error.message });
   }
@@ -3342,6 +4140,7 @@ app.post('/api/password/reset', async (req, res) => {
   let transactionStarted = false;
   let transactionFinished = false;
   try {
+    const clearStoredSessions = await hasSessionTables();
     await transaction.begin();
     transactionStarted = true;
     const code = await findPasswordResetCode(new sql.Request(transaction), email, true);
@@ -3361,6 +4160,7 @@ app.post('/api/password/reset', async (req, res) => {
       .query(`
         UPDATE dbo.users SET password_hash = @passwordHash WHERE user_id = @userId AND is_verified = 1;
         UPDATE dbo.otp_verifications SET is_used = 1 WHERE otp_id = @otpId;
+        ${clearStoredSessions ? 'DELETE FROM dbo.app_sessions WHERE user_id = @userId;' : ''}
       `);
     await transaction.commit();
     transactionFinished = true;
@@ -3415,6 +4215,8 @@ app.post('/api/login', async (req, res) => {
         .input('userId', sql.Int, user.user_id)
         .query('UPDATE dbo.users SET last_active_at = SYSUTCDATETIME() WHERE user_id = @userId');
     }
+    recordAppUsageEvent(user.user_id, 'sign_in');
+    const session = await createAppSession(user);
 
     return sendJson(res, 200, {
       user: {
@@ -3422,7 +4224,7 @@ app.post('/api/login', async (req, res) => {
         name: user.name,
         email: user.email,
       },
-      session: createAppSession(user),
+      session,
     });
   } catch (error) {
     return sendJson(res, 500, { error: error.message });
@@ -3505,8 +4307,11 @@ app.post('/api/account/delete', requireAppAuth, async (req, res) => {
     await transaction.commit();
     transactionStarted = false;
 
-    for (const [token, session] of appSessions) {
-      if (session.userId === userId) appSessions.delete(token);
+    try {
+      await deleteUserAppSessions(userId);
+    } catch (error) {
+      // Stored sessions were already removed with the account (ON DELETE CASCADE).
+      console.error('Session cleanup after account deletion failed:', error.message);
     }
     appPresence.delete(userId);
     return sendJson(res, 200, { ok: true, deleted: true });
@@ -3521,9 +4326,14 @@ app.post('/api/account/delete', requireAppAuth, async (req, res) => {
   }
 });
 
-app.post('/api/app-session/logout', requireAppAuth, (req, res) => {
+app.post('/api/app-session/logout', requireAppAuth, async (req, res) => {
   const token = getAppTokenFromRequest(req);
-  if (token) appSessions.delete(token);
+  try {
+    if (token) await deleteAppSession(token);
+  } catch (error) {
+    console.error('App session could not be ended:', error.message);
+    return sendJson(res, 503, { error: 'Sidekick could not sign you out on the server right now. Please try again.' });
+  }
   const hasLiveSession = [...appSessions.values()].some((session) => (
     session.userId === req.appUser.userId && session.expiresAt > Date.now()
   ));
@@ -4289,7 +5099,7 @@ app.post('/api/reminders/:email', requireAppAuth, requireOwnEmail, async (req, r
   }
 });
 
-app.post('/api/maps/places', requireAppAuth, async (req, res) => {
+app.post('/api/maps/places', requireAppAuth, limitPerUser('maps-places', 600, HOUR_MS), async (req, res) => {
   const { queries = [], seeds = [], touristOnly = false } = req.body || {};
   // Recommendation searches ask Google to prefer tourist attractions. If Google rejects
   // the type filter, fall back to the plain search so results still load.
@@ -4335,7 +5145,7 @@ app.post('/api/maps/places', requireAppAuth, async (req, res) => {
   }
 });
 
-app.post('/api/maps/place-suggestions', requireAppAuth, async (req, res) => {
+app.post('/api/maps/place-suggestions', requireAppAuth, limitPerUser('maps-suggestions', 1200, HOUR_MS), async (req, res) => {
   const input = String(req.body?.input || '').trim().slice(0, 160);
   const suppliedSessionToken = String(req.body?.sessionToken || '');
   const sessionToken = /^[A-Za-z0-9_-]{1,36}$/.test(suppliedSessionToken) ? suppliedSessionToken : '';
@@ -4425,7 +5235,7 @@ app.post('/api/maps/place-suggestions', requireAppAuth, async (req, res) => {
   }
 });
 
-app.post('/api/maps/place-details', requireAppAuth, async (req, res) => {
+app.post('/api/maps/place-details', requireAppAuth, limitPerUser('maps-details', 600, HOUR_MS), async (req, res) => {
   const placeId = String(req.body?.placeId || '').trim();
   const suppliedSessionToken = String(req.body?.sessionToken || '');
   const sessionToken = /^[A-Za-z0-9_-]{1,36}$/.test(suppliedSessionToken) ? suppliedSessionToken : '';
@@ -4459,7 +5269,7 @@ app.post('/api/maps/place-details', requireAppAuth, async (req, res) => {
   }
 });
 
-app.post('/api/maps/route', requireAppAuth, async (req, res) => {
+app.post('/api/maps/route', requireAppAuth, limitPerUser('maps-route', 1200, HOUR_MS), async (req, res) => {
   const { origin, destination, travelMode = 'DRIVE' } = req.body || {};
   try {
     const route = await calculateRoute({ origin, destination, travelMode });
@@ -4474,6 +5284,9 @@ app.post('/api/maps/route', requireAppAuth, async (req, res) => {
 });
 
 app.get('/api/maps/photo', async (req, res) => {
+  if (isRateLimited(`maps-photo:${req.ip}`, 3000, HOUR_MS)) {
+    return sendJson(res, 429, { error: 'Too many photo requests. Please try again later.' });
+  }
   const resourceName = String(req.query.name || '');
   if (!/^places\/[A-Za-z0-9_-]+\/photos\/[A-Za-z0-9_-]+$/.test(resourceName)) {
     return sendJson(res, 400, { error: 'Invalid Google photo resource.' });
@@ -4492,7 +5305,7 @@ app.get('/api/maps/photo', async (req, res) => {
   }
 });
 
-app.post('/api/chat', requireAppAuth, async (req, res) => {
+app.post('/api/chat', requireAppAuth, limitPerUser('chat', 60, 10 * MINUTE_MS), async (req, res) => {
   const { email, message = '', selectedDestination, history = [], profile = {} } = req.body || {};
   const normalizedEmail = normalizeEmail(req.appUser.email);
   if (email && normalizeEmail(email) !== normalizedEmail) {
@@ -4505,6 +5318,7 @@ app.post('/api/chat', requireAppAuth, async (req, res) => {
   if (!userMessage) {
     return sendJson(res, 400, { error: 'Please enter a message for the assistant.' });
   }
+  if (req.body?.kind !== 'continuation') recordAppUsageEvent(req.appUser.userId, 'chat_message');
 
   try {
     if (asksDestinationReviews) {
@@ -4550,7 +5364,7 @@ app.post('/api/chat', requireAppAuth, async (req, res) => {
   }
 });
 
-app.post('/api/itinerary/generate', requireAppAuth, async (req, res) => {
+app.post('/api/itinerary/generate', requireAppAuth, limitPerUser('itinerary-generate', 20, HOUR_MS), async (req, res) => {
   const { email, message = '', selectedDestination, profile = {}, origin = null } = req.body || {};
   const normalizedEmail = normalizeEmail(req.appUser.email);
   if (email && normalizeEmail(email) !== normalizedEmail) {
@@ -4575,6 +5389,7 @@ app.post('/api/itinerary/generate', requireAppAuth, async (req, res) => {
     if (!userResult.recordset.length) {
       return sendJson(res, 401, { error: 'Authenticated user was not found.' });
     }
+    if (req.body?.source === 'chat') recordAppUsageEvent(req.appUser.userId, 'chat_message');
     const storedProfile = await getUserProfileContext(normalizedEmail);
     const userProfile = {
       ...storedProfile,
@@ -4724,7 +5539,7 @@ app.post('/api/hotels/budget-options', requireAppAuth, async (req, res) => {
     const affordable = priced.filter(({ rate }) => rate.lowPhp <= nightlyCapPhp);
     // Best-rated hotels the budget can cover come first; cheaper wins a tie.
     affordable.sort((a, b) => (Number(b.place.rating) || 0) - (Number(a.place.rating) || 0) || a.rate.lowPhp - b.rate.lowPhp);
-    const hotels = affordable.map(({ place, rate }) => ({
+    const toHotel = ({ place, rate }) => ({
       placeId: place.placeId,
       name: place.name,
       address: place.address,
@@ -4742,10 +5557,17 @@ app.post('/api/hotels/budget-options', requireAppAuth, async (req, res) => {
       fullyWithinBudget: rate.highPhp <= nightlyCapPhp,
       basis: rate.basis,
       sourceUrls: rate.sourceUrls.slice(0, 3),
-    }));
+    });
+    const hotels = affordable.map(toHotel);
+    // Priced hotels above the nightly cap, cheapest first, so the app can show them last.
+    const overBudgetHotels = priced
+      .filter(({ rate }) => rate.lowPhp > nightlyCapPhp)
+      .sort((a, b) => a.rate.lowPhp - b.rate.lowPhp)
+      .map(toHotel);
     return sendJson(res, 200, {
       ...base,
       hotels,
+      overBudgetHotels,
       overBudgetCount: priced.length - affordable.length,
       unpricedCount: candidates.length - priced.length,
     });
@@ -4755,7 +5577,97 @@ app.post('/api/hotels/budget-options', requireAppAuth, async (req, res) => {
   }
 });
 
-app.post('/api/itinerary/estimate-budget', requireAppAuth, async (req, res) => {
+// Photos and details for one place in the hotel and restaurant pickers. Separate
+// from /api/maps/place-details so that endpoint keeps its smaller (cheaper) field mask.
+const hotelDetailsCache = new Map();
+const GOOGLE_PHOTO_NAME_PATTERN = /^places\/[A-Za-z0-9_-]+\/photos\/[A-Za-z0-9_-]+$/;
+const httpsUrlOrEmpty = (value) => {
+  const text = String(value || '').trim();
+  return /^https:\/\/[^\s"'<>]+$/i.test(text) ? text.slice(0, 500) : '';
+};
+
+async function sendPlaceDetails(req, res) {
+  const placeId = String(req.body?.placeId || '').trim();
+  if (!/^[A-Za-z0-9_-]{4,200}$/.test(placeId)) {
+    return sendJson(res, 400, { error: 'A valid place ID is required.' });
+  }
+  if (isDevelopmentMode) {
+    return sendJson(res, 200, { place: null, isDevelopmentMock: true });
+  }
+  const cached = hotelDetailsCache.get(placeId);
+  if (cached && cached.expiresAt > Date.now()) return sendJson(res, 200, { place: cached.place });
+  if (isRateLimited(`hotel-details:${req.appUser.userId}`, 60, 60 * 60 * 1000)) {
+    return sendJson(res, 429, { error: 'Too many place detail requests. Please try again later.' });
+  }
+  try {
+    const apiKey = getMapsApiKey();
+    if (!apiKey) throw new Error('Google Maps is not configured on the backend.');
+    const response = await fetch(`https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}`, {
+      headers: {
+        'X-Goog-Api-Key': apiKey,
+        'X-Goog-FieldMask': [
+          'id', 'displayName', 'formattedAddress', 'rating', 'userRatingCount', 'types', 'businessStatus',
+          'photos.name', 'photos.authorAttributions', 'websiteUri', 'nationalPhoneNumber', 'googleMapsUri',
+          'editorialSummary', 'regularOpeningHours.weekdayDescriptions',
+          'reviews.rating', 'reviews.text', 'reviews.relativePublishTimeDescription', 'reviews.authorAttribution',
+        ].join(','),
+      },
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const reason = data?.error?.message || data?.error?.status;
+      throw new Error(reason ? `Google place details failed: ${reason}` : 'Place details are unavailable.');
+    }
+    const finiteOrNull = (value) => (value != null && Number.isFinite(Number(value)) ? Number(value) : null);
+    const place = {
+      placeId: String(data.id || placeId),
+      name: String(data.displayName?.text || '').slice(0, 200),
+      address: String(data.formattedAddress || '').slice(0, 300),
+      rating: finiteOrNull(data.rating),
+      ratingCount: finiteOrNull(data.userRatingCount),
+      types: Array.isArray(data.types) ? data.types.slice(0, 8).map((type) => String(type).slice(0, 60)) : [],
+      businessStatus: String(data.businessStatus || ''),
+      summary: String(data.editorialSummary?.text || '').slice(0, 600),
+      website: httpsUrlOrEmpty(data.websiteUri),
+      phone: String(data.nationalPhoneNumber || '').slice(0, 40),
+      googleMapsUri: httpsUrlOrEmpty(data.googleMapsUri),
+      openingHours: Array.isArray(data.regularOpeningHours?.weekdayDescriptions)
+        ? data.regularOpeningHours.weekdayDescriptions.slice(0, 7).map((line) => String(line).slice(0, 120))
+        : [],
+      // Up to 6 photos, each with the author credit Google requires to be shown.
+      photos: (Array.isArray(data.photos) ? data.photos : [])
+        .filter((photo) => GOOGLE_PHOTO_NAME_PATTERN.test(String(photo?.name || '')))
+        .slice(0, 6)
+        .map((photo) => {
+          const author = Array.isArray(photo.authorAttributions) ? photo.authorAttributions[0] : null;
+          return {
+            resource: String(photo.name),
+            authorName: String(author?.displayName || '').slice(0, 120),
+            authorUri: httpsUrlOrEmpty(author?.uri),
+          };
+        }),
+      reviews: (Array.isArray(data.reviews) ? data.reviews : []).slice(0, 3).map((review) => ({
+        rating: finiteOrNull(review.rating),
+        text: String(review.text?.text || '').slice(0, 600),
+        when: String(review.relativePublishTimeDescription || '').slice(0, 60),
+        authorName: String(review.authorAttribution?.displayName || '').slice(0, 120),
+        authorUri: httpsUrlOrEmpty(review.authorAttribution?.uri),
+      })).filter((review) => review.text),
+    };
+    if (hotelDetailsCache.size >= 300) hotelDetailsCache.delete(hotelDetailsCache.keys().next().value);
+    hotelDetailsCache.set(placeId, { place, expiresAt: Date.now() + 6 * 60 * 60 * 1000 });
+    return sendJson(res, 200, { place });
+  } catch (error) {
+    console.error('Place details error:', error.message);
+    return sendJson(res, 503, { error: 'Place details are unavailable right now.' });
+  }
+}
+
+// Both paths share one handler, cache and per-user rate limit.
+app.post('/api/hotels/details', requireAppAuth, sendPlaceDetails);
+app.post('/api/places/details', requireAppAuth, sendPlaceDetails);
+
+app.post('/api/itinerary/estimate-budget', requireAppAuth, limitPerUser('estimate-budget', 30, HOUR_MS), async (req, res) => {
   const { email, itinerary, destination, startDate, endDate } = req.body || {};
   const normalizedEmail = normalizeEmail(email || req.appUser.email);
   if (!normalizedEmail) return sendJson(res, 401, { error: 'Authentication is required to estimate a trip budget.' });
@@ -4807,6 +5719,11 @@ app.use('/api', (req, res) => sendJson(res, 404, { error: 'This Sidekick API end
 // Unknown pages show the app's "Page not found" page instead of Express's default text.
 app.use((req, res) => {
   if (req.method === 'GET' && req.accepts('html')) {
+    if (isProduction) {
+      return res.status(404).type('html').send('<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">'
+        + '<meta name="viewport" content="width=device-width, initial-scale=1"><title>Page not found · Sidekick</title></head>'
+        + '<body><h1>Page not found</h1><p><a href="/">Go to Sidekick Admin</a></p></body></html>');
+    }
     return res.status(404).sendFile(path.join(mobileAppDir, '404.html'));
   }
   return sendJson(res, 404, { error: 'Not found.' });
@@ -4827,8 +5744,24 @@ app.use((error, req, res, next) => {
 
 setInterval(cleanUnverifiedUsers, 60 * 60 * 1000).unref();
 setInterval(() => {
+  void cleanExpiredSessions();
+}, 60 * 60 * 1000).unref();
+setInterval(() => {
   void cleanExpiredItineraries().catch(() => {});
 }, 5 * 60 * 1000).unref();
+
+// Production self-check: warn (in the server log) about missing security settings.
+if (isProduction) {
+  const warnings = [
+    !forceHttps && 'FORCE_HTTPS is not set, so plain HTTP is allowed.',
+    !String(process.env.TRUST_PROXY || '').trim() && 'TRUST_PROXY is not set; behind a load balancer every visitor will share one rate limit.',
+    !corsAllowedOrigins.length && 'CORS_ALLOWED_ORIGINS is not set, so any website may call the API from a browser.',
+    getAdminCredentials().password.length < 12 && 'ADMIN_PASSWORD is shorter than 12 characters; admin sign-in is turned off.',
+    !['1', 'true', 'yes'].includes(String(process.env.DB_ENCRYPT || '').trim().toLowerCase()) && 'DB_ENCRYPT is not set; the database connection is not encrypted.',
+    isDevelopmentMode && 'SIDEKICK_API_MODE is development; set it to production.',
+  ].filter(Boolean);
+  for (const warning of warnings) console.warn(`[security] ${warning}`);
+}
 
 app.listen(port, () => {
   console.log(`Sidekick backend listening on http://localhost:${port}`);

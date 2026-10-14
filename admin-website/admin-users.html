@@ -17,7 +17,7 @@
           </div>
         </div>
         <nav>
-          <a class="admin-nav-link" href="admin.html">Overview</a>
+          <a class="admin-nav-link" href="admin.html">Dashboard</a>
           <a class="admin-nav-link active" href="admin-users.html">Users</a>
           <a class="admin-nav-link" href="admin-itineraries.html">Travel plans</a>
           <a class="admin-nav-link" href="admin-analytics.html">Reports</a>
@@ -92,8 +92,28 @@
           </div>
           <div id="user-detail-content"></div>
         </section>
+
+        <section id="user-picks" class="admin-card admin-detail-panel" aria-labelledby="user-picks-heading">
+          <div class="admin-panel-header">
+            <div>
+              <h2 id="user-picks-heading">What users pick</h2>
+              <p class="admin-subtitle">Top 10 in each list, from itineraries currently saved in user accounts. “Users” counts different people; “picks” counts every time it appears in an itinerary. Open a user's details above to see their own picks.</p>
+            </div>
+          </div>
+          <div class="picks-grid">
+            <article class="picks-panel"><h3>Activities</h3><div id="picks-activities" class="hbar-container"></div></article>
+            <article class="picks-panel"><h3>Restaurants</h3><div id="picks-restaurants" class="hbar-container"></div></article>
+            <article class="picks-panel"><h3>Hotels</h3><div id="picks-hotels" class="hbar-container"></div></article>
+            <article class="picks-panel"><h3>Destinations in itineraries</h3><div id="picks-destinations" class="hbar-container"></div></article>
+            <article class="picks-panel"><h3>Activity types</h3><div id="picks-activity-types" class="hbar-container"></div></article>
+            <article class="picks-panel"><h3>Destinations chosen at onboarding</h3><div id="picks-preferred" class="hbar-container"></div></article>
+          </div>
+          <p class="stat-detail">Restaurants and hotels count only places users added to an itinerary. A hotel chosen as “my stay” without adding it isn't saved to the database, so it isn't counted.</p>
+        </section>
       </main>
     </div>
+
+    <div id="chart-tooltip" class="chart-tooltip" role="presentation" hidden></div>
 
     <script src="js/config.js"></script>
     <script src="js/admin.js"></script>

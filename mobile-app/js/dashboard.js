@@ -193,8 +193,10 @@ function renderPhotoAttribution(place) {
   const attribution = place.photoAttribution;
   if (!attribution?.name) return "";
   const label = window.SidekickCore.escapeHtml(attribution.name);
-  return attribution.uri
-    ? `<small class="photo-attribution"><a href="${window.SidekickCore.escapeHtml(attribution.uri)}" target="_blank" rel="noopener">${label}</a></small>`
+  // Only https links are made clickable (never javascript: or other schemes).
+  const uri = /^https:\/\//i.test(String(attribution.uri || "")) ? String(attribution.uri) : "";
+  return uri
+    ? `<small class="photo-attribution"><a href="${window.SidekickCore.escapeHtml(uri)}" target="_blank" rel="noopener noreferrer">${label}</a></small>`
     : `<small class="photo-attribution">${label}</small>`;
 }
 

@@ -17,10 +17,10 @@
           </div>
         </div>
         <nav>
-          <a class="admin-nav-link" href="admin.html">Overview</a>
+          <a class="admin-nav-link" href="admin.html">Dashboard</a>
           <a class="admin-nav-link" href="admin-users.html">Users</a>
           <a class="admin-nav-link" href="admin-itineraries.html">Travel plans</a>
-          <a class="admin-nav-link active" href="admin-analytics.html">Reports</a>
+          <a class="admin-nav-link active" href="admin-analytics.html" aria-current="page">Reports</a>
           <a class="admin-nav-link" href="admin-reviews.html">App reviews</a>
           <a class="admin-nav-link" href="admin-activity.html">Activity</a>
           <a class="admin-nav-link" href="admin-integrations.html">Connections</a>
@@ -33,24 +33,102 @@
         <div class="admin-topbar">
           <div>
             <h1 class="admin-page-title">Reports</h1>
-            <p class="admin-subtitle">New accounts and saved travel plans from the past 30 days.</p>
+            <p class="admin-subtitle">Usage and saved itineraries for each Sidekick user. Select a user to see their history.</p>
           </div>
         </div>
 
         <div id="admin-status-banner" class="admin-status-banner" aria-live="polite"></div>
 
-        <div class="content-grid">
-          <div class="admin-card">
-            <div class="admin-panel-header"><h2>New sign-ups</h2></div>
-            <div id="analytics-user-chart" role="img" aria-label="New sign-ups over the past 30 days" style="display:flex; align-items:flex-end; gap:8px; height:230px; padding-top:16px;"></div>
+        <section class="admin-card">
+          <div class="admin-panel-header">
+            <h2>Per-user report</h2>
           </div>
-          <div class="admin-card">
-            <div class="admin-panel-header"><h2>Travel plans created</h2></div>
-            <div id="analytics-itinerary-chart" role="img" aria-label="Travel plans created over the past 30 days" style="display:flex; align-items:flex-end; gap:8px; height:230px; padding-top:16px;"></div>
+          <form id="report-filters" class="report-filters" role="search">
+            <div class="field">
+              <label for="report-search">Search name or email</label>
+              <input id="report-search" type="search" maxlength="100" placeholder="e.g. Maria or maria@example.com" />
+            </div>
+            <div class="field">
+              <label for="report-status-filter">Account</label>
+              <select id="report-status-filter">
+                <option value="all">All accounts</option>
+                <option value="verified">Verified</option>
+                <option value="unverified">Unverified</option>
+                <option value="active">Enabled</option>
+                <option value="inactive">Disabled</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="report-sort">Sort by</label>
+              <select id="report-sort">
+                <option value="newest">Newest registration</option>
+                <option value="oldest">Oldest registration</option>
+                <option value="name">Name (A–Z)</option>
+                <option value="itineraries">Most saved itineraries</option>
+                <option value="recent-itinerary">Most recent itinerary</option>
+                <option value="last-active">Most recent app activity</option>
+                <option value="chat">Most chatbot messages</option>
+                <option value="sign-ins">Most sign-ins</option>
+                <option value="last-sign-in">Most recent sign-in</option>
+              </select>
+            </div>
+            <div class="report-filter-actions">
+              <button id="report-search-submit" class="admin-button" type="submit">Apply</button>
+              <button id="report-reset" class="admin-button-secondary" type="button">Reset</button>
+            </div>
+          </form>
+          <p id="report-scope-note" class="admin-subtitle report-note">
+            Sign-ins and chatbot messages are counted from the day usage tracking was set up. Saved itineraries count plans currently stored in each account.
+          </p>
+          <div class="admin-table-wrap">
+            <table class="admin-table report-table">
+              <thead>
+                <tr>
+                  <th scope="col">User</th>
+                  <th scope="col">Verification</th>
+                  <th scope="col">Registered</th>
+                  <th scope="col">Last app activity</th>
+                  <th scope="col">Last sign-in</th>
+                  <th scope="col" class="numeric">Sign-ins</th>
+                  <th scope="col" class="numeric">Chatbot messages</th>
+                  <th scope="col" class="numeric">Saved itineraries</th>
+                  <th scope="col">Latest itinerary saved</th>
+                  <th scope="col"><span class="visually-hidden">Actions</span></th>
+                </tr>
+              </thead>
+              <tbody id="report-table-body"></tbody>
+            </table>
           </div>
-        </div>
+          <div class="admin-pagination">
+            <span id="report-page-summary" aria-live="polite"></span>
+            <div>
+              <button id="report-page-previous" class="admin-button-secondary" type="button">Previous</button>
+              <button id="report-page-next" class="admin-button-secondary" type="button">Next</button>
+            </div>
+          </div>
+        </section>
+
+        <section id="report-detail-panel" class="admin-card admin-detail-panel" hidden aria-live="polite">
+          <div class="admin-panel-header">
+            <div>
+              <h2 id="report-detail-title">User report</h2>
+              <p id="report-detail-subtitle" class="admin-subtitle"></p>
+            </div>
+            <button id="report-detail-close" class="admin-button-secondary" type="button">Close</button>
+          </div>
+          <div class="report-tabs" role="tablist" aria-label="User report sections">
+            <button type="button" role="tab" id="report-tab-summary" aria-controls="report-panel-summary" aria-selected="true" data-report-tab="summary">Summary</button>
+            <button type="button" role="tab" id="report-tab-itineraries" aria-controls="report-panel-itineraries" aria-selected="false" tabindex="-1" data-report-tab="itineraries">Itineraries</button>
+            <button type="button" role="tab" id="report-tab-preferences" aria-controls="report-panel-preferences" aria-selected="false" tabindex="-1" data-report-tab="preferences">Preferences</button>
+          </div>
+          <div id="report-panel-summary" role="tabpanel" aria-labelledby="report-tab-summary" class="report-tab-panel"></div>
+          <div id="report-panel-itineraries" role="tabpanel" aria-labelledby="report-tab-itineraries" class="report-tab-panel" hidden></div>
+          <div id="report-panel-preferences" role="tabpanel" aria-labelledby="report-tab-preferences" class="report-tab-panel" hidden></div>
+        </section>
       </main>
     </div>
+
+    <div id="chart-tooltip" class="chart-tooltip" role="presentation" hidden></div>
 
     <script src="js/config.js"></script>
     <script src="js/admin.js"></script>

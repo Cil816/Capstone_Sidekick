@@ -334,37 +334,6 @@ button, input, select {
   background: rgba(255,255,255,0.4);
 }
 
-.chart-bar-wrap {
-  flex: 1;
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-end;
-  align-items: center;
-  gap: 8px;
-  color: var(--admin-muted);
-  font-size: 0.7rem;
-}
-
-.chart-value {
-  color: #40586d;
-  font-size: 0.72rem;
-  font-weight: 700;
-}
-
-.chart-label {
-  color: #607587;
-  font-size: 0.7rem;
-  white-space: nowrap;
-}
-
-.chart-bar {
-  width: 100%;
-  max-width: 24px;
-  border-radius: 8px 8px 0 0;
-  min-height: 3px;
-}
-
 .admin-status-banner {
   border-radius: 12px;
   padding: 12px 14px;
@@ -919,15 +888,6 @@ button:disabled {
   .login-card {
     border-radius: 16px;
   }
-
-  #analytics-user-chart,
-  #analytics-itinerary-chart {
-    overflow-x: auto;
-  }
-
-  .chart-bar-wrap {
-    flex: 0 0 30px;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -975,3 +935,1271 @@ button:disabled {
   line-height: 1.5;
   color: #4b5563;
 }
+
+/* ---- Dashboard and Reports layout (spacious, larger type) ------------------ */
+
+body {
+  font-size: 1rem;
+}
+
+.admin-sidebar {
+  flex-basis: 228px;
+  width: 228px;
+}
+
+.admin-main {
+  padding: clamp(20px, 2.4vw, 36px) clamp(16px, 2.6vw, 40px) 48px;
+}
+
+.admin-page-title {
+  font-size: clamp(1.75rem, 2.6vw, 2.25rem);
+}
+
+.admin-subtitle {
+  font-size: 1.02rem;
+}
+
+.admin-panel-header h2 {
+  margin: 0;
+  font-size: 1.22rem;
+}
+
+.admin-detail-section h3 {
+  font-size: 1.08rem;
+}
+
+.admin-table {
+  font-size: 0.98rem;
+}
+
+.admin-table th {
+  font-size: 0.8rem;
+}
+
+.admin-table th,
+.admin-table td {
+  padding: 14px 16px;
+  vertical-align: middle;
+}
+
+.admin-table th.numeric,
+.admin-table td.numeric {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.badge {
+  font-size: 0.8rem;
+}
+
+.logger-text {
+  font-size: 1rem;
+}
+
+.logger-time {
+  font-size: 0.9rem;
+}
+
+.dashboard-section {
+  margin-bottom: 32px;
+}
+
+.section-heading-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 20px;
+  margin-bottom: 14px;
+}
+
+.section-heading {
+  margin: 0 0 14px;
+  color: #30485c;
+  font-family: "Manrope", "DM Sans", sans-serif;
+  font-size: 1.3rem;
+  letter-spacing: -0.02em;
+}
+
+.section-heading-row .section-heading {
+  margin: 0;
+}
+
+.section-note,
+.admin-updated {
+  color: var(--admin-muted);
+  font-size: 0.95rem;
+}
+
+.admin-link {
+  color: #2a7f9b;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.admin-link:hover {
+  text-decoration: underline;
+}
+
+/* Summary cards */
+.stat-grid {
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 16px;
+  margin-bottom: 0;
+}
+
+.stat-grid .stat-card {
+  display: flex;
+  flex-direction: column;
+  box-shadow: none;
+}
+
+.stat-grid .stat-card::before {
+  display: none;
+}
+
+.stat-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.stat-icon {
+  display: grid;
+  flex: 0 0 40px;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border-radius: 12px;
+  background: #eaf5fa;
+  color: #2a7f9b;
+}
+
+.stat-grid .stat-label {
+  margin: 0;
+  color: #40586d;
+  font-size: 0.92rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.stat-grid .stat-value {
+  margin-top: 14px;
+  font-size: clamp(2rem, 2.8vw, 2.6rem);
+  font-variant-numeric: tabular-nums;
+}
+
+.stat-grid .stat-detail {
+  margin: 6px 0 0;
+  font-size: 0.95rem;
+}
+
+.stat-card.is-untracked {
+  background: #fafcfd;
+  border-style: dashed;
+}
+
+.stat-card.is-untracked .stat-icon {
+  background: #eef2f5;
+  color: #6b7f90;
+}
+
+.stat-grid .stat-card.is-untracked .stat-value {
+  color: #6b7f90;
+  font-size: 1.5rem;
+  letter-spacing: -0.01em;
+}
+
+/* Range picker */
+.range-picker {
+  display: inline-flex;
+  padding: 3px;
+  border: 1px solid var(--admin-border);
+  border-radius: 11px;
+  background: #fff;
+}
+
+.range-option {
+  min-height: 38px;
+  padding: 6px 14px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #526779;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.range-option:hover {
+  background: #f1f7fa;
+}
+
+.range-option[aria-pressed="true"] {
+  background: #e3f1f7;
+  color: #1f6d86;
+}
+
+/* Line charts */
+.chart-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.chart-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  box-shadow: none;
+}
+
+.chart-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.chart-card-header h3 {
+  margin: 0;
+  color: #30485c;
+  font-size: 1.15rem;
+}
+
+.chart-caption {
+  margin: 4px 0 0;
+  color: var(--admin-muted);
+  font-size: 0.95rem;
+}
+
+.chart-header-side {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px 16px;
+}
+
+.chart-total {
+  display: grid;
+  justify-items: end;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.chart-total strong {
+  color: #263e52;
+  font-size: 1.6rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-total span {
+  color: var(--admin-muted);
+  font-size: 0.85rem;
+}
+
+.line-chart {
+  position: relative;
+  width: 100%;
+  min-height: 220px;
+}
+
+.line-chart-svg {
+  display: block;
+  overflow: visible;
+  touch-action: pan-y;
+}
+
+.chart-grid-line {
+  stroke: #e8eef3;
+  stroke-width: 1;
+}
+
+.chart-axis-line {
+  stroke: #c9d6e0;
+  stroke-width: 1;
+}
+
+.chart-axis-label {
+  fill: #5c7183;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-hover-line {
+  stroke: #9fb3c3;
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+
+.chart-empty {
+  display: grid;
+  min-height: 220px;
+  place-items: center;
+  text-align: center;
+}
+
+.chart-footnote {
+  margin: 12px 0 0;
+  color: var(--admin-muted);
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
+.chart-tooltip {
+  position: fixed;
+  z-index: 20;
+  display: grid;
+  gap: 2px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: #1d3346;
+  color: #fff;
+  font-size: 0.9rem;
+  line-height: 1.35;
+  pointer-events: none;
+  box-shadow: 0 8px 20px rgba(29, 51, 70, 0.2);
+}
+
+.chart-tooltip span {
+  color: #d5e6f0;
+}
+
+.chart-card-untracked {
+  background: #fafcfd;
+  border-style: dashed;
+}
+
+.untracked-state p {
+  margin: 0 0 8px;
+  color: #4d6273;
+  font-size: 0.98rem;
+}
+
+.untracked-state p:last-child {
+  margin-bottom: 0;
+  color: var(--admin-muted);
+  font-size: 0.92rem;
+}
+
+/* User base summary */
+.insight-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 16px;
+}
+
+.insight-card {
+  box-shadow: none;
+}
+
+.insight-card h3 {
+  margin: 0 0 14px;
+  color: #30485c;
+  font-size: 1.08rem;
+}
+
+.ranked-list {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ranked-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.97rem;
+}
+
+.ranked-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-weight: 600;
+}
+
+.ranked-count {
+  color: #40586d;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.ranked-share {
+  color: var(--admin-muted);
+}
+
+.ranked-bar {
+  height: 6px;
+  margin-top: 6px;
+  border-radius: 999px;
+  background: #edf2f6;
+  overflow: hidden;
+}
+
+.ranked-bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #6fb3c9;
+}
+
+.definition-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.definition-list .logger-text {
+  font-weight: 500;
+  line-height: 1.5;
+}
+
+/* Reports */
+.report-filters {
+  display: grid;
+  grid-template-columns: minmax(220px, 2fr) repeat(2, minmax(170px, 1fr)) auto;
+  align-items: end;
+  gap: 14px;
+}
+
+.report-filters .field label {
+  font-size: 0.9rem;
+}
+
+.report-filter-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.report-note {
+  max-width: none;
+  margin: 14px 0;
+  font-size: 0.95rem;
+}
+
+.report-table {
+  min-width: 1240px;
+}
+
+.cell-primary {
+  color: #263e52;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.cell-secondary {
+  margin: 2px 0 0;
+  color: var(--admin-muted);
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+.not-tracked {
+  color: #6b7f90;
+  font-size: 0.9rem;
+  font-style: italic;
+  white-space: nowrap;
+}
+
+.admin-table tbody tr.is-selected {
+  background: #eef7fb;
+}
+
+/* Keeps absolutely positioned helpers inside the horizontally scrolling table. */
+.admin-table-wrap {
+  position: relative;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.report-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--admin-border);
+  overflow-x: auto;
+}
+
+.report-tabs [role="tab"] {
+  min-height: 44px;
+  margin-bottom: -1px;
+  padding: 10px 16px;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  background: transparent;
+  color: #526779;
+  font-weight: 650;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.report-tabs [role="tab"]:hover {
+  color: #1f6d86;
+}
+
+.report-tabs [role="tab"][aria-selected="true"] {
+  border-bottom-color: #2c91b0;
+  color: #1f6d86;
+}
+
+.report-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.report-tile {
+  padding: 14px 16px;
+  border: 1px solid var(--admin-border);
+  border-radius: 12px;
+  background: #fbfdfe;
+}
+
+.report-tile-value {
+  margin-top: 6px;
+  color: #263e52;
+  font-size: 1.25rem;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.report-chart-card {
+  padding: 18px;
+  border: 1px solid var(--admin-border);
+  border-radius: 14px;
+}
+
+.report-chart-card + .report-chart-card {
+  margin-top: 16px;
+}
+
+.badge-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+@media (max-width: 1180px) {
+  .chart-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .report-filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .report-filters .field:first-child {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 980px) {
+  .admin-sidebar {
+    flex-basis: auto;
+    width: 100%;
+  }
+}
+
+@media (max-width: 600px) {
+  .stat-grid,
+  .insight-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .chart-card-header {
+    flex-direction: column;
+  }
+
+  .chart-header-side,
+  .chart-total {
+    justify-content: flex-start;
+    justify-items: start;
+  }
+
+  .report-filters {
+    grid-template-columns: 1fr;
+  }
+
+  .report-filter-actions button {
+    flex: 1;
+  }
+}
+
+/* ---- What users plan: ranked bar charts, medians, per-user picks ---------- */
+
+.subsection-heading {
+  margin: 4px 0 12px;
+  color: #40586d;
+  font-size: 1.02rem;
+}
+
+.plans-scope {
+  display: block;
+  margin: 0 0 16px;
+}
+
+.median-grid {
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  margin-bottom: 16px;
+}
+
+.hbar-chart {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.hbar-row {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  grid-template-areas:
+    "rank label value"
+    "rank track track";
+  align-items: center;
+  gap: 4px 10px;
+  padding: 4px 6px;
+  border-radius: 8px;
+  cursor: default;
+}
+
+.hbar-row:hover,
+.hbar-row:focus-visible {
+  background: #f3f8fb;
+}
+
+.hbar-rank {
+  grid-area: rank;
+  align-self: start;
+  color: var(--admin-muted);
+  font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.hbar-label {
+  grid-area: label;
+  min-width: 0;
+  overflow: hidden;
+  color: #263e52;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hbar-value {
+  grid-area: value;
+  color: #30485c;
+  font-size: 0.92rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.hbar-sub {
+  color: var(--admin-muted);
+}
+
+.hbar-track {
+  grid-area: track;
+  display: block;
+  height: 14px;
+}
+
+.hbar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 0 4px 4px 0;
+  background: #2c91b0;
+}
+
+.picks-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 16px;
+}
+
+.picks-panel {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--admin-border);
+  border-radius: 14px;
+}
+
+.picks-panel h3 {
+  margin: 0 0 12px;
+  color: #30485c;
+  font-size: 1.05rem;
+}
+
+.user-picks-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 14px;
+  margin-top: 10px;
+}
+
+.user-picks-block {
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--admin-border);
+  border-radius: 12px;
+}
+
+.user-picks-block h4 {
+  margin: 0 0 8px;
+  color: #30485c;
+  font-size: 0.98rem;
+}
+
+.pick-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.92rem;
+}
+
+.pick-table th,
+.pick-table td {
+  padding: 6px 4px;
+  border-bottom: 1px solid var(--admin-border);
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
+.pick-table th {
+  color: var(--admin-muted);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.pick-table .numeric {
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 600px) {
+  .picks-grid,
+  .user-picks-grid,
+  .median-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ==========================================================================
+   Readability and symmetry pass
+   Larger text, roomier navigation, centred content, and grids with fixed
+   column counts so rows stay balanced. Styling only; no behaviour changes.
+   ========================================================================== */
+
+html {
+  font-size: 17px; /* every rem-based size grows ~6% */
+}
+
+/* ---- Sidebar navigation ---------------------------------------------------- */
+.admin-sidebar {
+  flex-basis: 248px;
+  width: 248px;
+  padding: 28px 18px;
+  gap: 28px;
+}
+
+.admin-sidebar-header {
+  padding: 4px 10px 22px;
+  font-size: 1.05rem;
+}
+
+.admin-sidebar nav {
+  gap: 8px;
+}
+
+.admin-nav-link {
+  min-height: 48px;
+  padding: 12px 16px;
+  font-size: 1.04rem;
+  border-radius: 12px;
+}
+
+/* ---- Page frame: content capped at 1400px and centred ---------------------- */
+.admin-main {
+  padding-top: 40px;
+  padding-bottom: 56px;
+  /* 100% is the shell width, so subtract the sidebar to centre within the main area. */
+  padding-inline: max(48px, calc((100% - 248px - 1400px) / 2));
+}
+
+.admin-topbar {
+  margin-bottom: 28px;
+}
+
+.admin-page-title {
+  font-size: clamp(2rem, 2.6vw, 2.5rem);
+}
+
+.admin-subtitle {
+  font-size: 1.05rem;
+  line-height: 1.6;
+}
+
+.admin-status-banner {
+  margin-bottom: 24px;
+  padding: 14px 18px;
+  font-size: 1rem;
+}
+
+/* ---- Sections and headings -------------------------------------------------- */
+.dashboard-section {
+  margin-bottom: 44px;
+}
+
+.section-heading {
+  font-size: 1.45rem;
+}
+
+.section-heading-row {
+  margin-bottom: 18px;
+}
+
+.subsection-heading {
+  margin: 8px 0 14px;
+  font-size: 1.1rem;
+}
+
+.section-note,
+.admin-updated {
+  font-size: 1rem;
+}
+
+.admin-link {
+  font-size: 1rem;
+}
+
+/* ---- Cards ------------------------------------------------------------------ */
+.admin-card {
+  padding: 24px;
+  border-radius: 18px;
+  box-shadow: 0 6px 20px rgba(44, 62, 80, 0.05);
+}
+
+/* One look for every stat card (the App reviews cards had an older top stripe). */
+.stat-card::before {
+  display: none;
+}
+
+.stat-label {
+  font-size: 0.86rem;
+  letter-spacing: 0.04em;
+}
+
+.stat-value {
+  margin-top: 14px;
+}
+
+.stat-detail {
+  font-size: 1rem;
+}
+
+.stat-grid .stat-label {
+  font-size: 1rem;
+}
+
+.stat-grid .stat-detail {
+  font-size: 1rem;
+}
+
+.admin-panel-header {
+  margin-bottom: 20px;
+}
+
+.admin-panel-header h2 {
+  font-size: 1.3rem;
+}
+
+.admin-detail-section h3 {
+  font-size: 1.12rem;
+}
+
+/* ---- Text in lists, tables, badges, forms ----------------------------------- */
+.admin-table {
+  font-size: 1rem;
+}
+
+.admin-table th {
+  font-size: 0.85rem;
+}
+
+.admin-table th,
+.admin-table td {
+  padding: 16px 18px;
+}
+
+.badge {
+  padding: 5px 11px;
+  font-size: 0.85rem;
+}
+
+.logger-item {
+  padding: 14px 0;
+}
+
+.logger-text {
+  font-size: 1.05rem;
+}
+
+.logger-time {
+  font-size: 0.95rem;
+}
+
+.empty-state {
+  font-size: 1rem;
+}
+
+.admin-button,
+.admin-button-secondary,
+.admin-button-danger {
+  min-height: 46px;
+  padding: 11px 18px;
+  font-size: 1rem;
+}
+
+.admin-filters label,
+.field label,
+.report-filters .field label {
+  font-size: 0.95rem;
+}
+
+.admin-filters input,
+.admin-filters select,
+.field input,
+.field select {
+  min-height: 46px;
+  font-size: 1rem;
+}
+
+.admin-pagination {
+  margin-top: 20px;
+  font-size: 1rem;
+}
+
+.range-option {
+  min-height: 42px;
+  padding: 8px 16px;
+  font-size: 1rem;
+}
+
+/* ---- Charts ------------------------------------------------------------------ */
+.chart-card-header h3 {
+  font-size: 1.2rem;
+}
+
+.chart-caption {
+  font-size: 1rem;
+}
+
+.chart-footnote {
+  font-size: 0.93rem;
+}
+
+.chart-axis-label {
+  font-size: 13.5px;
+}
+
+.chart-total strong {
+  font-size: 1.75rem;
+}
+
+.chart-total span {
+  font-size: 0.9rem;
+}
+
+.chart-tooltip {
+  font-size: 0.95rem;
+}
+
+.hbar-label {
+  font-size: 1.02rem;
+}
+
+.hbar-value {
+  font-size: 0.98rem;
+}
+
+.hbar-chart {
+  gap: 12px;
+}
+
+.insight-card h3,
+.picks-panel h3 {
+  font-size: 1.15rem;
+}
+
+.ranked-row {
+  font-size: 1rem;
+}
+
+.untracked-state p {
+  font-size: 1rem;
+}
+
+.pick-table {
+  font-size: 0.98rem;
+}
+
+.pick-table th {
+  font-size: 0.82rem;
+}
+
+.user-picks-block h4 {
+  font-size: 1.04rem;
+}
+
+/* ---- Reports ----------------------------------------------------------------- */
+.report-note {
+  font-size: 1rem;
+}
+
+.report-tabs [role="tab"] {
+  min-height: 48px;
+  padding: 12px 18px;
+  font-size: 1rem;
+}
+
+.report-tile-value {
+  font-size: 1.3rem;
+}
+
+/* ---- Symmetric grids (fixed column counts) ----------------------------------- */
+.admin-grid,
+.stat-grid,
+.insight-grid,
+.chart-grid,
+.content-grid,
+.picks-grid,
+.user-picks-grid {
+  gap: 20px;
+}
+
+/* Key numbers: 8 cards as 4 x 2. */
+.stat-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+/* App setup: 6 cards as 3 x 2. */
+#settings-summary {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+/* Connections: 4 cards in one row. */
+#integration-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+/* App reviews: 2 summary cards side by side. */
+#review-summary {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+/* Who uses Sidekick: 4 panels in one row. */
+.insight-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+/* Charts: 2 x 2. */
+.chart-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+/* Recent activity and About these numbers: equal halves. */
+.content-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+
+/* Users page rankings: 6 panels as 3 x 2. */
+.picks-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+/* One user's picks: 4 blocks as 2 x 2. */
+.user-picks-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+/* Medians: one panel with five equal columns instead of five separate cards. */
+#plan-medians {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0;
+  margin-bottom: 20px;
+  border: 1px solid var(--admin-border);
+  border-radius: 18px;
+  background: var(--admin-card);
+  overflow: hidden;
+}
+
+#plan-medians > .stat-card {
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+}
+
+#plan-medians > .stat-card + .stat-card {
+  border-left: 1px solid var(--admin-border);
+}
+
+#plan-medians > .empty-state {
+  grid-column: 1 / -1;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+}
+
+/* Per-user report tiles: centred rows, so 7 tiles sit as 4 + 3, balanced. */
+.report-tiles {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 14px;
+}
+
+.report-tile {
+  flex: 0 1 calc((100% - 3 * 14px) / 4);
+  min-width: 0;
+}
+
+/* ---- Responsive -------------------------------------------------------------- */
+@media (max-width: 1280px) {
+  .insight-grid,
+  #integration-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .picks-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1180px) {
+  .stat-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  #plan-medians {
+    grid-template-columns: 1fr;
+  }
+
+  #plan-medians > .stat-card + .stat-card {
+    border-left: 0;
+    border-top: 1px solid var(--admin-border);
+  }
+
+  #settings-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .report-tile {
+    flex-basis: calc((100% - 14px) / 2);
+  }
+}
+
+@media (max-width: 1100px) {
+  .chart-grid,
+  .content-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 980px) {
+  .admin-sidebar {
+    flex-basis: auto;
+    width: 100%;
+    padding: 14px 18px;
+    gap: 14px;
+  }
+
+  .admin-sidebar-header {
+    padding: 2px 4px 12px;
+  }
+
+  .admin-sidebar nav {
+    gap: 6px;
+  }
+
+  .admin-nav-link {
+    min-height: 44px;
+    padding: 9px 14px;
+  }
+
+  .admin-main {
+    padding: 28px 24px 48px;
+  }
+}
+
+@media (max-width: 760px) {
+  .user-picks-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  html {
+    font-size: 16px; /* phones keep the original base size so tables and filters fit */
+  }
+
+  .stat-grid,
+  .insight-grid,
+  .picks-grid,
+  #settings-summary,
+  #integration-grid,
+  #review-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .report-tile {
+    flex-basis: 100%;
+  }
+
+  .admin-main {
+    padding: 22px 16px 40px;
+  }
+
+  .admin-card {
+    padding: 18px;
+  }
+}
+
+/* ---- Table column widths: names on one line, dates on at most two ---------- */
+#user-table-body td:nth-child(1) { min-width: 150px; }
+#user-table-body td:nth-child(3),
+#user-table-body td:nth-child(4) { min-width: 140px; }
+
+#report-table-body td:nth-child(1) { min-width: 290px; }
+#report-table-body td:nth-child(3),
+#report-table-body td:nth-child(4),
+#report-table-body td:nth-child(5),
+#report-table-body td:nth-child(9) { min-width: 140px; }
+#report-table-body .cell-secondary { overflow-wrap: normal; word-break: break-word; }
+
+#itinerary-table-body td:nth-child(1) { min-width: 200px; }
+#itinerary-table-body td:nth-child(3) { min-width: 170px; }
+#itinerary-table-body td:nth-child(4),
+#itinerary-table-body td:nth-child(7) { min-width: 140px; }
+
+/* Empty and loading rows span the table, so they never take a column's minimum width. */
+#user-table-body td.empty-state,
+#report-table-body td.empty-state,
+#itinerary-table-body td.empty-state { min-width: 0; }

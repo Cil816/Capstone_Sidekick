@@ -270,3 +270,8 @@
   opacity: 0.6;
   cursor: wait;
 }
+
+/* Result of “Send a test notification” */
+.settings-test-status { margin: 10px 2px 0; font-size: 13px; line-height: 1.45; color: #17663f; }
+.settings-test-status.is-error { color: #a2283a; }
+.settings-test-status[hidden] { display: none; }

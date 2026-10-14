@@ -138,6 +138,64 @@ function resetPreferencesForEmail(email) {
   localStorage.setItem(SIDEKICK_KEYS.preferencesByEmail, JSON.stringify(all));
 }
 
+// ---- Fresh onboarding for a re-created account ------------------------------
+// Deleting an account removes its preferences on the server, but this device keeps
+// its own copy keyed by email. A new account with the same email gets a new user ID,
+// so a changed ID (or a registration) means that copy is stale and is cleared.
+const ACCOUNT_ID_KEY = "sidekick.accountIdByEmail.v1";
+
+function deleteEmailEntries(storageKey, email) {
+  const target = normalizeEmail(email);
+  const all = safeJsonParse(localStorage.getItem(storageKey), {});
+  if (!all || typeof all !== "object") return;
+  let changed = false;
+  for (const key of Object.keys(all)) {
+    if (normalizeEmail(key) === target) {
+      delete all[key];
+      changed = true;
+    }
+  }
+  if (changed) localStorage.setItem(storageKey, JSON.stringify(all));
+}
+
+// Removes this email's saved onboarding answers so onboarding starts fresh,
+// including the "already synced" marker so new answers are always sent to the server.
+function clearOnboardingStateForEmail(email) {
+  if (!normalizeEmail(email)) return;
+  try {
+    deleteEmailEntries(SIDEKICK_KEYS.preferencesByEmail, email);
+    deleteEmailEntries(PREFS_SYNCED_KEY, email);
+    for (const key of [...preferenceSyncsInFlight.keys()]) {
+      if (normalizeEmail(key) === normalizeEmail(email)) preferenceSyncsInFlight.delete(key);
+    }
+    localStorage.removeItem("userPreferences"); // legacy key, also cleared by Settings' reset
+  } catch (error) {}
+  try { sessionStorage.removeItem("sidekick.onboarding.v1"); } catch (error) {}
+}
+
+// Call after the server confirms a sign-in or registration. newAccount: true right
+// after registering. Returns true when this email's onboarding answers were cleared.
+function recordAccountForEmail(email, userId, { newAccount = false } = {}) {
+  const normalized = normalizeEmail(email);
+  const id = Number(userId);
+  if (!normalized) return false;
+  let ids = {};
+  try { ids = safeJsonParse(localStorage.getItem(ACCOUNT_ID_KEY), {}) || {}; } catch (error) { ids = {}; }
+  const previous = Number(ids[normalized]);
+  const validId = Number.isSafeInteger(id) && id > 0;
+  const recreated = newAccount || (validId && Number.isSafeInteger(previous) && previous > 0 && previous !== id);
+  if (recreated) clearOnboardingStateForEmail(email);
+  if (validId) {
+    ids[normalized] = id;
+    try { localStorage.setItem(ACCOUNT_ID_KEY, JSON.stringify(ids)); } catch (error) {}
+  }
+  return recreated;
+}
+
+function forgetAccountForEmail(email) {
+  try { deleteEmailEntries(ACCOUNT_ID_KEY, email); } catch (error) {}
+}
+
 function getPreferences() {
   const session = getAuthSession();
   if (!session?.email) return null;
@@ -1118,6 +1176,9 @@ window.SidekickCore = {
   setPreferencesForEmail,
   syncPreferencesToServer,
   resetPreferencesForEmail,
+  clearOnboardingStateForEmail,
+  recordAccountForEmail,
+  forgetAccountForEmail,
   requireAuth,
   requirePreferences,
   getChatByEmail,
@@ -1334,9 +1395,27 @@ if (document.readyState === "loading") {
   const KEY = SIDEKICK_KEYS.remindersByEmail;
   const LocalNotifications = window.Capacitor?.Plugins?.LocalNotifications || null;
   let localListenersAttached = false;
-  let headsUpChannelReady = false;
-  const REMINDER_CHANNEL_ID = 'sidekick_reminders_high';
+  let reminderChannelsReady = false;
+  // Android 8+ fixes a notification's sound and vibration in its channel when the
+  // channel is created, so each combination of the Settings switches gets its own
+  // channel. With sound on, no sound file is given, so the phone's normal
+  // notification sound plays. With sound off, a silent file
+  // (android/app/src/main/res/raw/sidekick_silent.wav) is used, because the plugin
+  // cannot create a channel without any sound.
+  const REMINDER_CHANNELS = {
+    'sound|vibrate': { id: 'sidekick_alerts_sound_vibrate', name: 'Reminders: sound and vibration', vibration: true },
+    'sound|still': { id: 'sidekick_alerts_sound', name: 'Reminders: sound only', vibration: false },
+    'quiet|vibrate': { id: 'sidekick_alerts_vibrate', name: 'Reminders: vibration only', vibration: true, sound: 'sidekick_silent.wav' },
+    'quiet|still': { id: 'sidekick_alerts_silent', name: 'Reminders: silent', vibration: false, sound: 'sidekick_silent.wav' },
+  };
+  const TEST_NOTIFICATION_ID = 2147480001;
   const reminderTimeoutHandles = new Map();
+
+  function reminderChannelFor(prefs) {
+    const sound = prefs?.soundEnabled !== false ? 'sound' : 'quiet';
+    const vibrate = prefs?.vibrationEnabled !== false ? 'vibrate' : 'still';
+    return REMINDER_CHANNELS[`${sound}|${vibrate}`];
+  }
 
   // Pre-alert offsets to create per event (label + milliseconds)
   const PRE_ALERT_OFFSETS = [
@@ -1350,28 +1429,29 @@ if (document.readyState === "loading") {
     return !!(LocalNotifications && typeof LocalNotifications.schedule === 'function');
   }
 
-  async function ensureHeadsUpChannel() {
-    if (!hasLocalNotifications() || headsUpChannelReady) return;
+  async function ensureReminderChannels() {
+    if (!hasLocalNotifications() || reminderChannelsReady) return;
     if (typeof LocalNotifications.createChannel !== 'function') {
-      headsUpChannelReady = true;
+      reminderChannelsReady = true;
       return;
     }
-
-    try {
-      await LocalNotifications.createChannel({
-        id: REMINDER_CHANNEL_ID,
-        name: 'Sidekick Reminders',
-        description: 'High-priority travel reminder alerts',
-        importance: 5,
-        visibility: 1,
-        vibration: true,
-        sound: 'default',
-      });
-      headsUpChannelReady = true;
-    } catch (e) {
-      // If channel already exists or create fails on non-Android, continue gracefully.
-      headsUpChannelReady = true;
+    for (const channel of Object.values(REMINDER_CHANNELS)) {
+      try {
+        await LocalNotifications.createChannel({
+          id: channel.id,
+          name: channel.name,
+          description: 'Sidekick travel reminders and alerts',
+          importance: 4, // high: makes a sound (if any) and shows a heads-up banner
+          visibility: 1, // public: shown on the lock screen
+          lights: true,
+          vibration: channel.vibration,
+          ...(channel.sound ? { sound: channel.sound } : {}),
+        });
+      } catch (e) {
+        // Creating an existing channel is harmless; non-Android platforms have no channels.
+      }
     }
+    reminderChannelsReady = true;
   }
 
   function reminderNotificationId(email, reminderId) {
@@ -1447,32 +1527,79 @@ if (document.readyState === "loading") {
     }
   }
 
-  async function syncDeviceNotificationsForEmail(email) {
-    if (!hasLocalNotifications()) return;
+  // The notification text: itinerary and pre-alert reminders say how far ahead they are.
+  function reminderNotificationBody(reminder) {
+    const detail = String(reminder.note || reminder.type || 'Reminder from Sidekick').replace(/\s*•\s*$/, '').trim();
+    const lead = reminder.offsetLabel ? `Starts in ${String(reminder.offsetLabel).replace(/\s*before$/i, '')}` : '';
+    return [lead, detail].filter(Boolean).join(' · ') || 'Reminder from Sidekick';
+  }
 
+  // Makes the phone's scheduled notifications match the saved reminders exactly.
+  // Only one sync runs per account at a time; changes made meanwhile trigger one more
+  // pass, so an older pass can never re-schedule a reminder that was just removed.
+  const deviceSyncs = new Map();
+  function syncDeviceNotificationsForEmail(email) {
+    if (!hasLocalNotifications() || !email) return Promise.resolve();
+    const running = deviceSyncs.get(email);
+    if (running) {
+      running.again = true;
+      return running.promise;
+    }
+    const state = { again: false, promise: null };
+    deviceSyncs.set(email, state);
+    state.promise = (async () => {
+      try {
+        while (true) {
+          state.again = false;
+          await syncDeviceNotificationsOnce(email);
+          if (!state.again) break;
+        }
+      } finally {
+        deviceSyncs.delete(email);
+      }
+    })();
+    return state.promise;
+  }
+
+  async function syncDeviceNotificationsOnce(email) {
     bindLocalNotificationListeners();
-    await ensureHeadsUpChannel();
+    await ensureReminderChannels();
     const granted = await ensureNotificationPermission();
     if (!granted) return;
 
     const list = getRemindersFor(email) || [];
     const prefs = getNotificationPrefs(email);
-    const ids = list.map((r) => ({ id: reminderNotificationId(email, r.id) }));
+    const owner = normalizeEmail(email);
 
+    // Cancel everything already scheduled for this account, including reminders that
+    // were deleted since (their IDs are no longer in the list), then schedule afresh.
+    const cancelIds = new Set(list.map((r) => reminderNotificationId(email, r.id)));
     try {
-      if (ids.length) await LocalNotifications.cancel({ notifications: ids });
+      const pending = await LocalNotifications.getPending();
+      (pending?.notifications || []).forEach((notification) => {
+        const extra = notification?.extra || {};
+        if (!extra.test && normalizeEmail(extra.email) === owner) cancelIds.add(Number(notification.id));
+      });
+    } catch (e) {}
+    try {
+      if (cancelIds.size) {
+        await LocalNotifications.cancel({ notifications: [...cancelIds].map((id) => ({ id })) });
+      }
     } catch (e) {}
 
     if (!prefs.enabled) return;
 
+    const channel = reminderChannelFor(prefs);
     const now = Date.now();
     const notifications = list
       .filter((r) => !r.firedAt && !r.suppressed && Number(r.dueAt || 0) > now)
       .map((r) => ({
         id: reminderNotificationId(email, r.id),
         title: String(r.title || 'Sidekick Alert'),
-        body: String(r.note || r.type || 'Reminder from Sidekick'),
-        channelId: REMINDER_CHANNEL_ID,
+        body: reminderNotificationBody(r),
+        channelId: channel.id,
+        // Android 7 has no channels and reads this per notification instead.
+        ...(channel.sound ? { sound: channel.sound } : {}),
         schedule: {
           at: new Date(Number(r.dueAt)),
           allowWhileIdle: true,
@@ -1488,13 +1615,59 @@ if (document.readyState === "loading") {
       if (notifications.length) {
         await LocalNotifications.schedule({ notifications });
       }
+    } catch (e) {
+      console.warn('[Reminders] Could not schedule phone notifications:', e?.message || e);
+    }
+  }
+
+  // Sends one notification a few seconds from now with the current Settings, so the
+  // user can check sound, vibration and the lock screen. Returns { ok, message }.
+  async function sendTestNotification(email) {
+    if (!hasLocalNotifications()) {
+      return { ok: false, message: 'Test notifications work in the Sidekick phone app.' };
+    }
+    const prefs = getNotificationPrefs(email);
+    if (!prefs.enabled) {
+      return { ok: false, message: 'Turn on “Enable reminders” first.' };
+    }
+    bindLocalNotificationListeners();
+    await ensureReminderChannels();
+    const granted = await ensureNotificationPermission();
+    if (!granted) {
+      return { ok: false, message: 'Notifications are blocked. Allow them for Sidekick in your phone’s Settings → Apps → Sidekick → Notifications.' };
+    }
+    const channel = reminderChannelFor(prefs);
+    try {
+      await LocalNotifications.schedule({
+        notifications: [{
+          id: TEST_NOTIFICATION_ID,
+          title: 'Sidekick test notification',
+          body: 'Reminders will look and sound like this.',
+          channelId: channel.id,
+          ...(channel.sound ? { sound: channel.sound } : {}),
+          schedule: { at: new Date(Date.now() + 5000), allowWhileIdle: true },
+          extra: { email, test: true },
+        }],
+      });
+    } catch (e) {
+      return { ok: false, message: `The test notification could not be scheduled: ${e?.message || 'unknown error'}` };
+    }
+    let exactNote = '';
+    try {
+      if (typeof LocalNotifications.checkExactNotificationSetting === 'function') {
+        const exact = await LocalNotifications.checkExactNotificationSetting();
+        if (exact?.exact_alarm && exact.exact_alarm !== 'granted') {
+          exactNote = ' “Alarms & reminders” is off for Sidekick in your phone settings, so reminders may arrive a few minutes late.';
+        }
+      }
     } catch (e) {}
+    return { ok: true, message: `A test notification will arrive in about 5 seconds. You can leave the app to see it.${exactNote}` };
   }
 
   async function ensureReminderNotificationsReady(email) {
     if (!hasLocalNotifications()) return false;
     bindLocalNotificationListeners();
-    await ensureHeadsUpChannel();
+    await ensureReminderChannels();
     const granted = await ensureNotificationPermission();
     if (granted && email) {
       await syncDeviceNotificationsForEmail(email);
@@ -1814,6 +1987,7 @@ if (document.readyState === "loading") {
     window.SidekickCore.updateItineraryActivitySchedule = updateItineraryActivitySchedule;
     window.SidekickCore.getUpcomingRemindersCount = getUpcomingRemindersCount;
     window.SidekickCore.ensureReminderNotificationsReady = ensureReminderNotificationsReady;
+    window.SidekickCore.sendTestNotification = sendTestNotification;
     window.SidekickCore.setReminderSuppressed = function(email, id, value){ setReminderSuppressed(email, id, value); };
   }
 
@@ -1824,6 +1998,13 @@ if (document.readyState === "loading") {
       void syncDeviceNotificationsForEmail(email);
     }catch(e){}
   }
+
+  // Any change to saved reminders (added, edited, removed, cleared) re-syncs the phone's
+  // scheduled notifications, including paths that only edit storage.
+  document.addEventListener('sidekick:reminders-updated', (event) => {
+    const email = event?.detail?.email;
+    if (email) void syncDeviceNotificationsForEmail(email);
+  });
 
   // auto-schedule when a user is authenticated and DOM ready
   document.addEventListener('DOMContentLoaded', () => {

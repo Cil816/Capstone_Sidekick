@@ -596,3 +596,47 @@
 .budget-picker-actions:empty { display: none; }
 .budget-picker-actions .btn:disabled { opacity: .5; cursor: not-allowed; }
 .day-add-row { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* Budget-ranked hotels and restaurants */
+.stay-eat-text small.stay-eat-meta { white-space: normal; }
+.stay-eat-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
+.stay-eat-tags .stay-eat-badge { margin-left: 0; }
+.stay-eat-fit { padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 650; }
+.stay-eat-fit.fit-within { background: #e3f6ec; color: #17663f; }
+.stay-eat-fit.fit-partial { background: #fff4dc; color: #7a4d00; }
+.stay-eat-fit.fit-unknown { background: #eef2f6; color: #4f6375; }
+.stay-eat-fit.fit-over { background: #fdecee; color: #a2283a; }
+.stay-eat-rates-note { margin: -4px 0 10px; font-size: 12px; color: var(--itinerary-muted, #668096); }
+.stay-eat-price-note { flex-basis: 100%; margin: 4px 0 0; font-size: 12px; line-height: 1.45; color: var(--itinerary-muted, #668096); }
+.stay-eat-price-note a { color: var(--itinerary-blue, #2c91b0); font-weight: 600; }
+
+/* Hotel picker: photos and details for the tapped hotel */
+.budget-picker-more { color: var(--itinerary-blue, #2c91b0) !important; font-weight: 600; }
+.hotel-detail { display: flex; flex-direction: column; gap: 8px; }
+.hotel-detail-back { align-self: flex-start; padding: 6px 2px; border: none; background: none; color: var(--itinerary-blue, #2c91b0); font: inherit; font-size: 14px; font-weight: 650; cursor: pointer; }
+.hotel-gallery { display: flex; gap: 8px; overflow-x: auto; scroll-snap-type: x mandatory; -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; padding-bottom: 4px; }
+.hotel-photo { flex: 0 0 88%; margin: 0; scroll-snap-align: start; border-radius: 12px; overflow: hidden; background: #eef2f6; }
+.hotel-photo:only-child { flex-basis: 100%; }
+.hotel-photo img { display: block; width: 100%; height: 190px; object-fit: cover; }
+.hotel-photo figcaption { padding: 4px 8px; font-size: 10px; color: #64748b; background: #f8fafc; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hotel-photo figcaption a { color: inherit; }
+.hotel-detail-name { margin: 2px 0 0; font-size: 18px; color: var(--itinerary-ink, #163457); }
+.hotel-detail-meta { margin: 0; font-size: 13px; font-weight: 600; color: #0f766e; }
+.hotel-detail-fit { margin: 0; font-size: 12px; color: #17663f; }
+.hotel-detail-address, .hotel-detail-summary { margin: 0; font-size: 13px; line-height: 1.5; color: var(--itinerary-ink, #163457); }
+.hotel-detail-address { color: var(--itinerary-muted, #668096); }
+.hotel-detail-extra { display: flex; flex-direction: column; gap: 8px; }
+.hotel-detail-extra:empty { display: none; }
+.hotel-detail-facts { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 10px 12px; list-style: none; border-radius: 12px; background: #f5f9fb; font-size: 13px; }
+.hotel-detail-facts li { display: flex; gap: 10px; min-width: 0; }
+.hotel-detail-facts span { flex: 0 0 64px; color: var(--itinerary-muted, #668096); }
+.hotel-detail-facts a { min-width: 0; color: var(--itinerary-blue, #2c91b0); font-weight: 600; overflow-wrap: anywhere; }
+.hotel-detail-hours { font-size: 13px; color: var(--itinerary-ink, #163457); }
+.hotel-detail-hours summary { cursor: pointer; font-weight: 600; }
+.hotel-detail-hours ul { margin: 6px 0 0; padding-left: 18px; color: var(--itinerary-muted, #668096); }
+.hotel-detail-subhead { margin: 4px 0 0; font-size: 14px; color: var(--itinerary-ink, #163457); }
+.hotel-detail-reviews { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.hotel-detail-reviews li { padding: 10px 12px; border: 1px solid #e1e9f2; border-radius: 12px; }
+.hotel-review-head { margin: 0 0 4px; font-size: 12px; font-weight: 600; color: #0f766e; }
+.hotel-review-head a { color: inherit; }
+.hotel-review-text { margin: 0; font-size: 13px; line-height: 1.5; color: var(--itinerary-ink, #163457); overflow-wrap: anywhere; }

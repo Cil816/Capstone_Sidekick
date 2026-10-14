@@ -38,7 +38,7 @@
           <label class="setting-row">
             <div>
               <span class="setting-title">Sound</span>
-              <small>Play a reminder tone in-app</small>
+              <small>Play a sound when a reminder arrives</small>
             </div>
             <input type="checkbox" id="pref-sound" class="toggle-input" />
           </label>
@@ -49,6 +49,8 @@
             </div>
             <input type="checkbox" id="pref-vibration" class="toggle-input" />
           </label>
+          <button id="test-notification-btn" class="btn btn-outline btn-full settings-action" type="button">Send a test notification</button>
+          <p id="test-notification-status" class="settings-test-status" role="status" aria-live="polite" hidden></p>
         </section>
 
         <section class="settings-card">

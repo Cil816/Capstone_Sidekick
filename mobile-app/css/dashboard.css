@@ -131,7 +131,8 @@
     display: flex;
     gap: 12px;
     overflow-x: auto;
-    max-width: 100%;
+    /* No 100% cap: the negative margins let the row scroll to the screen edges. */
+    max-width: none;
     padding-bottom: 6px;
     margin: 0 -16px;
     padding-left: 16px;

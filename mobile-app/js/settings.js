@@ -27,7 +27,30 @@ document.addEventListener('DOMContentLoaded', () => {
       soundEnabled: prefSoundEl?.checked ?? true,
       vibrationEnabled: prefVibrationEl?.checked ?? true,
     });
+    // Re-schedule the phone's reminders so the new sound/vibration (or "off") applies now.
+    try { window.SidekickCore.scheduleAllFor?.(session.email); } catch (error) {}
     showMessage('Notification settings saved.');
+  }
+
+  const testBtn = document.getElementById('test-notification-btn');
+  const testStatusEl = document.getElementById('test-notification-status');
+  if (testBtn) {
+    testBtn.addEventListener('click', async () => {
+      testBtn.disabled = true;
+      let result;
+      try {
+        result = await window.SidekickCore.sendTestNotification(session.email);
+      } catch (error) {
+        result = { ok: false, message: error?.message || 'The test notification could not be sent.' };
+      } finally {
+        testBtn.disabled = false;
+      }
+      if (testStatusEl) {
+        testStatusEl.textContent = result?.message || '';
+        testStatusEl.classList.toggle('is-error', !result?.ok);
+        testStatusEl.hidden = !testStatusEl.textContent;
+      }
+    });
   }
 
   [prefEnabledEl, prefSoundEl, prefVibrationEl].forEach((el) => {
@@ -126,6 +149,10 @@ document.addEventListener('DOMContentLoaded', () => {
       'sidekick.stayByEmail.v1',
     ];
     try { window.SidekickCore.removeAllRemindersFor?.(email); } catch (error) {}
+    // Onboarding answers, the "already synced" marker, and the remembered account ID,
+    // so registering again with this email starts onboarding fresh.
+    try { window.SidekickCore.clearOnboardingStateForEmail?.(email); } catch (error) {}
+    try { window.SidekickCore.forgetAccountForEmail?.(email); } catch (error) {}
     perEmailKeys.forEach((key) => {
       try {
         const all = JSON.parse(localStorage.getItem(key) || '{}');

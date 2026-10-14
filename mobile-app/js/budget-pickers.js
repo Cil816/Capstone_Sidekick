@@ -114,6 +114,149 @@
     return `★ ${rating.toFixed(1)}${Number.isFinite(count) && count > 0 ? ` (${count.toLocaleString()})` : ""}`;
   }
 
+  // ---- hotel details (photos and information) ----------------------------------
+  const hotelDetailsCache = new Map(); // placeId -> Promise of details (or null)
+  let detailsShownFor = "";
+
+  function photoUrl(resource) {
+    const name = String(resource || "").trim();
+    if (!name || String(window.SIDEKICK_CONFIG?.apiMode || "").toLowerCase() === "development") return "";
+    let base = "";
+    try { base = window.SidekickCore.getApiBaseUrl() || ""; } catch (error) { base = ""; }
+    if (!base && !window.location.protocol.startsWith("http")) return "";
+    return `${base}/api/maps/photo?name=${encodeURIComponent(name)}`;
+  }
+
+  function safeLink(url, text) {
+    const href = String(url || "");
+    return /^https:\/\//i.test(href) ? `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(text)}</a>` : esc(text);
+  }
+
+  function priceLines(hotel) {
+    const nightly = hotel.nightlyHighPhp > hotel.nightlyLowPhp ? `${peso(hotel.nightlyLowPhp)}–${peso(hotel.nightlyHighPhp)}` : peso(hotel.nightlyLowPhp);
+    const stay = hotel.stayHighPhp > hotel.stayLowPhp ? `${peso(hotel.stayLowPhp)}–${peso(hotel.stayHighPhp)}` : peso(hotel.stayLowPhp);
+    return { nightly, stay };
+  }
+
+  // A photo that fails to load is removed instead of showing a broken image.
+  function wirePhotoErrors(container) {
+    container?.querySelectorAll(".hotel-photo img").forEach((img) => {
+      img.addEventListener("error", () => {
+        const figure = img.closest(".hotel-photo");
+        const gallery = figure?.parentElement;
+        figure?.remove();
+        if (gallery && !gallery.children.length) gallery.remove();
+      }, { once: true });
+    });
+  }
+
+  function galleryHtml(photos) {
+    const items = photos
+      .map((photo) => ({ ...photo, url: photoUrl(photo.resource) }))
+      .filter((photo) => photo.url);
+    if (!items.length) return "";
+    return `<div class="hotel-gallery" role="list" aria-label="Hotel photos">${items.map((photo, index) => `
+      <figure class="hotel-photo" role="listitem">
+        <img src="${esc(photo.url)}" alt="Photo ${index + 1} of ${items.length}" loading="${index ? "lazy" : "eager"}" />
+        ${photo.authorName ? `<figcaption>Photo: ${safeLink(photo.authorUri, photo.authorName)}</figcaption>` : ""}
+      </figure>`).join("")}</div>`;
+  }
+
+  // Detail view shown at once from what the list already has; fillHotelDetails adds
+  // the gallery, description, contact details, hours and reviews.
+  // metaText is plain text; fitHtml and noteHtml are markup built with esc()/safeLink().
+  function placeDetailsHtml(place, { backLabel, metaText, fitHtml = "", noteHtml = "" }) {
+    const firstPhoto = place.photoResource ? [{
+      resource: place.photoResource,
+      authorName: place.photoAttribution?.name || "",
+      authorUri: place.photoAttribution?.uri || "",
+    }] : [];
+    return `
+      <div class="hotel-detail">
+        <button type="button" class="hotel-detail-back">‹ ${esc(backLabel)}</button>
+        <div id="hotel-detail-gallery">${galleryHtml(firstPhoto)}</div>
+        <h4 class="hotel-detail-name">${esc(place.name)}</h4>
+        <p class="hotel-detail-meta">${esc(metaText)}</p>
+        ${fitHtml}
+        ${place.address ? `<p class="hotel-detail-address">${esc(place.address)}</p>` : ""}
+        <div id="hotel-detail-extra" class="hotel-detail-extra" aria-live="polite"><p class="budget-picker-status">Loading photos and details…</p></div>
+        ${noteHtml}
+      </div>`;
+  }
+
+  function hotelDetailsHtml(hotel) {
+    const { nightly, stay } = priceLines(hotel);
+    const sources = (Array.isArray(hotel.sourceUrls) ? hotel.sourceUrls : []).filter((url) => /^https:\/\//i.test(String(url))).slice(0, 3);
+    return placeDetailsHtml(hotel, {
+      backLabel: "Back to hotels",
+      metaText: [ratingText(hotel), `${nightly} / night`, `about ${stay} total`].filter(Boolean).join(" • "),
+      fitHtml: hotel.fullyWithinBudget ? '<p class="hotel-detail-fit">Fits your nightly budget</p>' : '<p class="budget-picker-warn">Some room types cost more than your nightly budget</p>',
+      noteHtml: `<p class="budget-picker-note">Price${hotel.basis ? ` (${esc(hotel.basis)})` : ""} comes from current web results and may change.${sources.length ? ` Sources: ${sources.map((url, index) => safeLink(url, String(index + 1))).join(", ")}.` : ""}</p>`,
+    });
+  }
+
+  function loadHotelDetails(placeId, endpoint = "/api/hotels/details") {
+    if (!hotelDetailsCache.has(placeId)) {
+      const request = window.SidekickCore.apiRequest(endpoint, {
+        method: "POST",
+        body: JSON.stringify({ placeId }),
+      }).then((data) => data?.place || null);
+      // Failed lookups are not kept, so opening the hotel again retries.
+      request.catch(() => hotelDetailsCache.delete(placeId));
+      hotelDetailsCache.set(placeId, request);
+    }
+    return hotelDetailsCache.get(placeId);
+  }
+
+  async function fillHotelDetails(hotel, endpoint = "/api/hotels/details") {
+    const placeId = String(hotel.placeId || "");
+    detailsShownFor = placeId;
+    const extra = () => (detailsShownFor === placeId ? $("hotel-detail-extra") : null);
+    if (!placeId) {
+      if (extra()) extra().innerHTML = "";
+      return;
+    }
+    let place = null;
+    try {
+      place = await loadHotelDetails(placeId, endpoint);
+    } catch (error) {
+      if (extra()) extra().innerHTML = '<p class="budget-picker-status">More photos and details are unavailable right now.</p>';
+      return;
+    }
+    const target = extra();
+    if (!target) return; // The user went back or opened another hotel.
+    if (!place) {
+      target.innerHTML = "";
+      return;
+    }
+    const gallery = $("hotel-detail-gallery");
+    if (gallery && place.photos?.length) {
+      gallery.innerHTML = galleryHtml(place.photos);
+      wirePhotoErrors(gallery);
+    }
+
+    const facts = [
+      place.phone && `<li><span>Phone</span><a href="tel:${esc(place.phone.replace(/[^\d+]/g, ""))}">${esc(place.phone)}</a></li>`,
+      place.website && `<li><span>Website</span>${safeLink(place.website, place.website.replace(/^https:\/\/(www\.)?/i, "").replace(/\/$/, ""))}</li>`,
+      place.googleMapsUri && `<li><span>Map</span>${safeLink(place.googleMapsUri, "Open in Google Maps")}</li>`,
+      place.businessStatus && place.businessStatus !== "OPERATIONAL" && `<li><span>Status</span><strong class="budget-picker-warn">${esc(place.businessStatus === "CLOSED_TEMPORARILY" ? "Temporarily closed" : "Permanently closed")}</strong></li>`,
+    ].filter(Boolean);
+    const stars = (rating) => (Number.isFinite(Number(rating)) && rating !== null ? `★ ${Number(rating).toFixed(0)}` : "");
+    target.innerHTML = `
+      ${place.summary ? `<p class="hotel-detail-summary">${esc(place.summary)}</p>` : ""}
+      ${facts.length ? `<ul class="hotel-detail-facts">${facts.join("")}</ul>` : ""}
+      ${place.openingHours?.length ? `<details class="hotel-detail-hours"><summary>Opening hours</summary><ul>${place.openingHours.map((line) => `<li>${esc(line)}</li>`).join("")}</ul></details>` : ""}
+      ${place.reviews?.length ? `
+        <h5 class="hotel-detail-subhead">Recent Google reviews</h5>
+        <ul class="hotel-detail-reviews">${place.reviews.map((review) => `
+          <li>
+            <p class="hotel-review-head">${esc([stars(review.rating), review.when].filter(Boolean).join(" • "))}${review.authorName ? ` — ${safeLink(review.authorUri, review.authorName)}` : ""}</p>
+            <p class="hotel-review-text">${esc(review.text)}</p>
+          </li>`).join("")}
+        </ul>` : ""}
+      <p class="budget-picker-note">Photos, reviews and details from Google Maps.</p>`;
+  }
+
   // ---- hotels (before generating) ------------------------------------------------
   // Resolves to { status: "chosen", hotel } | { status: "skip" } | { status: "cancel" }.
   function askHotel({ destination, lat = null, lng = null, startDate, endDate, budgetAmountPhp }) {
@@ -171,6 +314,7 @@
                 <small>${esc(hotel.address || "")}</small>
                 <small class="budget-picker-meta">${esc([ratingText(hotel), `${nightly} / night`, `about ${stay} total`].filter(Boolean).join(" • "))}</small>
                 ${hotel.fullyWithinBudget ? "" : '<small class="budget-picker-warn">Some room types cost more than your nightly budget</small>'}
+                <small class="budget-picker-more">Photos &amp; details ›</small>
               </span>
             </button>`;
         }).join("");
@@ -178,25 +322,53 @@
           data.overBudgetCount ? `${data.overBudgetCount} over budget` : "",
           data.unpricedCount ? `${data.unpricedCount} without a confirmed price` : "",
         ].filter(Boolean).join(", ");
-        setBody(`${summary}<div class="budget-picker-list" role="list">${rows}</div>${extra ? `<p class="budget-picker-note">Not shown: ${esc(extra)}. Prices come from current web results and may change.</p>` : '<p class="budget-picker-note">Prices come from current web results and may change.</p>'}`);
-        $("budget-picker-body").querySelectorAll(".budget-picker-item").forEach((row) => {
-          row.addEventListener("click", () => {
-            selected = hotels[Number(row.dataset.index)] || null;
-            $("budget-picker-body").querySelectorAll(".budget-picker-item").forEach((item) => item.classList.toggle("selected", item === row));
-            const confirmButton = $("budget-picker-confirm");
-            if (confirmButton) confirmButton.disabled = !selected;
+        const listHtml = `${summary}<div class="budget-picker-list" role="list">${rows}</div>${extra ? `<p class="budget-picker-note">Not shown: ${esc(extra)}. Prices come from current web results and may change.</p>` : '<p class="budget-picker-note">Prices come from current web results and may change.</p>'}`;
+        const chooseSelected = () => {
+          if (!selected) return;
+          onClose = null;
+          close();
+          finish({ status: "chosen", hotel: selected });
+        };
+        let listScrollTop = 0;
+
+        // List view. Tapping a hotel selects it (as before) and opens its details.
+        function showList() {
+          setBody(listHtml);
+          const body = $("budget-picker-body");
+          body.querySelectorAll(".budget-picker-item").forEach((row) => {
+            const hotel = hotels[Number(row.dataset.index)];
+            row.classList.toggle("selected", Boolean(selected) && hotel === selected);
+            row.addEventListener("click", () => {
+              selected = hotel || null;
+              if (!selected) return;
+              listScrollTop = body.scrollTop;
+              showDetails(selected);
+            });
           });
-        });
-        setActions([
-          { label: "Skip hotel", onClick: () => { onClose = null; close(); finish({ status: "skip" }); } },
-          { label: "Continue with this hotel", kind: "primary", id: "budget-picker-confirm", onClick: () => {
-            if (!selected) return;
-            onClose = null;
-            close();
-            finish({ status: "chosen", hotel: selected });
-          } },
-        ]);
-        $("budget-picker-confirm").disabled = true;
+          setActions([
+            { label: "Skip hotel", onClick: () => { onClose = null; close(); finish({ status: "skip" }); } },
+            { label: "Continue with this hotel", kind: "primary", id: "budget-picker-confirm", onClick: chooseSelected },
+          ]);
+          $("budget-picker-confirm").disabled = !selected;
+          body.scrollTop = listScrollTop;
+        }
+
+        // Detail view: photos and information for the selected hotel.
+        function showDetails(hotel) {
+          const body = $("budget-picker-body");
+          setBody(hotelDetailsHtml(hotel));
+          wirePhotoErrors($("hotel-detail-gallery"));
+          body.scrollTop = 0;
+          body.querySelector(".hotel-detail-back")?.addEventListener("click", showList);
+          setActions([
+            { label: "Back to hotels", onClick: showList },
+            { label: "Continue with this hotel", kind: "primary", id: "budget-picker-confirm", onClick: chooseSelected },
+          ]);
+          body.querySelector(".hotel-detail-back")?.focus({ preventScroll: true });
+          void fillHotelDetails(hotel);
+        }
+
+        showList();
       }
     });
   }
@@ -284,23 +456,62 @@
       setActions([{ label: "Close", onClick: () => close() }]);
       return;
     }
-    setBody(`${summary}<div class="budget-picker-list" role="list">${affordable.map((place, index) => `
+    const metaText = (place) => [ratingText(place), priceText(place.price), place.distanceKm !== null ? `${place.distanceKm.toFixed(1)} km away` : ""].filter(Boolean).join(" • ");
+    const listHtml = `${summary}<div class="budget-picker-list" role="list">${affordable.map((place, index) => `
       <button type="button" class="budget-picker-item" data-index="${index}">
         <span class="budget-picker-item-text">
           <strong>${esc(place.name)}</strong>
           <small>${esc(place.address || "")}</small>
-          <small class="budget-picker-meta">${esc([ratingText(place), priceText(place.price), place.distanceKm !== null ? `${place.distanceKm.toFixed(1)} km away` : ""].filter(Boolean).join(" • "))}</small>
+          <small class="budget-picker-meta">${esc(metaText(place))}</small>
+          <small class="budget-picker-more">Photos &amp; details ›</small>
         </span>
-      </button>`).join("")}</div>${note}`);
-    $("budget-picker-body").querySelectorAll(".budget-picker-item").forEach((row) => {
-      row.addEventListener("click", () => {
-        const place = affordable[Number(row.dataset.index)];
-        if (!place) return;
-        close();
-        window.SidekickItineraryEdit?.openAddPlace({ ...place, note: [place.address, priceText(place.price)].filter(Boolean).join(" • ") }, "restaurant", dayIndex);
+      </button>`).join("")}</div>${note}`;
+    // Same action as before this view existed: close and open the add form for this day.
+    const addToDay = (place) => {
+      close();
+      window.SidekickItineraryEdit?.openAddPlace({ ...place, note: [place.address, priceText(place.price)].filter(Boolean).join(" • ") }, "restaurant", dayIndex);
+    };
+    let listScrollTop = 0;
+
+    function showList() {
+      setBody(listHtml);
+      const body = $("budget-picker-body");
+      body.querySelectorAll(".budget-picker-item").forEach((row) => {
+        row.addEventListener("click", () => {
+          const place = affordable[Number(row.dataset.index)];
+          if (!place) return;
+          listScrollTop = body.scrollTop;
+          showDetails(place);
+        });
       });
-    });
-    setActions([{ label: "Close", onClick: () => close() }]);
+      setActions([{ label: "Close", onClick: () => close() }]);
+      body.scrollTop = listScrollTop;
+    }
+
+    // Detail view: photos and information for the tapped restaurant.
+    function showDetails(place) {
+      const body = $("budget-picker-body");
+      const fitsFully = mealCap !== null && place.price?.high !== null && place.price?.high !== undefined && place.price.high <= mealCap;
+      setBody(placeDetailsHtml(place, {
+        backLabel: "Back to restaurants",
+        metaText: metaText(place),
+        fitHtml: mealCap === null ? ""
+          : fitsFully ? '<p class="hotel-detail-fit">Fits your per-meal budget</p>'
+            : '<p class="budget-picker-warn">Starts within your per-meal budget; some meals may cost more</p>',
+        noteHtml: `<p class="budget-picker-note">${place.price?.exact ? "Price range from Google Maps" : "Price estimated from Google’s price level"}, per person. Prices may change.</p>`,
+      }));
+      wirePhotoErrors($("hotel-detail-gallery"));
+      body.scrollTop = 0;
+      body.querySelector(".hotel-detail-back")?.addEventListener("click", showList);
+      setActions([
+        { label: "Back to restaurants", onClick: showList },
+        { label: `Add to ${dayLabel}`, kind: "primary", onClick: () => addToDay(place) },
+      ]);
+      body.querySelector(".hotel-detail-back")?.focus({ preventScroll: true });
+      void fillHotelDetails(place, "/api/places/details");
+    }
+
+    showList();
   }
 
   window.SidekickBudgetPickers = { askHotel, openRestaurants };

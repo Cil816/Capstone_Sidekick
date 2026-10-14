@@ -322,11 +322,14 @@ Output rules:
 - Mention app actions naturally (Itinerary tab, Alerts tab) when useful.`;
 }
 
-async function askSidekickBackend(history, prefs, state, userText) {
+// kind "continuation" marks the app's automatic follow-up request, so the
+// server doesn't count it as a message the user sent.
+async function askSidekickBackend(history, prefs, state, userText, kind = "message") {
   const selectedDestination = getSelectedDestination();
   const payload = {
     email: window.SidekickCore.getAuthSession()?.email || "",
     message: userText,
+    kind,
     selectedDestination,
     history: (history || []).slice(-12).map((item) => ({ role: item.role, content: item.content, ts: item.ts })),
     profile: {
@@ -359,7 +362,8 @@ async function continueIncompleteReply(reply, prefs, state, email) {
       history,
       prefs,
       state,
-      "Continue your immediately previous answer from its last words. Do not repeat anything already written; finish the incomplete thought and any remaining points."
+      "Continue your immediately previous answer from its last words. Do not repeat anything already written; finish the incomplete thought and any remaining points.",
+      "continuation"
     );
     const continuationText = String(continuation?.reply || "").trim();
     if (continuationText) return `${initial} ${continuationText}`;
@@ -379,6 +383,8 @@ async function generateItineraryWithBackend(prefs, state, userText) {
     body: JSON.stringify({
       email: session?.email || "",
       message: userText,
+      // Lets the server count this as a chatbot message (other screens also generate itineraries).
+      source: "chat",
       selectedDestination: state.destination ? { name: state.destination } : null,
       profile: {
         ...prefs,

@@ -31,7 +31,10 @@
     kind: "hotels",
     areaKey: "",
     area: null, // { name, lat, lng }
-    lists: {}, // kind -> places
+    lists: {}, // `${kind}|${areaKey}` -> unranked search results
+    ranked: null, // { kind, trip, places } currently shown, ranked against the budget
+    rateCache: new Map(), // `${areaKey}|${start}|${end}` -> researched hotel rates
+    ratesNote: "",
     shown: 0,
     loadedKey: "", // `${kind}|${areaKey}` of the list currently rendered
     requestId: 0,
@@ -86,6 +89,99 @@
     if (!Number.isFinite(rating) || rating <= 0) return "";
     const count = Number(place.ratingCount);
     return `★ ${rating.toFixed(1)}${Number.isFinite(count) && count > 0 ? ` (${count.toLocaleString()})` : ""}`;
+  }
+
+  // ---- budget fit ------------------------------------------------------------
+  // Shares of the whole-trip budget, matching the backend and the budget pickers:
+  // 40% for lodging and 20% for meals eaten out (two a day).
+  const LODGING_SHARE = 0.4;
+  const MEAL_SHARE = 0.2;
+  const MEALS_OUT_PER_DAY = 2;
+  // Rough PHP ranges for Google's price levels, used only when there is no
+  // researched rate or Google price range. Hotels: per night. Restaurants: per person.
+  const PRICE_LEVEL_PHP = {
+    hotels: {
+      PRICE_LEVEL_INEXPENSIVE: [800, 2000],
+      PRICE_LEVEL_MODERATE: [2000, 4500],
+      PRICE_LEVEL_EXPENSIVE: [4500, 9000],
+      PRICE_LEVEL_VERY_EXPENSIVE: [9000, null],
+    },
+    restaurants: {
+      PRICE_LEVEL_FREE: [0, 0],
+      PRICE_LEVEL_INEXPENSIVE: [100, 300],
+      PRICE_LEVEL_MODERATE: [300, 700],
+      PRICE_LEVEL_EXPENSIVE: [700, 1500],
+      PRICE_LEVEL_VERY_EXPENSIVE: [1500, 4000],
+    },
+  };
+  const FIT_ORDER = { within: 0, partial: 1, unknown: 2, over: 3 };
+  const FIT_LABEL = { within: "Within budget", partial: "May fit budget", unknown: "Price unknown", over: "Over budget" };
+  const peso = (amount) => `₱${Math.round(Number(amount)).toLocaleString()}`;
+
+  function parseDay(value) {
+    const text = String(value || "").slice(0, 10);
+    return /^\d{4}-\d{2}-\d{2}$/.test(text) && Number.isFinite(Date.parse(`${text}T00:00:00Z`)) ? text : "";
+  }
+
+  // The trip budget and dates: the form first, then the saved itinerary.
+  function readTrip() {
+    let meta = {};
+    try { meta = window.SidekickCore.getItineraryByEmail()[state.email]?.meta || {}; } catch (error) {}
+    const typedBudget = Number($("itinerary-budget")?.value);
+    const budget = Number.isFinite(typedBudget) && typedBudget > 0 ? Math.floor(typedBudget)
+      : Number(meta.budgetAmountPhp) > 0 ? Math.floor(Number(meta.budgetAmountPhp)) : null;
+    const startDate = parseDay($("itinerary-start")?.value) || parseDay(meta.startDate);
+    const endDate = parseDay($("itinerary-end")?.value) || parseDay(meta.endDate);
+    let days = null;
+    if (startDate && endDate) {
+      const span = Math.round((Date.parse(`${endDate}T00:00:00Z`) - Date.parse(`${startDate}T00:00:00Z`)) / 86400000) + 1;
+      if (span >= 1 && span <= 14) days = span;
+    }
+    // Per-night and per-meal amounts need the trip length; without dates, rank by stars only.
+    if (!budget || !days) return { budget, days, startDate, endDate };
+    const nights = Math.max(1, days - 1);
+    return {
+      budget, days, startDate, endDate, nights,
+      hotelCap: Math.floor((budget * LODGING_SHARE) / nights),
+      mealCap: Math.floor((budget * MEAL_SHARE) / (days * MEALS_OUT_PER_DAY)),
+    };
+  }
+
+  // { low, high, source } in PHP: per night for hotels, per person for restaurants.
+  function placePrice(place, kind) {
+    const rate = place.researchedRate;
+    if (kind === "hotels" && rate && Number(rate.lowPhp) > 0) {
+      return { low: Number(rate.lowPhp), high: Number(rate.highPhp) || null, source: "researched" };
+    }
+    const range = place.priceRange;
+    if (range && Number.isFinite(Number(range.lowPhp))) {
+      const high = range.highPhp == null ? null : Number(range.highPhp);
+      return { low: Number(range.lowPhp), high: Number.isFinite(high) ? high : null, source: "google" };
+    }
+    const level = PRICE_LEVEL_PHP[kind]?.[place.priceLevel];
+    return level ? { low: level[0], high: level[1], source: "estimate" } : null;
+  }
+
+  function budgetFit(price, cap) {
+    if (!price) return "unknown";
+    if (price.low > cap) return "over";
+    // An open-ended range ("₱9,000+") can't be confirmed as fully within budget.
+    return price.high != null && price.high <= cap ? "within" : "partial";
+  }
+
+  function priceText(price, kind) {
+    if (!price) return "";
+    const range = price.high != null && price.high > price.low ? `${peso(price.low)}–${peso(price.high)}`
+      : price.high == null ? `${peso(price.low)}+` : peso(price.low);
+    return `${price.source === "estimate" ? "about " : ""}${range} ${kind === "hotels" ? "/ night" : "/ person"}`;
+  }
+
+  // Stars weighted by review count: a 4.9 from 8 reviews ranks below a 4.7 from 2,000.
+  function starScore(place) {
+    const rating = Number(place.rating) || 0;
+    const count = Number(place.ratingCount) || 0;
+    if (!rating) return 0;
+    return (rating * count + 4.0 * 20) / (count + 20);
   }
 
   // ---- chosen hotel storage ------------------------------------------------
@@ -193,26 +289,61 @@
   }
 
   // ---- search --------------------------------------------------------------
-  function rankPlaces(places, area) {
-    const hasArea = area && hasCoords(area);
-    const scored = places.map((place) => {
-      const rating = Number(place.rating) || 0;
-      const count = Number(place.ratingCount) || 0;
-      const quality = count ? (rating * count + 4.2 * 25) / (count + 25) : rating * 0.8;
-      const dist = hasArea && hasCoords(place) ? distanceKm(area, place) : null;
-      return { place: { ...place, distanceKm: dist }, score: quality + Math.log10(count + 1) * 0.35 - (dist === null ? 0 : dist / 25) };
+  // With a budget: places that fit come first, then unknown prices, then over budget.
+  // Within each group, better stars (weighted by review count) come first.
+  // Without a budget (or dates), it is simply best stars first.
+  function rankPlaces(places, kind, trip) {
+    const cap = kind === "hotels" ? trip?.hotelCap : trip?.mealCap;
+    const ranked = places.map((place) => {
+      const price = placePrice(place, kind);
+      return { ...place, price, fit: cap ? budgetFit(price, cap) : null, stars: starScore(place) };
     });
-    // Highest rated first; more reviews, then closer to the destination, break ties.
-    scored.sort((a, b) => {
-      const ar = Number(a.place.rating) || 0;
-      const br = Number(b.place.rating) || 0;
-      if (br !== ar) return br - ar;
-      const ac = Number(a.place.ratingCount) || 0;
-      const bc = Number(b.place.ratingCount) || 0;
-      if (bc !== ac) return bc - ac;
-      return (a.place.distanceKm ?? Infinity) - (b.place.distanceKm ?? Infinity);
+    ranked.sort((a, b) => (cap ? FIT_ORDER[a.fit] - FIT_ORDER[b.fit] : 0)
+      || b.stars - a.stars
+      || (Number(b.ratingCount) || 0) - (Number(a.ratingCount) || 0)
+      || (a.distanceKm ?? Infinity) - (b.distanceKm ?? Infinity));
+    return ranked;
+  }
+
+  // Researched nightly rates from the backend (web-sourced, cached there for 6 hours).
+  async function fetchHotelRates(area, trip) {
+    const key = `${state.areaKey}|${trip.startDate}|${trip.endDate}`;
+    if (state.rateCache.has(key)) return state.rateCache.get(key);
+    try {
+      const data = await window.SidekickCore.apiRequest("/api/hotels/budget-options", {
+        method: "POST",
+        body: JSON.stringify({
+          destination: area.name, startDate: trip.startDate, endDate: trip.endDate,
+          budgetAmountPhp: trip.budget, lat: area.lat, lng: area.lng,
+        }),
+      });
+      if (data.isDevelopmentMock) return { hotels: [], failed: true };
+      const result = { hotels: [...(data.hotels || []), ...(data.overBudgetHotels || [])], failed: false };
+      state.rateCache.set(key, result);
+      return result;
+    } catch (error) {
+      // Not cached, so a later attempt can try again (for example after a rate limit).
+      return { hotels: [], failed: true };
+    }
+  }
+
+  function withHotelRates(places, rateResult, area) {
+    const byId = new Map(rateResult.hotels.map((hotel) => [hotel.placeId, hotel]));
+    const rateOf = (hotel) => ({
+      lowPhp: hotel.nightlyLowPhp, highPhp: hotel.nightlyHighPhp, basis: hotel.basis || "", sourceUrls: hotel.sourceUrls || [],
     });
-    return scored.map((entry) => entry.place);
+    const merged = places.map((place) => (byId.has(place.placeId) ? { ...place, researchedRate: rateOf(byId.get(place.placeId)) } : place));
+    const known = new Set(places.map((place) => place.placeId));
+    // Priced hotels the general search missed are added too.
+    for (const hotel of rateResult.hotels) {
+      if (known.has(hotel.placeId) || !hasCoords(hotel)) continue;
+      merged.push({
+        ...hotel,
+        distanceKm: hasCoords(area) ? distanceKm(area, hotel) : null,
+        researchedRate: rateOf(hotel),
+      });
+    }
+    return merged;
   }
 
   async function searchKind(kind, area) {
@@ -231,7 +362,8 @@
       const near = places.filter((place) => distanceKm(area, place) <= NEARBY_RADIUS_KM);
       if (near.length >= 3) places = near;
     }
-    return { places: rankPlaces(places, area), isDevelopmentMock: false };
+    places = places.map((place) => ({ ...place, distanceKm: hasCoords(area) ? distanceKm(area, place) : null }));
+    return { places, isDevelopmentMock: false };
   }
 
   function setStatus(text) {
@@ -249,6 +381,7 @@
       if (more) more.hidden = true;
       setStatus("Choose a destination above to see hotels and restaurants nearby.");
       state.loadedKey = "";
+      state.ranked = null;
       return;
     }
     const requestId = ++state.requestId;
@@ -270,43 +403,107 @@
         if (requestId !== state.requestId) return;
         state.lists[cacheKey] = result;
       }
-      const result = state.lists[cacheKey];
       state.loadedKey = cacheKey;
       state.stale = false;
-      state.shown = 0;
-      const subtitle = $("stay-eat-area");
-      if (subtitle) subtitle.textContent = `Near ${area.name} \u2022 Highest rated first`;
+      const result = state.lists[cacheKey];
       if (result.isDevelopmentMock) {
+        state.ranked = null;
         setStatus("Hotel and restaurant search needs live Google Places data, which is not available in development mode.");
         return;
       }
-      if (!result.places.length) {
-        setStatus(KINDS[kind].empty);
-        return;
+      renderRanked();
+
+      // Hotels: fetch researched nightly rates in the background, then re-rank.
+      const trip = readTrip();
+      if (kind === "hotels" && trip.hotelCap && result.places.length) {
+        const rateKey = `${state.areaKey}|${trip.startDate}|${trip.endDate}`;
+        if (!state.rateCache.has(rateKey)) {
+          state.ratesNote = "Checking current hotel prices… Estimates are shown until then.";
+          renderSubtitle();
+          const rates = await fetchHotelRates(area, trip);
+          if (requestId !== state.requestId) return;
+          state.ratesNote = rates.failed
+            ? "Live hotel prices are unavailable right now, so prices are estimated from Google’s price levels."
+            : "";
+          renderRanked();
+        }
       }
-      setStatus("");
-      showMore();
     } catch (error) {
       if (requestId !== state.requestId) return;
       setStatus(error?.message || "Unable to load nearby places right now.");
     }
   }
 
+  // Ranks the loaded list against the current budget and redraws it.
+  // Budget and date edits only call this; no new search is made.
+  function renderRanked() {
+    const result = state.lists[state.loadedKey];
+    const list = $("stay-eat-list");
+    if (!result || !list || result.isDevelopmentMock) return;
+    const kind = state.loadedKey.split("|")[0];
+    const trip = readTrip();
+    let places = result.places;
+    if (kind === "hotels" && trip.startDate && trip.endDate) {
+      const rates = state.rateCache.get(`${state.areaKey}|${trip.startDate}|${trip.endDate}`);
+      if (rates) places = withHotelRates(places, rates, state.area);
+    }
+    state.ranked = { kind, trip, places: rankPlaces(places, kind, trip) };
+    list.replaceChildren();
+    state.shown = 0;
+    renderSubtitle();
+    if (!state.ranked.places.length) {
+      setStatus(KINDS[kind].empty);
+      if ($("stay-eat-more")) $("stay-eat-more").hidden = true;
+      return;
+    }
+    setStatus("");
+    showMore();
+  }
+
+  function renderSubtitle() {
+    const subtitle = $("stay-eat-area");
+    if (!subtitle || !state.area) return;
+    const trip = readTrip();
+    const kind = state.kind;
+    let text = `Near ${state.area.name}`;
+    if (trip.budget && trip.days) {
+      const cap = kind === "hotels" ? trip.hotelCap : trip.mealCap;
+      text += kind === "hotels"
+        ? ` • Up to ${peso(cap)} a night (40% of your budget over ${trip.nights} night${trip.nights === 1 ? "" : "s"})`
+        : ` • Up to ${peso(cap)} a meal per person (20% of your budget, 2 meals a day)`;
+      text += " • Fits your budget first, then best rated";
+    } else if (trip.budget) {
+      text += " • Add trip dates to rank by your budget • Best rated first";
+    } else {
+      text += " • Enter a budget to see what fits • Best rated first";
+    }
+    subtitle.textContent = text;
+    const note = $("stay-eat-rates-note");
+    if (note) {
+      note.textContent = kind === "hotels" ? state.ratesNote : "";
+      note.hidden = !note.textContent;
+    }
+  }
+
   function currentResult() {
-    return state.lists[state.loadedKey] || null;
+    return state.ranked;
   }
 
   function rowMarkup(place, index) {
+    const kind = state.ranked?.kind || state.kind;
     const detail = [
       ratingLabel(place),
-      priceLabel(place.priceLevel),
+      priceText(place.price, kind) || priceLabel(place.priceLevel),
       place.distanceKm != null ? `${place.distanceKm < 10 ? place.distanceKm.toFixed(1) : Math.round(place.distanceKm)} km away` : "",
     ].filter(Boolean).join(" • ");
-    const chosen = state.kind === "hotels" && isChosenStay(place);
+    const chosen = kind === "hotels" && isChosenStay(place);
+    const fit = place.fit ? `<b class="stay-eat-fit fit-${place.fit}">${esc(FIT_LABEL[place.fit])}</b>` : "";
     return `<button type="button" class="stay-eat-item${chosen ? " chosen" : ""}" role="listitem" data-index="${index}">`
       + `<span class="stay-eat-text"><strong>${esc(place.name)}</strong>`
       + `<small>${esc(place.address || "Address unavailable")}</small>`
-      + `<small class="stay-eat-meta">${esc(detail)}${chosen ? ' <b class="stay-eat-badge">Your stay</b>' : ""}</small></span>`
+      + `<small class="stay-eat-meta">${esc(detail)}</small>`
+      + (fit || chosen ? `<span class="stay-eat-tags">${fit}${chosen ? '<b class="stay-eat-badge">Your stay</b>' : ""}</span>` : "")
+      + "</span>"
       + '<svg class="stay-eat-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>'
       + "</button>";
   }
@@ -334,12 +531,17 @@
     list.querySelectorAll(".stay-eat-item").forEach((row) => {
       const place = result.places[Number(row.dataset.index)];
       if (!place) return;
-      const chosen = state.kind === "hotels" && isChosenStay(place);
+      const chosen = result.kind === "hotels" && isChosenStay(place);
       row.classList.toggle("chosen", chosen);
-      const meta = row.querySelector(".stay-eat-meta");
-      if (!meta) return;
-      meta.querySelector(".stay-eat-badge")?.remove();
-      if (chosen) meta.insertAdjacentHTML("beforeend", ' <b class="stay-eat-badge">Your stay</b>');
+      let tags = row.querySelector(".stay-eat-tags");
+      tags?.querySelector(".stay-eat-badge")?.remove();
+      if (!chosen) return;
+      if (!tags) {
+        tags = document.createElement("span");
+        tags.className = "stay-eat-tags";
+        row.querySelector(".stay-eat-text")?.appendChild(tags);
+      }
+      tags.insertAdjacentHTML("beforeend", '<b class="stay-eat-badge">Your stay</b>');
     });
   }
 
@@ -481,12 +683,22 @@
       }
     }
 
+    const priceSource = {
+      researched: "Current rate found online",
+      google: "Price range from Google",
+      estimate: "Estimated from Google’s price level",
+    }[place.price?.source] || "";
     const facts = [
       ratingLabel(place) && ["Rating", ratingLabel(place)],
-      priceLabel(place.priceLevel) && ["Price", priceLabel(place.priceLevel)],
+      place.price ? ["Price", priceText(place.price, kind)] : priceLabel(place.priceLevel) && ["Price", priceLabel(place.priceLevel)],
+      place.fit && ["Your budget", FIT_LABEL[place.fit]],
       place.distanceKm != null && ["Distance", `${place.distanceKm < 10 ? place.distanceKm.toFixed(1) : Math.round(place.distanceKm)} km from ${state.area?.name || "destination"}`],
     ].filter(Boolean);
-    $("stay-eat-modal-facts").innerHTML = facts.map(([label, value]) => `<div class="stay-eat-fact"><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`).join("");
+    const sources = (place.researchedRate?.sourceUrls || []).filter((url) => /^https:\/\//i.test(String(url))).slice(0, 3);
+    $("stay-eat-modal-facts").innerHTML = facts.map(([label, value]) => `<div class="stay-eat-fact"><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`).join("")
+      + (priceSource ? `<p class="stay-eat-price-note">${esc(priceSource)}${place.researchedRate?.basis ? `: ${esc(place.researchedRate.basis)}` : ""}.`
+        + (sources.length ? ` Sources: ${sources.map((url, i) => `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${i + 1}</a>`).join(", ")}` : "")
+        + " Check the price before booking.</p>" : "");
 
     const tagLabels = (place.types || [])
       .filter((type) => !["point_of_interest", "establishment"].includes(type))
@@ -553,11 +765,43 @@
     }
     $("stay-eat-more")?.addEventListener("click", showMore);
 
+    // Show recommendations as soon as both a destination and a budget are entered.
+    const maybeAutoOpen = () => {
+      if (section.open || !currentDestination() || !readTrip().budget) return;
+      section.open = true; // fires "toggle", which loads the list
+    };
+
+    // Budget or dates changed: re-rank the loaded list (no new place search).
+    // New dates may also need researched hotel rates for those nights.
+    let rerankTimer = null;
+    const onBudgetOrDatesChanged = () => {
+      clearTimeout(rerankTimer);
+      rerankTimer = setTimeout(() => {
+        if (!section.open) {
+          maybeAutoOpen();
+          return;
+        }
+        if (!state.loadedKey) return;
+        const trip = readTrip();
+        const needsRates = state.kind === "hotels" && trip.hotelCap
+          && !state.rateCache.has(`${state.areaKey}|${trip.startDate}|${trip.endDate}`);
+        if (needsRates) void loadKind(state.kind);
+        else renderRanked();
+      }, 500);
+    };
+    ["itinerary-budget", "itinerary-start", "itinerary-end"].forEach((id) => {
+      $(id)?.addEventListener("input", onBudgetOrDatesChanged);
+      $(id)?.addEventListener("change", onBudgetOrDatesChanged);
+    });
+
     // The destination changed: mark stale and reload right away if the section is open.
     let reloadTimer = null;
     const onDestinationChanged = () => {
       state.stale = true;
-      if (!section.open) return;
+      if (!section.open) {
+        maybeAutoOpen();
+        return;
+      }
       clearTimeout(reloadTimer);
       reloadTimer = setTimeout(() => setKind(state.kind), 400);
     };

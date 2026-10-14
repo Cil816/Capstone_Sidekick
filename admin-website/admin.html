@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Sidekick Admin</title>
+    <title>Dashboard · Sidekick Admin</title>
     <link rel="stylesheet" href="css/admin.css" />
   </head>
   <body data-page="dashboard">
@@ -17,7 +17,7 @@
           </div>
         </div>
         <nav>
-          <a class="admin-nav-link active" href="admin.html">Overview</a>
+          <a class="admin-nav-link active" href="admin.html" aria-current="page">Dashboard</a>
           <a class="admin-nav-link" href="admin-users.html">Users</a>
           <a class="admin-nav-link" href="admin-itineraries.html">Travel plans</a>
           <a class="admin-nav-link" href="admin-analytics.html">Reports</a>
@@ -32,23 +32,143 @@
       <main class="admin-main">
         <div class="admin-topbar">
           <div>
-            <h1 class="admin-page-title">Overview</h1>
-            <p class="admin-subtitle">A snapshot of Sidekick accounts and saved travel plans.</p>
+            <h1 class="admin-page-title">Dashboard</h1>
+            <p class="admin-subtitle">Sidekick accounts, saved itineraries, and how people use the app, at a glance.</p>
           </div>
           <div class="admin-toolbar">
-            <span class="admin-pill">Sidekick admin</span>
+            <span id="dashboard-updated" class="admin-updated" aria-live="polite"></span>
           </div>
         </div>
 
         <div id="admin-status-banner" class="admin-status-banner" aria-live="polite"></div>
 
-        <section class="admin-grid" id="dashboard-summary"></section>
-        <p class="admin-subtitle">Travel plans saved only on a user's device aren't included.</p>
+        <section class="dashboard-section" aria-labelledby="key-numbers-heading">
+          <h2 id="key-numbers-heading" class="section-heading">Key numbers</h2>
+          <div class="admin-grid stat-grid" id="dashboard-summary"></div>
+        </section>
 
-        <div class="content-grid">
+        <section class="dashboard-section" aria-labelledby="trends-heading">
+          <div class="section-heading-row">
+            <h2 id="trends-heading" class="section-heading">Activity over time</h2>
+            <div class="range-picker" role="group" aria-label="Date range for the graphs">
+              <button type="button" class="range-option" data-range="7" aria-pressed="false">7 days</button>
+              <button type="button" class="range-option" data-range="30" aria-pressed="true">30 days</button>
+              <button type="button" class="range-option" data-range="90" aria-pressed="false">90 days</button>
+            </div>
+          </div>
+
+          <div class="chart-grid">
+            <article class="admin-card chart-card">
+              <header class="chart-card-header">
+                <div>
+                  <h3>Itineraries saved</h3>
+                  <p class="chart-caption">Itineraries saved to Sidekick accounts per day, <span data-range-label>last 30 days</span>.</p>
+                </div>
+                <div class="chart-total" id="chart-itineraries-total"></div>
+              </header>
+              <div id="chart-itineraries" class="line-chart" role="img" aria-label="Itineraries saved per day"></div>
+              <p class="chart-footnote">Counts saved itinerary records by creation date. Plans kept only on a phone, deleted by the user, or removed after the trip ended aren't counted.</p>
+            </article>
+
+            <article class="admin-card chart-card">
+              <header class="chart-card-header">
+                <div>
+                  <h3>New registrations</h3>
+                  <p class="chart-caption">New Sidekick accounts per day, <span data-range-label>last 30 days</span>.</p>
+                </div>
+                <div class="chart-total" id="chart-registrations-total"></div>
+              </header>
+              <div id="chart-registrations" class="line-chart" role="img" aria-label="New registrations per day"></div>
+              <p class="chart-footnote">Unverified accounts are removed after 24 hours, so they only appear here briefly.</p>
+            </article>
+
+            <article class="admin-card chart-card" id="card-signins">
+              <header class="chart-card-header">
+                <div>
+                  <h3>User sign-ins</h3>
+                  <p class="chart-caption">Successful sign-ins per day, <span data-range-label>last 30 days</span>.</p>
+                </div>
+                <div class="chart-total" id="chart-signins-total"></div>
+              </header>
+              <div id="chart-signins" class="line-chart" role="img" aria-label="User sign-ins per day"></div>
+              <p class="chart-footnote" data-usage-since>Counts email-and-password sign-ins. Automatic sign-in right after registering isn't included.</p>
+            </article>
+
+            <article class="admin-card chart-card" id="card-chat">
+              <header class="chart-card-header">
+                <div>
+                  <h3>Chatbot usage</h3>
+                  <p class="chart-caption">Messages sent to the Sidekick chatbot per day, <span data-range-label>last 30 days</span>.</p>
+                </div>
+                <div class="chart-total" id="chart-chat-total"></div>
+              </header>
+              <div id="chart-chat" class="line-chart" role="img" aria-label="Chatbot messages per day"></div>
+              <p class="chart-footnote" data-usage-since>Counts messages users send that reach Sidekick's AI. Message text is never stored.</p>
+            </article>
+          </div>
+        </section>
+
+        <section class="dashboard-section" aria-labelledby="plans-heading">
+          <div class="section-heading-row">
+            <h2 id="plans-heading" class="section-heading">What users plan</h2>
+            <a class="admin-link" href="admin-users.html#user-picks">Full rankings and per-user details</a>
+          </div>
+          <p class="section-note plans-scope">From itineraries currently saved in user accounts. Restaurants and hotels count only places users added to an itinerary. Itineraries are removed after the trip ends.</p>
+          <h3 class="subsection-heading">Typical itinerary (median)</h3>
+          <div id="plan-medians" class="admin-grid stat-grid median-grid"></div>
+          <div class="chart-grid plan-chart-grid">
+            <article class="admin-card chart-card">
+              <header class="chart-card-header">
+                <div>
+                  <h3>Most planned activities</h3>
+                  <p class="chart-caption">Top 5 by number of users who planned them.</p>
+                </div>
+              </header>
+              <div id="plan-activities" class="hbar-container"></div>
+            </article>
+            <article class="admin-card chart-card">
+              <header class="chart-card-header">
+                <div>
+                  <h3>Most picked restaurants</h3>
+                  <p class="chart-caption">Top 5 by number of users who added them.</p>
+                </div>
+              </header>
+              <div id="plan-restaurants" class="hbar-container"></div>
+            </article>
+            <article class="admin-card chart-card">
+              <header class="chart-card-header">
+                <div>
+                  <h3>Most picked hotels</h3>
+                  <p class="chart-caption">Top 5 by number of users who added them.</p>
+                </div>
+              </header>
+              <div id="plan-hotels" class="hbar-container"></div>
+            </article>
+            <article class="admin-card chart-card">
+              <header class="chart-card-header">
+                <div>
+                  <h3>Most planned destinations</h3>
+                  <p class="chart-caption">Top 5 by number of users with a saved itinerary there.</p>
+                </div>
+              </header>
+              <div id="plan-destinations" class="hbar-container"></div>
+            </article>
+          </div>
+        </section>
+
+        <section class="dashboard-section" aria-labelledby="user-base-heading">
+          <div class="section-heading-row">
+            <h2 id="user-base-heading" class="section-heading">Who uses Sidekick</h2>
+            <span id="user-base-coverage" class="section-note"></span>
+          </div>
+          <div id="user-base-summary" class="insight-grid"></div>
+        </section>
+
+        <section class="dashboard-section content-grid" aria-label="Recent activity and definitions">
           <div class="admin-card">
             <div class="admin-panel-header">
-              <h2>Recent sign-ups and saved plans</h2>
+              <h2>Recent activity</h2>
+              <a class="admin-link" href="admin-activity.html">View all activity</a>
             </div>
             <div id="recent-activity-list" class="admin-logger"></div>
           </div>
@@ -56,17 +176,20 @@
           <div class="admin-card">
             <div class="admin-panel-header">
               <h2>About these numbers</h2>
+              <a class="admin-link" href="admin-analytics.html">Per-user reports</a>
             </div>
-            <ul class="admin-logger">
-              <li class="logger-item"><span class="logger-text">Account status and email verification are tracked separately.</span></li>
-              <li class="logger-item"><span class="logger-text">AI requests and route searches aren't recorded, so they aren't included.</span></li>
-              <li class="logger-item"><span class="logger-text">Recent activity shows when accounts and saved plans were created; it isn't a full activity history.</span></li>
-              <li class="logger-item"><span class="logger-text">Admin sign-in history appears when audit logging is set up.</span></li>
+            <ul class="admin-logger definition-list">
+              <li class="logger-item"><span class="logger-text">Dates on graphs are UTC calendar days.</span></li>
+              <li class="logger-item"><span class="logger-text">Every itinerary the AI creates is saved to the user's account. The saved count therefore covers generated plans that still exist, not every generation attempt.</span></li>
+              <li class="logger-item"><span class="logger-text">Itineraries are removed automatically after the trip ends, so older history shrinks over time.</span></li>
+              <li class="logger-item"><span class="logger-text">Sign-ins and chatbot messages are counted from the day usage tracking was set up. Earlier activity wasn't recorded.</span></li>
             </ul>
           </div>
-        </div>
+        </section>
       </main>
     </div>
+
+    <div id="chart-tooltip" class="chart-tooltip" role="presentation" hidden></div>
 
     <script src="js/config.js"></script>
     <script src="js/admin.js"></script>

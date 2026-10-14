@@ -624,3 +624,30 @@ input:focus, select:focus, textarea:focus {
     line-height: 1.4;
     text-align: center;
 }
+
+/* Phones: let every screen fill the full width. The shared container padding
+   left an empty strip down both sides, and backgrounds and carousels stopped
+   short of the screen edge. Each screen already pads its own content. */
+@media (max-width: 600px) {
+    .app-container {
+        padding-left: 0;
+        padding-right: 0;
+        max-width: 100%;
+        /* Stops a stray wide element from letting the page pan sideways. */
+        overflow-x: clip;
+    }
+
+    /* Profile has no page stylesheet of its own for this header; dashboard.css
+       loads later and keeps its own padding. */
+    .header-section {
+        padding-left: 24px;
+        padding-right: 24px;
+    }
+
+    /* Keep the floating nav fully on screen, above any device gesture area. */
+    .bottom-nav.overlay {
+        bottom: calc(8px + env(safe-area-inset-bottom));
+        width: calc(100% - 24px);
+        max-width: none;
+    }
+}

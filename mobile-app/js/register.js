@@ -189,6 +189,8 @@ function bindRegisterForm() {
         apiToken: result.session?.token || "",
         loggedInAt: Date.now(),
       });
+      // A brand-new account: drop any onboarding answers left from an earlier account with this email.
+      window.SidekickCore.recordAccountForEmail(result.user.email, result.user.user_id, { newAccount: true });
       window.location.href = "onboarding.html";
     } catch (error) {
       setRegisterError(error.message || "Registration failed. Please try again.");

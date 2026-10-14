@@ -67,7 +67,7 @@ Still recommended: a manual pass with Android **TalkBack** on the built APK, and
 | Asset | Status |
 |---|---|
 | `assets/sidekick-logo-*.png` (app + admin) | **Confirm you created it** or have a license. If it was AI-generated, keep a record of the tool and its terms. |
-| `assets/sidekick-robot.png.jpg` | **Not used anywhere.** Delete it, or confirm its source before using it. |
+| `assets/sidekick-robot.png.jpg` | **Deleted.** The robot image (also formerly the Android launcher icon) was removed; the app icon is now the compass logo. |
 | Google place photos | Shown under Google Maps Platform terms with author attribution, via Google's API (not copied). Do not download or re-host them. |
 | Google logo on the itinerary autocomplete | Required attribution, used as Google provides it. |
 | Fonts (DM Sans / Manrope via Google Fonts) | Open Font License; free to use. |
@@ -117,5 +117,5 @@ Still recommended: a manual pass with Android **TalkBack** on the built APK, and
 ## 9. Your to-do list
 1. Restrict (and if the repo is public, regenerate) the Google Maps key – **H1**.
 2. Restart the backend so the new security checks and endpoints are active (everyone will need to sign in again).
-3. Confirm the logo is yours; delete or source `sidekick-robot.png.jpg`.
+3. Confirm the compass logo is yours (the robot image has been deleted).
 4. Before a public/Play release: dedicated contact email (M3), HTTPS (H2), CORS + headers (M4), Play Data safety + deletion link (M5), and a lawyer's review of the documents.
