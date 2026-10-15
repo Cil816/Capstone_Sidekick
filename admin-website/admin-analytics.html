@@ -5,6 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Reports · Sidekick Admin</title>
     <link rel="stylesheet" href="css/admin.css" />
+    <link rel="stylesheet" href="css/admin-v3.css" />
+    <script src="js/auth-guard.js"></script>
   </head>
   <body data-page="analytics">
     <div class="admin-shell">
@@ -12,118 +14,130 @@
         <div class="admin-sidebar-header">
           <img class="admin-logo" src="assets/sidekick-logo-512.png" alt="" />
           <div>
-            <div style="font-weight:800;">Sidekick</div>
-            <small style="color:rgba(255,255,255,0.7);">Administrator</small>
+            <div class="ax-brand-name">Sidekick</div>
+            <div class="ax-brand-role">Administrator</div>
           </div>
         </div>
-        <nav>
-          <a class="admin-nav-link" href="admin.html">Dashboard</a>
-          <a class="admin-nav-link" href="admin-users.html">Users</a>
-          <a class="admin-nav-link" href="admin-itineraries.html">Travel plans</a>
-          <a class="admin-nav-link active" href="admin-analytics.html" aria-current="page">Reports</a>
-          <a class="admin-nav-link" href="admin-reviews.html">App reviews</a>
-          <a class="admin-nav-link" href="admin-activity.html">Activity</a>
-          <a class="admin-nav-link" href="admin-integrations.html">Connections</a>
-          <a class="admin-nav-link" href="admin-settings.html">App setup</a>
+        <nav aria-label="Admin pages">
+          <a class="admin-nav-link" href="admin.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg><span>Dashboard</span></a>
+          <a class="admin-nav-link" href="admin-users.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 19v-1a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v1"/><circle cx="9" cy="7" r="3.5"/><path d="M22 19v-1a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg><span>Users</span></a>
+          <a class="admin-nav-link" href="admin-itineraries.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4 3 6v14l6-2 6 2 6-2V4l-6 2-6-2Z"/><path d="M9 4v14M15 6v14"/></svg><span>Travel plans</span></a>
+          <a class="admin-nav-link active" href="admin-analytics.html" aria-current="page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18"/><path d="M7 15v-4M12 15V7M17 15v-7"/></svg><span>Reports</span></a>
+          <a class="admin-nav-link" href="admin-reviews.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9Z"/></svg><span>App reviews</span></a>
+          <a class="admin-nav-link" href="admin-activity.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l2.5-6 5 12 2.5-6H21"/></svg><span>Activity</span></a>
+          <a class="admin-nav-link" href="admin-integrations.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/></svg><span>System status</span></a>
         </nav>
-        <button class="admin-button-secondary" data-admin-logout type="button">Log out</button>
+        <button class="admin-button-secondary" data-admin-logout type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg><span>Log out</span></button>
       </aside>
 
       <main class="admin-main">
         <div class="admin-topbar">
           <div>
             <h1 class="admin-page-title">Reports</h1>
-            <p class="admin-subtitle">Usage and saved itineraries for each Sidekick user. Select a user to see their history.</p>
+            <p class="admin-subtitle">Who uses Sidekick, what they plan, and who uses it the most.</p>
           </div>
+          
         </div>
 
         <div id="admin-status-banner" class="admin-status-banner" aria-live="polite"></div>
 
-        <section class="admin-card">
-          <div class="admin-panel-header">
-            <h2>Per-user report</h2>
-          </div>
-          <form id="report-filters" class="report-filters" role="search">
-            <div class="field">
-              <label for="report-search">Search name or email</label>
-              <input id="report-search" type="search" maxlength="100" placeholder="e.g. Maria or maria@example.com" />
+        <section class="ax-section" aria-labelledby="who-heading">
+          <div class="ax-card-head"><div><h2 class="ax-card-title" id="who-heading">Who uses Sidekick</h2><p class="ax-card-note" id="user-base-coverage"></p></div></div>
+          <div class="ax-report-grid" id="report-audience"></div>
+        </section>
+
+        <section class="ax-section" aria-labelledby="plan-heading">
+          <div class="ax-card-head"><div><h2 class="ax-card-title" id="plan-heading">What users plan</h2><p class="ax-card-note">From itineraries currently saved in accounts. Restaurants and hotels count only places users added.</p></div></div>
+          <div class="ax-report-grid">
+
+          <article class="admin-card">
+            <div class="ax-card-head">
+              <div>
+                <h2 class="ax-card-title" id="rp-dest">Destinations</h2>
+                <p class="ax-card-note">Users with a saved itinerary there</p>
+              </div>
+              
             </div>
-            <div class="field">
-              <label for="report-status-filter">Account</label>
-              <select id="report-status-filter">
-                <option value="all">All accounts</option>
-                <option value="verified">Verified</option>
-                <option value="unverified">Unverified</option>
-                <option value="active">Enabled</option>
-                <option value="inactive">Disabled</option>
-              </select>
+            <div id="picks-destinations" class="hbar-container"></div>
+          </article>
+
+          <article class="admin-card">
+            <div class="ax-card-head">
+              <div>
+                <h2 class="ax-card-title" id="rp-act">Activities</h2>
+                <p class="ax-card-note">Users who planned them</p>
+              </div>
+              
             </div>
-            <div class="field">
-              <label for="report-sort">Sort by</label>
-              <select id="report-sort">
-                <option value="newest">Newest registration</option>
-                <option value="oldest">Oldest registration</option>
-                <option value="name">Name (A–Z)</option>
-                <option value="itineraries">Most saved itineraries</option>
-                <option value="recent-itinerary">Most recent itinerary</option>
-                <option value="last-active">Most recent app activity</option>
-                <option value="chat">Most chatbot messages</option>
-                <option value="sign-ins">Most sign-ins</option>
-                <option value="last-sign-in">Most recent sign-in</option>
-              </select>
+            <div id="picks-activities" class="hbar-container"></div>
+          </article>
+
+          <article class="admin-card">
+            <div class="ax-card-head">
+              <div>
+                <h2 class="ax-card-title" id="rp-types">Activity types</h2>
+                <p class="ax-card-note">What kind of stops</p>
+              </div>
+              
             </div>
-            <div class="report-filter-actions">
-              <button id="report-search-submit" class="admin-button" type="submit">Apply</button>
-              <button id="report-reset" class="admin-button-secondary" type="button">Reset</button>
+            <div id="picks-activity-types" class="hbar-container"></div>
+          </article>
+
+          <article class="admin-card">
+            <div class="ax-card-head">
+              <div>
+                <h2 class="ax-card-title" id="rp-rest">Restaurants</h2>
+                <p class="ax-card-note">Added to itineraries</p>
+              </div>
+              
             </div>
-          </form>
-          <p id="report-scope-note" class="admin-subtitle report-note">
-            Sign-ins and chatbot messages are counted from the day usage tracking was set up. Saved itineraries count plans currently stored in each account.
-          </p>
-          <div class="admin-table-wrap">
-            <table class="admin-table report-table">
-              <thead>
-                <tr>
-                  <th scope="col">User</th>
-                  <th scope="col">Verification</th>
-                  <th scope="col">Registered</th>
-                  <th scope="col">Last app activity</th>
-                  <th scope="col">Last sign-in</th>
-                  <th scope="col" class="numeric">Sign-ins</th>
-                  <th scope="col" class="numeric">Chatbot messages</th>
-                  <th scope="col" class="numeric">Saved itineraries</th>
-                  <th scope="col">Latest itinerary saved</th>
-                  <th scope="col"><span class="visually-hidden">Actions</span></th>
-                </tr>
-              </thead>
-              <tbody id="report-table-body"></tbody>
-            </table>
-          </div>
-          <div class="admin-pagination">
-            <span id="report-page-summary" aria-live="polite"></span>
-            <div>
-              <button id="report-page-previous" class="admin-button-secondary" type="button">Previous</button>
-              <button id="report-page-next" class="admin-button-secondary" type="button">Next</button>
+            <div id="picks-restaurants" class="hbar-container"></div>
+          </article>
+
+          <article class="admin-card">
+            <div class="ax-card-head">
+              <div>
+                <h2 class="ax-card-title" id="rp-hotel">Hotels</h2>
+                <p class="ax-card-note">Added to itineraries</p>
+              </div>
+              
             </div>
+            <div id="picks-hotels" class="hbar-container"></div>
+          </article>
+
+          <article class="admin-card">
+            <div class="ax-card-head">
+              <div>
+                <h2 class="ax-card-title" id="rp-pref">Dream destinations</h2>
+                <p class="ax-card-note">Chosen at onboarding</p>
+              </div>
+              
+            </div>
+            <div id="picks-preferred" class="hbar-container"></div>
+          </article>
           </div>
         </section>
 
-        <section id="report-detail-panel" class="admin-card admin-detail-panel" hidden aria-live="polite">
-          <div class="admin-panel-header">
-            <div>
-              <h2 id="report-detail-title">User report</h2>
-              <p id="report-detail-subtitle" class="admin-subtitle"></p>
-            </div>
-            <button id="report-detail-close" class="admin-button-secondary" type="button">Close</button>
+        <section class="ax-section" aria-labelledby="engaged-heading">
+          <div class="ax-toolbar">
+            <div><h2 class="ax-card-title" id="engaged-heading">Most engaged users</h2><p class="ax-card-note">Top 10. Sign-ins and chatbot messages are counted since usage tracking was set up.</p></div>
+            <label style="margin-left:auto">
+              <span class="sr-only">Rank users by</span>
+              <select id="engaged-sort" class="ax-select">
+                <option value="chat">Most chatbot messages</option>
+                <option value="sign-ins">Most sign-ins</option>
+                <option value="itineraries">Most saved itineraries</option>
+                <option value="last-active">Recently active</option>
+              </select>
+            </label>
           </div>
-          <div class="report-tabs" role="tablist" aria-label="User report sections">
-            <button type="button" role="tab" id="report-tab-summary" aria-controls="report-panel-summary" aria-selected="true" data-report-tab="summary">Summary</button>
-            <button type="button" role="tab" id="report-tab-itineraries" aria-controls="report-panel-itineraries" aria-selected="false" tabindex="-1" data-report-tab="itineraries">Itineraries</button>
-            <button type="button" role="tab" id="report-tab-preferences" aria-controls="report-panel-preferences" aria-selected="false" tabindex="-1" data-report-tab="preferences">Preferences</button>
+          <div class="admin-card ax-table-card">
+            <table class="ax-table">
+              <colgroup><col style="width:40%"><col style="width:15%"><col style="width:15%"><col style="width:15%"><col style="width:15%" class="hide-sm"></colgroup>
+              <thead><tr><th scope="col">User</th><th scope="col" class="num">Chat messages</th><th scope="col" class="num">Sign-ins</th><th scope="col" class="num">Itineraries</th><th scope="col" class="hide-sm">Last active</th></tr></thead>
+              <tbody id="engaged-table-body"></tbody>
+            </table>
           </div>
-          <div id="report-panel-summary" role="tabpanel" aria-labelledby="report-tab-summary" class="report-tab-panel"></div>
-          <div id="report-panel-itineraries" role="tabpanel" aria-labelledby="report-tab-itineraries" class="report-tab-panel" hidden></div>
-          <div id="report-panel-preferences" role="tabpanel" aria-labelledby="report-tab-preferences" class="report-tab-panel" hidden></div>
         </section>
       </main>
     </div>

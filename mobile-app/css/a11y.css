@@ -26,11 +26,11 @@
 }
 
 .btn-outline {
-    color: #4a6f96;                      /* was #557da6 (4.3:1) -> 5.2:1 */
-    border-color: #8aa6c4;
+    color: #1f6f88;                      /* teal, 5.6:1 on white (was slate #557da6) */
+    border-color: #9fcfdb;
 }
 
-/* Slate-blue links and labels (were #6B8CAE, 3.5:1 -> 5.2:1). */
+/* Links and labels in the theme teal (5.6:1; were slate #6B8CAE). */
 .forgot-link,
 .see-all,
 .footer-text a,
@@ -38,16 +38,16 @@
 .add-activity-btn,
 .onboarding-content .dest-counter,
 .see-all-rank {
-    color: #4f6f91;
+    color: #1f6f88;
 }
 
-.activity-time svg { color: #4f6f91; }
+.activity-time svg { color: #1f6f88; }
 
-.chip.selected { background: #4f6f91; }
+.chip.selected { background: #1f7a8c; }
 
 .bottom-nav .nav-item.active,
-.bottom-nav.overlay .nav-item.active { color: #4f6f91; }
-.bottom-nav .nav-item.active svg { stroke: #4f6f91; }
+.bottom-nav.overlay .nav-item.active { color: #1f6f88; }
+.bottom-nav .nav-item.active svg { stroke: #1f6f88; }
 
 /* Muted text that was below 4.5:1. */
 .register-screen .footer-text { color: #5f6b7a; }

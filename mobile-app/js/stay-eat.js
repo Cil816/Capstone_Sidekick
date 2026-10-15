@@ -153,10 +153,15 @@
     if (kind === "hotels" && rate && Number(rate.lowPhp) > 0) {
       return { low: Number(rate.lowPhp), high: Number(rate.highPhp) || null, source: "researched" };
     }
-    const range = place.priceRange;
+    // Google's price range is what people spend per person (a meal), not a room
+    // rate, so it is only used for restaurants.
+    const range = kind === "hotels" ? null : place.priceRange;
     if (range && Number.isFinite(Number(range.lowPhp))) {
       const high = range.highPhp == null ? null : Number(range.highPhp);
-      return { low: Number(range.lowPhp), high: Number.isFinite(high) ? high : null, source: "google" };
+      // Google's cheapest band starts at ₱1 ("₱1–200" means "under ₱200").
+      const low = Number(range.lowPhp) < 50 ? 0 : Number(range.lowPhp);
+      if (low === 0 && !(high > 0)) return null;
+      return { low, high: Number.isFinite(high) ? high : null, source: "google" };
     }
     const level = PRICE_LEVEL_PHP[kind]?.[place.priceLevel];
     return level ? { low: level[0], high: level[1], source: "estimate" } : null;
@@ -171,7 +176,8 @@
 
   function priceText(price, kind) {
     if (!price) return "";
-    const range = price.high != null && price.high > price.low ? `${peso(price.low)}–${peso(price.high)}`
+    const range = price.low === 0 && price.high > 0 ? `Under ${peso(price.high)}`
+      : price.high != null && price.high > price.low ? `${peso(price.low)}–${peso(price.high)}`
       : price.high == null ? `${peso(price.low)}+` : peso(price.low);
     return `${price.source === "estimate" ? "about " : ""}${range} ${kind === "hotels" ? "/ night" : "/ person"}`;
   }
@@ -603,11 +609,11 @@
       const editor = window.SidekickItineraryEdit;
       if (!place) return;
       if (!editor?.hasItinerary?.()) {
-        window.alert("Build your itinerary first, then you can add hotels and restaurants to it.");
+        window.SidekickUI.alert("Build your itinerary first, then you can add places to it.", { title: "No itinerary yet" });
         return;
       }
       closeModal();
-      editor.openAddPlace(place, state.modalKind === "hotels" ? "hotel" : "restaurant");
+      editor.openAddPlace(place, state.modalKind === "hotels" ? "hotel" : state.modalKind === "restaurants" ? "restaurant" : "");
     });
     $("stay-eat-modal-ask").addEventListener("click", () => {
       const place = state.modalPlace;
@@ -820,6 +826,10 @@
   });
 
   window.SidekickStayEat = {
+    // Details pop-up for any spot (e.g. "Explore places" results and map pins).
+    openPlace(place) {
+      if (place?.name) void openModal(place, "places");
+    },
     getChosenStay: () => (state.email ? getChosenStay() : null),
     setStay(place, areaName) {
       if (!state.email || !place?.name) return;

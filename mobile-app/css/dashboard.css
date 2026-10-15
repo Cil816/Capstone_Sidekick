@@ -838,3 +838,51 @@
 .see-all-more[hidden] {
     display: none;
 }
+
+/* ---- Hero: greeting + search on one soft panel that fades into the page.
+   (Replaces the old rounded greeting block whose curved corner looked like a glitch.) */
+.dashboard-hero {
+    position: relative;
+    background: linear-gradient(180deg, #d9f2f5 0%, rgba(222, 245, 247, .75) 55%, rgba(245, 251, 252, 0) 100%);
+}
+
+.dashboard-hero .header-section {
+    position: relative;
+    z-index: 1;
+    background: transparent;
+    border-radius: 0;
+    padding: 26px 104px 8px 20px;
+}
+
+.dashboard-hero .screen-subtitle { margin-bottom: 14px; }
+
+.dashboard-hero-art {
+    position: absolute;
+    top: 14px;
+    right: 10px;
+    width: 140px;
+    height: auto;
+    color: #2c91b0;
+    opacity: .4;
+    pointer-events: none;
+}
+
+.dashboard-hero .search-section { padding: 0 20px 18px; }
+
+.dashboard-hero .search-bar input {
+    height: 50px;
+    background: #fff;
+    border: 1px solid #d9eaf0;
+    border-radius: 16px;
+    box-shadow: 0 10px 24px rgba(22, 52, 87, .08);
+    font-size: 15.5px;
+}
+
+.dashboard-hero .search-bar input:focus { box-shadow: 0 0 0 4px rgba(44, 145, 176, .16); }
+.dashboard-hero .search-icon { color: #2c91b0; }
+
+@media (max-width: 480px) {
+    .dashboard-hero .header-section { padding-left: 16px; padding-right: 96px; }
+    .dashboard-hero .search-section { padding-left: 16px; padding-right: 16px; }
+    .dashboard-hero-art { width: 118px; }
+}

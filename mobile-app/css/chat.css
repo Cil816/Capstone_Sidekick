@@ -339,3 +339,62 @@
 .chat-place-hours ul { margin: 6px 0 0; padding-left: 18px; color: #668096; }
 .chat-place-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
 .chat-place-actions .btn { width: 100%; box-sizing: border-box; text-align: center; text-decoration: none; }
+
+/* ---- Composer docked above the nav (phones) ------------------------------
+   The input used to float with a gap under it where messages showed through.
+   Now it sits on a solid strip that reaches down behind the nav bar. */
+@media (max-width: 599px) {
+    .chat-input-container {
+        bottom: calc(var(--nav-height) + 14px + env(safe-area-inset-bottom));
+        z-index: 9000;
+        padding: 8px 12px;
+        gap: 10px;
+        align-items: center;
+        background: #f7fcfd;
+        border-top: 0;
+        backdrop-filter: none;
+        box-shadow: 0 -10px 18px rgba(247, 252, 253, .95);
+    }
+
+    .chat-input-container::after {
+        content: "";
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 100%;
+        height: calc(var(--nav-height) + 14px + env(safe-area-inset-bottom));
+        background: #f7fcfd;
+        pointer-events: none;
+    }
+}
+
+.chat-input-container input {
+    height: 48px;
+    padding: 0 18px;
+    border-radius: 24px;
+    background: #fff;
+    border: 1px solid #d9eaf0 !important;
+    box-shadow: 0 4px 14px rgba(22, 52, 87, .06);
+    color: #163457;
+}
+
+.chat-input-container input:focus {
+    border-color: #68ddd9 !important;
+    box-shadow: 0 0 0 4px rgba(44, 145, 176, .14) !important;
+}
+
+.send-btn {
+    flex: none;
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    transition: transform 120ms ease, box-shadow 160ms ease;
+}
+
+.send-btn:active { transform: scale(.94); }
+.send-btn:disabled { opacity: .55; }
+
+.chat-header-info h1 { font-family: "Manrope", "Avenir Next", sans-serif; color: #163457; }
+
+/* New messages ease in */
+.message { animation: skRise 260ms cubic-bezier(.22, .9, .35, 1) backwards; }

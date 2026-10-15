@@ -1,0 +1,264 @@
+/* Alerts & Reminders */
+.alerts { padding: 4px 20px 24px; }
+
+.alerts-card {
+    background: #fff;
+    border: 1px solid #d9eaf0;
+    border-radius: 20px;
+    padding: 18px 16px;
+    box-shadow: 0 10px 26px rgba(22, 52, 87, .07);
+}
+
+.alerts-card + .alerts-card { margin-top: 14px; }
+
+.alerts-card-title {
+    margin: 0 0 12px;
+    font-family: "Manrope", "Avenir Next", sans-serif;
+    font-size: 17px;
+    font-weight: 800;
+    color: #163457;
+}
+
+.alerts-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+}
+
+.alerts-field > span {
+    font-size: 13px;
+    font-weight: 700;
+    color: #3d5670;
+}
+
+.alerts-field input,
+.alerts-field select {
+    width: 100%;
+    height: 46px;
+    padding: 0 14px;
+    border: 1px solid #d9eaf0;
+    border-radius: 12px;
+    background: #f7fbfc;
+    font: inherit;
+    font-size: 15px;
+    color: #163457;
+    box-sizing: border-box;
+}
+
+.alerts-row {
+    display: flex;
+    gap: 10px;
+    margin-top: 12px;
+    align-items: flex-end;
+}
+
+.alerts-row .alerts-field:not(.alerts-field-grow) { flex: 0 0 132px; }
+.alerts-field-grow { flex: 1 1 auto; }
+
+.alerts-hint {
+    margin: 10px 2px 14px;
+    font-size: 12.5px;
+    color: #668096;
+}
+
+.alerts-sync { margin-top: 10px; }
+.alerts-sync svg { width: 18px; height: 18px; }
+
+/* Itinerary schedule editor (shown by alerts.js) */
+.editor-panel { display: none; margin-top: 14px; }
+.editor-panel-title { font-weight: 800; color: #163457; font-size: 16px; }
+.editor-panel-note { margin: 4px 0 12px; color: #668096; font-size: 13px; }
+.alerts-row-buttons .btn { flex: 1 1 0; }
+
+/* Section heading row with bulk actions */
+.reminder-bulk-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 6px;
+    margin-top: 22px;
+}
+
+.reminder-bulk-actions[hidden] { display: none; }
+
+.alerts-text-btn {
+    border: 0;
+    background: transparent;
+    padding: 8px 10px;
+    border-radius: 10px;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 700;
+    color: #1f6f88;
+    cursor: pointer;
+}
+
+.alerts-text-btn:hover { background: #eef8fa; }
+.alerts-text-btn:disabled { opacity: .45; cursor: not-allowed; }
+.reminder-remove-all { color: #c2414f; }
+.reminder-remove-all:hover { background: #fdeef0; }
+
+.reminders { display: flex; flex-direction: column; gap: 10px; margin-top: 4px; }
+
+.sk-reminders-heading {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 12px 2px 0;
+    font-family: "Manrope", "Avenir Next", sans-serif;
+    font-size: 15px;
+    font-weight: 800;
+    color: #163457;
+}
+
+.sk-reminders-heading span {
+    min-width: 22px;
+    padding: 1px 8px;
+    border-radius: 999px;
+    background: #eef8fa;
+    color: #1f6f88;
+    font-size: 12px;
+    text-align: center;
+}
+
+/* Reminder card */
+.sk-reminder-card {
+    display: grid;
+    grid-template-columns: 42px minmax(0, 1fr);
+    gap: 12px;
+    padding: 14px;
+    background: #fff;
+    border: 1px solid #d9eaf0;
+    border-radius: 18px;
+    box-shadow: 0 8px 20px rgba(22, 52, 87, .06);
+}
+
+.sk-reminder-card.is-off { background: #f8fafb; }
+.sk-reminder-card.is-off .sk-reminder-title { color: #668096; }
+.sk-reminder-card.is-past { opacity: .72; }
+
+.sk-reminder-icon {
+    width: 42px;
+    height: 42px;
+    border-radius: 14px;
+    display: grid;
+    place-items: center;
+    background: linear-gradient(135deg, rgba(44, 145, 176, .14), rgba(104, 221, 217, .2));
+    color: #1f6f88;
+}
+
+.sk-reminder-icon svg { width: 20px; height: 20px; }
+.sk-reminder-card.is-off .sk-reminder-icon { background: #edf1f4; color: #8aa3b8; }
+
+.sk-reminder-title {
+    margin: 1px 0 6px;
+    font-size: 15px;
+    font-weight: 800;
+    line-height: 1.3;
+    color: #163457;
+    overflow-wrap: anywhere;
+}
+
+.sk-reminder-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+
+.sk-chip {
+    padding: 2px 9px;
+    border-radius: 999px;
+    background: #eef8fa;
+    color: #1f6f88;
+    font-size: 11.5px;
+    font-weight: 700;
+}
+
+.sk-chip.is-warm { background: #fff1ea; color: #b8572f; }
+.sk-chip.is-off { background: #edf1f4; color: #5b7287; }
+
+.sk-reminder-when {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.5;
+    color: #3d5670;
+}
+
+.sk-reminder-when b { color: #668096; font-weight: 600; }
+
+.sk-reminder-actions {
+    grid-column: 1 / -1;
+    display: flex;
+    gap: 8px;
+    padding-top: 10px;
+    border-top: 1px solid #edf4f6;
+}
+
+.sk-reminder-actions button {
+    flex: 1 1 0;
+    min-height: 38px;
+    border: 1px solid #d9eaf0;
+    border-radius: 12px;
+    background: #fff;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 700;
+    color: #1f6f88;
+    cursor: pointer;
+    transition: background 150ms ease, transform 120ms ease;
+}
+
+.sk-reminder-actions button:hover { background: #eef8fa; }
+.sk-reminder-actions button:active { transform: scale(.97); }
+.sk-reminder-actions .is-danger { color: #c2414f; border-color: #f3d3d8; }
+.sk-reminder-actions .is-danger:hover { background: #fdeef0; }
+
+.sk-reminders-empty {
+    padding: 28px 18px;
+    text-align: center;
+    border: 1.5px dashed #c9e2ea;
+    border-radius: 18px;
+    background: rgba(255, 255, 255, .8);
+    color: #668096;
+    font-size: 14px;
+}
+
+.sk-reminders-empty strong { display: block; margin-bottom: 4px; color: #163457; font-size: 15px; }
+
+/* Shortcut to notification settings */
+.alerts-settings-link {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 18px;
+    padding: 14px;
+    border: 1px solid #d9eaf0;
+    border-radius: 18px;
+    background: #fff;
+    text-decoration: none;
+    color: #163457;
+    box-shadow: 0 8px 20px rgba(22, 52, 87, .05);
+}
+
+.alerts-settings-link strong { display: block; font-size: 14.5px; }
+.alerts-settings-link small { display: block; font-size: 12.5px; color: #668096; }
+.alerts-settings-icon { width: 40px; height: 40px; border-radius: 13px; display: grid; place-items: center; background: #eef8fa; color: #1f6f88; flex: none; }
+.alerts-settings-icon svg { width: 20px; height: 20px; }
+.alerts-settings-chevron { width: 18px; height: 18px; margin-left: auto; color: #8aa3b8; flex: none; }
+
+@media (max-width: 380px) {
+    .alerts-row { flex-direction: column; align-items: stretch; }
+    .alerts-row .alerts-field:not(.alerts-field-grow) { flex: 1 1 auto; }
+}
+
+/* Bulk buttons placed on the first heading's line by alerts.js */
+.sk-reminders-heading .reminder-bulk-actions { margin: 0 0 0 auto; gap: 2px; }
+.sk-reminders-heading .alerts-text-btn { font-family: inherit; padding: 6px 8px; }
+
+.alerts-permission-note {
+    margin: 0 0 14px;
+    padding: 12px 14px;
+    border-radius: 14px;
+    background: #fff4e5;
+    border: 1px solid #f3c58a;
+    color: #7a3e00;
+    font-size: 13.5px;
+    line-height: 1.45;
+}
+.alerts-permission-note[hidden] { display: none; }

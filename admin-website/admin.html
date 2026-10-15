@@ -5,6 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Dashboard · Sidekick Admin</title>
     <link rel="stylesheet" href="css/admin.css" />
+    <link rel="stylesheet" href="css/admin-v3.css" />
+    <script src="js/auth-guard.js"></script>
   </head>
   <body data-page="dashboard">
     <div class="admin-shell">
@@ -12,179 +14,114 @@
         <div class="admin-sidebar-header">
           <img class="admin-logo" src="assets/sidekick-logo-512.png" alt="" />
           <div>
-            <div style="font-weight:800;">Sidekick</div>
-            <small style="color:rgba(255,255,255,0.7);">Administrator</small>
+            <div class="ax-brand-name">Sidekick</div>
+            <div class="ax-brand-role">Administrator</div>
           </div>
         </div>
-        <nav>
-          <a class="admin-nav-link active" href="admin.html" aria-current="page">Dashboard</a>
-          <a class="admin-nav-link" href="admin-users.html">Users</a>
-          <a class="admin-nav-link" href="admin-itineraries.html">Travel plans</a>
-          <a class="admin-nav-link" href="admin-analytics.html">Reports</a>
-          <a class="admin-nav-link" href="admin-reviews.html">App reviews</a>
-          <a class="admin-nav-link" href="admin-activity.html">Activity</a>
-          <a class="admin-nav-link" href="admin-integrations.html">Connections</a>
-          <a class="admin-nav-link" href="admin-settings.html">App setup</a>
+        <nav aria-label="Admin pages">
+          <a class="admin-nav-link active" href="admin.html" aria-current="page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg><span>Dashboard</span></a>
+          <a class="admin-nav-link" href="admin-users.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 19v-1a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v1"/><circle cx="9" cy="7" r="3.5"/><path d="M22 19v-1a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg><span>Users</span></a>
+          <a class="admin-nav-link" href="admin-itineraries.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4 3 6v14l6-2 6 2 6-2V4l-6 2-6-2Z"/><path d="M9 4v14M15 6v14"/></svg><span>Travel plans</span></a>
+          <a class="admin-nav-link" href="admin-analytics.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18"/><path d="M7 15v-4M12 15V7M17 15v-7"/></svg><span>Reports</span></a>
+          <a class="admin-nav-link" href="admin-reviews.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9Z"/></svg><span>App reviews</span></a>
+          <a class="admin-nav-link" href="admin-activity.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l2.5-6 5 12 2.5-6H21"/></svg><span>Activity</span></a>
+          <a class="admin-nav-link" href="admin-integrations.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/></svg><span>System status</span></a>
         </nav>
-        <button class="admin-button-secondary" data-admin-logout type="button">Log out</button>
+        <button class="admin-button-secondary" data-admin-logout type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg><span>Log out</span></button>
       </aside>
 
       <main class="admin-main">
         <div class="admin-topbar">
           <div>
             <h1 class="admin-page-title">Dashboard</h1>
-            <p class="admin-subtitle">Sidekick accounts, saved itineraries, and how people use the app, at a glance.</p>
+            <p class="admin-subtitle">How Sidekick is doing, at a glance.</p>
           </div>
-          <div class="admin-toolbar">
-            <span id="dashboard-updated" class="admin-updated" aria-live="polite"></span>
-          </div>
+          <div class="admin-toolbar"><span id="dashboard-updated" class="admin-updated" aria-live="polite"></span>
+            <div class="range-picker" role="group" aria-label="Date range for the graph">
+              <button type="button" class="range-option" data-range="7" aria-pressed="false">7 days</button>
+              <button type="button" class="range-option" data-range="30" aria-pressed="true">30 days</button>
+              <button type="button" class="range-option" data-range="90" aria-pressed="false">90 days</button>
+            </div></div>
         </div>
 
         <div id="admin-status-banner" class="admin-status-banner" aria-live="polite"></div>
 
-        <section class="dashboard-section" aria-labelledby="key-numbers-heading">
-          <h2 id="key-numbers-heading" class="section-heading">Key numbers</h2>
-          <div class="admin-grid stat-grid" id="dashboard-summary"></div>
+        <section aria-label="Key numbers">
+          <div class="ax-kpis" id="dashboard-summary"></div>
         </section>
 
-        <section class="dashboard-section" aria-labelledby="trends-heading">
-          <div class="section-heading-row">
-            <h2 id="trends-heading" class="section-heading">Activity over time</h2>
-            <div class="range-picker" role="group" aria-label="Date range for the graphs">
-              <button type="button" class="range-option" data-range="7" aria-pressed="false">7 days</button>
-              <button type="button" class="range-option" data-range="30" aria-pressed="true">30 days</button>
-              <button type="button" class="range-option" data-range="90" aria-pressed="false">90 days</button>
+        <section class="ax-overview-grid" aria-label="Activity">
+          <article class="admin-card">
+            <div class="ax-card-head">
+              <div>
+                <h2 class="ax-card-title" id="trends-heading">Activity over time</h2>
+                <p class="ax-card-note">Per day, <span data-range-label>last 30 days</span> (UTC days).</p>
+              </div>
             </div>
-          </div>
-
-          <div class="chart-grid">
-            <article class="admin-card chart-card">
-              <header class="chart-card-header">
-                <div>
-                  <h3>Itineraries saved</h3>
-                  <p class="chart-caption">Itineraries saved to Sidekick accounts per day, <span data-range-label>last 30 days</span>.</p>
-                </div>
-                <div class="chart-total" id="chart-itineraries-total"></div>
-              </header>
-              <div id="chart-itineraries" class="line-chart" role="img" aria-label="Itineraries saved per day"></div>
-              <p class="chart-footnote">Counts saved itinerary records by creation date. Plans kept only on a phone, deleted by the user, or removed after the trip ended aren't counted.</p>
-            </article>
-
-            <article class="admin-card chart-card">
-              <header class="chart-card-header">
-                <div>
-                  <h3>New registrations</h3>
-                  <p class="chart-caption">New Sidekick accounts per day, <span data-range-label>last 30 days</span>.</p>
-                </div>
-                <div class="chart-total" id="chart-registrations-total"></div>
-              </header>
-              <div id="chart-registrations" class="line-chart" role="img" aria-label="New registrations per day"></div>
-              <p class="chart-footnote">Unverified accounts are removed after 24 hours, so they only appear here briefly.</p>
-            </article>
-
-            <article class="admin-card chart-card" id="card-signins">
-              <header class="chart-card-header">
-                <div>
-                  <h3>User sign-ins</h3>
-                  <p class="chart-caption">Successful sign-ins per day, <span data-range-label>last 30 days</span>.</p>
-                </div>
-                <div class="chart-total" id="chart-signins-total"></div>
-              </header>
-              <div id="chart-signins" class="line-chart" role="img" aria-label="User sign-ins per day"></div>
-              <p class="chart-footnote" data-usage-since>Counts email-and-password sign-ins. Automatic sign-in right after registering isn't included.</p>
-            </article>
-
-            <article class="admin-card chart-card" id="card-chat">
-              <header class="chart-card-header">
-                <div>
-                  <h3>Chatbot usage</h3>
-                  <p class="chart-caption">Messages sent to the Sidekick chatbot per day, <span data-range-label>last 30 days</span>.</p>
-                </div>
-                <div class="chart-total" id="chart-chat-total"></div>
-              </header>
-              <div id="chart-chat" class="line-chart" role="img" aria-label="Chatbot messages per day"></div>
-              <p class="chart-footnote" data-usage-since>Counts messages users send that reach Sidekick's AI. Message text is never stored.</p>
-            </article>
-          </div>
-        </section>
-
-        <section class="dashboard-section" aria-labelledby="plans-heading">
-          <div class="section-heading-row">
-            <h2 id="plans-heading" class="section-heading">What users plan</h2>
-            <a class="admin-link" href="admin-users.html#user-picks">Full rankings and per-user details</a>
-          </div>
-          <p class="section-note plans-scope">From itineraries currently saved in user accounts. Restaurants and hotels count only places users added to an itinerary. Itineraries are removed after the trip ends.</p>
-          <h3 class="subsection-heading">Typical itinerary (median)</h3>
-          <div id="plan-medians" class="admin-grid stat-grid median-grid"></div>
-          <div class="chart-grid plan-chart-grid">
-            <article class="admin-card chart-card">
-              <header class="chart-card-header">
-                <div>
-                  <h3>Most planned activities</h3>
-                  <p class="chart-caption">Top 5 by number of users who planned them.</p>
-                </div>
-              </header>
-              <div id="plan-activities" class="hbar-container"></div>
-            </article>
-            <article class="admin-card chart-card">
-              <header class="chart-card-header">
-                <div>
-                  <h3>Most picked restaurants</h3>
-                  <p class="chart-caption">Top 5 by number of users who added them.</p>
-                </div>
-              </header>
-              <div id="plan-restaurants" class="hbar-container"></div>
-            </article>
-            <article class="admin-card chart-card">
-              <header class="chart-card-header">
-                <div>
-                  <h3>Most picked hotels</h3>
-                  <p class="chart-caption">Top 5 by number of users who added them.</p>
-                </div>
-              </header>
-              <div id="plan-hotels" class="hbar-container"></div>
-            </article>
-            <article class="admin-card chart-card">
-              <header class="chart-card-header">
-                <div>
-                  <h3>Most planned destinations</h3>
-                  <p class="chart-caption">Top 5 by number of users with a saved itinerary there.</p>
-                </div>
-              </header>
-              <div id="plan-destinations" class="hbar-container"></div>
-            </article>
-          </div>
-        </section>
-
-        <section class="dashboard-section" aria-labelledby="user-base-heading">
-          <div class="section-heading-row">
-            <h2 id="user-base-heading" class="section-heading">Who uses Sidekick</h2>
-            <span id="user-base-coverage" class="section-note"></span>
-          </div>
-          <div id="user-base-summary" class="insight-grid"></div>
-        </section>
-
-        <section class="dashboard-section content-grid" aria-label="Recent activity and definitions">
-          <div class="admin-card">
-            <div class="admin-panel-header">
-              <h2>Recent activity</h2>
-              <a class="admin-link" href="admin-activity.html">View all activity</a>
+            <div class="ax-tabs" id="chart-tabs" role="tablist" aria-label="Choose what the graph shows"></div>
+            <div class="ax-chart">
+              <div id="chart-main" class="line-chart" role="img" aria-label="Activity per day"></div>
             </div>
-            <div id="recent-activity-list" class="admin-logger"></div>
-          </div>
+            <p class="ax-chart-foot" id="chart-foot"></p>
+          </article>
 
-          <div class="admin-card">
-            <div class="admin-panel-header">
-              <h2>About these numbers</h2>
-              <a class="admin-link" href="admin-analytics.html">Per-user reports</a>
+          <article class="admin-card">
+            <div class="ax-card-head">
+              <div>
+                <h2 class="ax-card-title" id="recent-heading">Recent activity</h2>
+                <p class="ax-card-note">Newest first</p>
+              </div>
+              <a class="admin-link" href="admin-activity.html">View all</a>
             </div>
-            <ul class="admin-logger definition-list">
-              <li class="logger-item"><span class="logger-text">Dates on graphs are UTC calendar days.</span></li>
-              <li class="logger-item"><span class="logger-text">Every itinerary the AI creates is saved to the user's account. The saved count therefore covers generated plans that still exist, not every generation attempt.</span></li>
-              <li class="logger-item"><span class="logger-text">Itineraries are removed automatically after the trip ends, so older history shrinks over time.</span></li>
-              <li class="logger-item"><span class="logger-text">Sign-ins and chatbot messages are counted from the day usage tracking was set up. Earlier activity wasn't recorded.</span></li>
-            </ul>
-          </div>
+            <ul id="recent-activity-list" class="ax-feed"></ul>
+          </article>
+        </section>
+
+        <section class="ax-row-4" aria-label="What users plan">
+
+          <article class="admin-card">
+            <div class="ax-card-head">
+              <div>
+                <h2 class="ax-card-title" id="dest-heading">Top destinations</h2>
+                <p class="ax-card-note">Saved itineraries</p>
+              </div>
+              <a class="admin-link" href="admin-analytics.html">Reports</a>
+            </div>
+            <div id="plan-destinations" class="hbar-container"></div>
+          </article>
+
+          <article class="admin-card">
+            <div class="ax-card-head">
+              <div>
+                <h2 class="ax-card-title" id="act-heading">Top activities</h2>
+                <p class="ax-card-note">Planned by most users</p>
+              </div>
+              
+            </div>
+            <div id="plan-activities" class="hbar-container"></div>
+          </article>
+
+          <article class="admin-card">
+            <div class="ax-card-head">
+              <div>
+                <h2 class="ax-card-title" id="interest-heading">Top interests</h2>
+                <p class="ax-card-note">From onboarding</p>
+              </div>
+              
+            </div>
+            <div id="user-base-summary"></div>
+          </article>
+
+          <article class="admin-card">
+            <div class="ax-card-head">
+              <div>
+                <h2 class="ax-card-title" id="median-heading">Typical trip</h2>
+                <p class="ax-card-note">Median of saved itineraries</p>
+              </div>
+              
+            </div>
+            <div id="plan-medians" class="ax-facts"></div>
+          </article>
         </section>
       </main>
     </div>

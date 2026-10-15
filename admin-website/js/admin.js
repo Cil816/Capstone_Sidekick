@@ -372,120 +372,149 @@
     `).join('');
   }
 
+  // Compact overview tile: icon, label, big number, one short line.
+  function renderKpis(target, tiles) {
+    target.innerHTML = tiles.map((tile) => `
+      <article class="ax-kpi${tile.live ? ' is-live' : ''}" title="${escapeHtml(tile.help || '')}">
+        <span class="ax-kpi-icon">${icon(tile.icon)}</span>
+        <div class="ax-kpi-body">
+          <span class="ax-kpi-label">${escapeHtml(tile.label)}</span>
+          <span class="ax-kpi-value">${tile.live && tile.value !== '—' ? '<span class="ax-live-dot" aria-hidden="true"></span>' : ''}${escapeHtml(tile.value)}</span>
+          <span class="ax-kpi-sub">${escapeHtml(tile.sub || '')}</span>
+        </div>
+      </article>`).join('');
+  }
+
+  // Five numbers an admin checks first. Verified/enabled counts were dropped:
+  // every user must verify their email to use the app.
   function renderDashboardSummary(summary) {
     const target = document.getElementById('dashboard-summary');
     if (!target) return;
     const metrics = summary?.metrics || {};
     const recentlyActiveTracked = summary?.lastActiveTrackingAvailable && metrics.recentlyActiveUsers30Days != null;
     const usageTracked = Boolean(summary?.usageTracking?.available) && metrics.totalChatMessages != null;
-    const trackedSince = describeTrackingStart(summary?.usageTracking?.firstEventAt);
-    renderStatCards(target, [
+    const plural = (n, one, many) => `${formatNumber(n)} ${Number(n) === 1 ? one : many}`;
+    renderKpis(target, [
       {
-        icon: 'users', label: 'Registered users', value: formatNumber(metrics.totalUsers),
-        detail: 'Every Sidekick account in the database, verified or not.',
+        icon: 'users', label: 'Users', value: formatNumber(metrics.totalUsers),
+        sub: recentlyActiveTracked ? `${formatNumber(metrics.recentlyActiveUsers30Days)} active in 30 days` : 'Registered accounts',
+        help: 'Every Sidekick account.',
       },
       {
-        icon: 'verified', label: 'Verified users', value: formatNumber(metrics.verifiedUsers),
-        detail: `Confirmed their email address. ${formatNumber(metrics.unverifiedUsers)} still unverified.`,
+        icon: 'online', label: 'Online now', value: formatNumber(metrics.onlineUsers), live: true,
+        sub: 'App open in the last 90 s',
+        help: 'Users with the app open in the past 90 seconds.',
       },
       {
-        icon: 'enabled', label: 'Active accounts', value: formatNumber(metrics.activeUsers),
-        detail: `Accounts that are enabled and allowed to sign in. ${formatNumber(metrics.inactiveUsers)} disabled.`,
+        icon: 'signin', label: 'Sign-ins', value: usageTracked ? formatNumber(metrics.signInsLast30Days) : '—',
+        sub: usageTracked ? 'Last 30 days' : 'Not tracked yet',
+        help: usageTracked ? `${formatNumber(metrics.totalSignIns)} in total. ${describeTrackingStart(summary?.usageTracking?.firstEventAt)}` : 'Run backend/migrations/003_app_usage_events.sql to start recording.',
       },
       {
-        icon: 'pulse', label: 'Active in last 30 days',
-        value: recentlyActiveTracked ? formatNumber(metrics.recentlyActiveUsers30Days) : 'Not tracked',
-        untracked: !recentlyActiveTracked,
-        detail: recentlyActiveTracked
-          ? 'Users who signed in or had the app open in the past 30 days.'
-          : 'Needs the last-active tracking migration (002_user_last_active.sql).',
-      },
-      {
-        icon: 'online', label: 'Online now', value: formatNumber(metrics.onlineUsers),
-        detail: 'Users with the app open in the past 90 seconds. Resets if the server restarts.',
+        icon: 'chat', label: 'Chatbot messages', value: usageTracked ? formatNumber(metrics.chatMessagesLast30Days) : '—',
+        sub: usageTracked ? `Last 30 days · ${plural(metrics.chatUsersLast30Days, 'user', 'users')}` : 'Not tracked yet',
+        help: usageTracked ? `${formatNumber(metrics.totalChatMessages)} in total.` : 'Run backend/migrations/003_app_usage_events.sql to start recording.',
       },
       {
         icon: 'compass', label: 'Saved itineraries', value: formatNumber(metrics.totalTrips),
-        detail: `Itineraries currently stored in user accounts. ${formatNumber(metrics.tripsLast30Days)} saved in the past 30 days.`,
+        sub: `${formatNumber(metrics.tripsLast30Days)} in the last 30 days`,
+        help: 'Itineraries currently stored in user accounts.',
       },
-      usageTracked
-        ? {
-          icon: 'chat', label: 'Chatbot messages', value: formatNumber(metrics.totalChatMessages),
-          detail: `${formatNumber(metrics.chatMessagesLast30Days)} in the past 30 days, from ${formatNumber(metrics.chatUsersLast30Days)} ${metrics.chatUsersLast30Days === 1 ? 'user' : 'users'}. ${trackedSince}`,
-        }
-        : {
-          icon: 'chat', label: 'Chatbot messages', value: 'Not tracked', untracked: true,
-          detail: 'Run backend/migrations/003_app_usage_events.sql to start recording.',
-        },
-      usageTracked
-        ? {
-          icon: 'signin', label: 'User sign-ins', value: formatNumber(metrics.totalSignIns),
-          detail: `${formatNumber(metrics.signInsLast30Days)} in the past 30 days. ${trackedSince}`,
-        }
-        : {
-          icon: 'signin', label: 'User sign-ins', value: 'Not tracked', untracked: true,
-          detail: 'Run backend/migrations/003_app_usage_events.sql to start recording.',
-        },
     ]);
   }
 
-  function renderRankedList(title, items, { denominator, unit, emptyText }) {
-    const max = Math.max(1, ...items.map((item) => item.count));
-    return `
-      <article class="admin-card insight-card">
-        <h3>${escapeHtml(title)}</h3>
-        ${items.length ? `
-          <ol class="ranked-list">
-            ${items.map((item) => {
-              const share = denominator ? Math.round((item.count / denominator) * 100) : null;
-              return `
-                <li>
-                  <div class="ranked-row">
-                    <span class="ranked-name">${escapeHtml(item.name)}</span>
-                    <span class="ranked-count">${escapeHtml(formatNumber(item.count))} ${escapeHtml(item.count === 1 ? unit[0] : unit[1])}${share !== null ? ` <span class="ranked-share">· ${escapeHtml(share)}%</span>` : ''}</span>
-                  </div>
-                  <div class="ranked-bar" aria-hidden="true"><span style="width:${Math.max(4, Math.round((item.count / max) * 100))}%"></span></div>
-                </li>
-              `;
-            }).join('')}
-          </ol>
-        ` : `<div class="empty-state">${escapeHtml(emptyText)}</div>`}
-      </article>
-    `;
+  // Simple ranked list with bars (used for interests, styles, budgets).
+  function rankList(items, { denominator, unit, emptyText, limit = 5 }) {
+    const list = (items || []).slice(0, limit);
+    if (!list.length) return `<div class="ax-empty">${escapeHtml(emptyText)}</div>`;
+    const max = Math.max(1, ...list.map((item) => item.count));
+    return `<ol class="ax-rank">${list.map((item) => {
+      const share = denominator ? Math.round((item.count / denominator) * 100) : null;
+      return `<li>
+        <div class="ax-rank-row"><span class="ax-rank-name" title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</span><span class="ax-rank-count">${share !== null ? `${escapeHtml(share)}%` : `${escapeHtml(formatNumber(item.count))} ${escapeHtml(item.count === 1 ? unit[0] : unit[1])}`}</span></div>
+        <div class="ax-rank-bar" aria-hidden="true"><span style="width:${Math.max(4, Math.round((item.count / max) * 100))}%"></span></div>
+      </li>`;
+    }).join('')}</ol>`;
   }
 
+  // Dashboard: top 5 interests. Reports: the full audience breakdown.
   function renderUserBaseSummary(profileSummary, summary) {
-    const target = document.getElementById('user-base-summary');
-    const coverage = document.getElementById('user-base-coverage');
-    if (!target) return;
     const usersWithPreferences = Number(profileSummary?.usersWithPreferences || 0);
     const totalUsers = Number(summary?.metrics?.totalUsers);
+    const userUnit = ['user', 'users'];
+    const dashboardTarget = document.getElementById('user-base-summary');
+    if (dashboardTarget) {
+      dashboardTarget.innerHTML = rankList(profileSummary?.interests, { denominator: usersWithPreferences, unit: userUnit, emptyText: 'No interests saved yet.' });
+    }
+    const coverage = document.getElementById('user-base-coverage');
     if (coverage) {
       coverage.textContent = Number.isFinite(totalUsers)
-        ? `Preferences are based on the ${formatNumber(usersWithPreferences)} of ${formatNumber(totalUsers)} users who saved them during onboarding.`
-        : `Preferences are based on the ${formatNumber(usersWithPreferences)} users who saved them during onboarding.`;
+        ? `Based on the ${formatNumber(usersWithPreferences)} of ${formatNumber(totalUsers)} users who saved preferences at onboarding.`
+        : `Based on the ${formatNumber(usersWithPreferences)} users who saved preferences at onboarding.`;
     }
-    const userUnit = ['user', 'users'];
-    target.innerHTML = [
-      renderRankedList('Top travel interests', profileSummary?.interests || [], { denominator: usersWithPreferences, unit: userUnit, emptyText: 'No interests saved yet.' }),
-      renderRankedList('Travel styles', profileSummary?.travelStyles || [], { denominator: usersWithPreferences, unit: userUnit, emptyText: 'No travel styles saved yet.' }),
-      renderRankedList('Preferred destinations', profileSummary?.preferredPlaces || [], { denominator: usersWithPreferences, unit: userUnit, emptyText: 'No preferred destinations saved yet.' }),
-      renderRankedList('Budgets on saved itineraries', profileSummary?.savedItineraryBudgets || [], { denominator: null, unit: ['itinerary', 'itineraries'], emptyText: 'No budgets recorded on saved itineraries.' }),
-    ].join('');
+    const reportTarget = document.getElementById('report-audience');
+    if (reportTarget) {
+      const block = (title, note, body) => `<article class="admin-card"><div class="ax-card-head"><div><h3 class="ax-card-title">${escapeHtml(title)}</h3><p class="ax-card-note">${escapeHtml(note)}</p></div></div>${body}</article>`;
+      reportTarget.innerHTML = [
+        block('Travel interests', 'Share of users', rankList(profileSummary?.interests, { denominator: usersWithPreferences, unit: userUnit, emptyText: 'No interests saved yet.', limit: 8 })),
+        block('Travel styles', 'Share of users', rankList(profileSummary?.travelStyles, { denominator: usersWithPreferences, unit: userUnit, emptyText: 'No travel styles saved yet.', limit: 8 })),
+        block('Trip budgets', 'On saved itineraries', rankList(profileSummary?.savedItineraryBudgets, { denominator: null, unit: ['itinerary', 'itineraries'], emptyText: 'No budgets recorded yet.', limit: 8 })),
+      ].join('');
+    }
   }
 
-  function renderRecentActivity(activityList, activities, limit = 8) {
-    const items = [...(activities?.recentUsers || []), ...(activities?.recentTrips || []), ...(activities?.recentUsage || [])]
-      .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
-      .slice(0, limit);
-    activityList.innerHTML = items.length
-      ? items.map((item) => `
-          <div class="logger-item">
-            <div class="logger-text">${escapeHtml(item.label)}</div>
-            <div class="logger-time">${escapeHtml(formatDate(item.timestamp))}</div>
-          </div>
-        `).join('')
-      : '<div class="empty-state">Nothing to show yet. New sign-ups and saved itineraries will appear here.</div>';
+  const FEED_ICONS = {
+    signup: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M22 11h-6"/>',
+    trip: '<path d="M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/>',
+    sign_in: '<path d="M15 3h3a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-3"/><path d="M10 17l5-5-5-5"/><path d="M15 12H4"/>',
+    chat: '<path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/>',
+  };
+
+  function relativeTime(value) {
+    const date = new Date(value);
+    const diff = Date.now() - date.getTime();
+    if (!Number.isFinite(diff)) return '';
+    const minutes = Math.round(diff / 60000);
+    if (minutes < 1) return 'just now';
+    if (minutes < 60) return `${minutes} min ago`;
+    const hours = Math.round(minutes / 60);
+    if (hours < 24) return `${hours} h ago`;
+    const days = Math.round(hours / 24);
+    return days < 7 ? `${days} d ago` : date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  }
+
+  // Merges the activity lists into one feed item list, newest first.
+  function activityItems(activities) {
+    const kindOf = (item, fallback) => item.kind || fallback;
+    return [
+      ...(activities?.recentUsers || []).map((item) => ({ ...item, kind: kindOf(item, 'signup') })),
+      ...(activities?.recentTrips || []).map((item) => ({ ...item, kind: kindOf(item, 'trip') })),
+      ...(activities?.recentUsage || []).map((item) => ({ ...item, kind: kindOf(item, /sign/i.test(item.label) ? 'sign_in' : 'chat') })),
+    ].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+  }
+
+  function feedText(item) {
+    const who = item.name ? `<b>${escapeHtml(item.name)}</b>` : 'A user';
+    if (item.kind === 'signup') return `${who} created an account`;
+    if (item.kind === 'trip') return `${who} saved an itinerary${item.detail ? `<small>${escapeHtml(item.detail)}</small>` : ''}`;
+    if (item.kind === 'sign_in') return `${who} signed in`;
+    if (item.kind === 'chat') return `${who} chatted with Sidekick${item.count > 1 ? `<small>${escapeHtml(formatNumber(item.count))} messages that day</small>` : ''}`;
+    return escapeHtml(item.label || 'Activity');
+  }
+
+  function renderFeed(list, items, emptyText) {
+    list.innerHTML = items.length
+      ? items.map((item, index) => `
+          <li style="animation-delay:${Math.min(index, 8) * 30}ms">
+            <span class="ax-feed-icon k-${escapeHtml(item.kind)}" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${FEED_ICONS[item.kind] || FEED_ICONS.trip}</svg></span>
+            <span class="ax-feed-text">${feedText(item)}</span>
+            <time class="ax-feed-time" datetime="${escapeHtml(item.timestamp)}" title="${escapeHtml(formatDate(item.timestamp))}">${escapeHtml(relativeTime(item.timestamp))}</time>
+          </li>`).join('')
+      : `<li class="ax-empty" style="display:block">${escapeHtml(emptyText)}</li>`;
+  }
+
+  function renderRecentActivity(activityList, activities, limit = 7) {
+    renderFeed(activityList, activityItems(activities).slice(0, limit), 'Nothing yet. New sign-ups and saved itineraries will appear here.');
   }
 
   // ---- What users plan (activities, restaurants, hotels, destinations) -------
@@ -495,21 +524,20 @@
     const target = document.getElementById(targetId);
     if (!target) return;
     if (!items.length) {
-      target.innerHTML = `<div class="empty-state">${escapeHtml(emptyText)}</div>`;
+      target.innerHTML = `<div class="ax-empty">${escapeHtml(emptyText)}</div>`;
       return;
     }
     const max = Math.max(1, ...items.map((item) => item.users));
+    // Name on its own line with the bar underneath, so names fit narrow cards.
     target.innerHTML = `
-      <ol class="hbar-chart" aria-label="${escapeHtml(label)}">
+      <ol class="ax-rank" aria-label="${escapeHtml(label)}">
         ${items.map((item, index) => {
           const users = `${formatNumber(item.users)} ${item.users === 1 ? 'user' : 'users'}`;
           const picks = `${formatNumber(item.picks)} ${item.picks === 1 ? 'pick' : 'picks'}`;
           return `
-            <li class="hbar-row" tabindex="0" data-tip-name="${escapeHtml(item.name)}" data-tip-detail="${escapeHtml(`${users} · ${picks}`)}">
-              <span class="hbar-rank" aria-hidden="true">${index + 1}</span>
-              <span class="hbar-label">${escapeHtml(item.name)}</span>
-              <span class="hbar-track" aria-hidden="true"><span class="hbar-fill" style="width:${Math.max(2, (item.users / max) * 100).toFixed(1)}%"></span></span>
-              <span class="hbar-value">${escapeHtml(users)}<span class="hbar-sub"> · ${escapeHtml(picks)}</span></span>
+            <li class="ax-tip" tabindex="0" data-tip-name="${escapeHtml(item.name)}" data-tip-detail="${escapeHtml(`${users} · ${picks}`)}">
+              <div class="ax-rank-row"><span class="ax-rank-pos" aria-hidden="true">${index + 1}</span><span class="ax-rank-name">${escapeHtml(item.name)}</span><span class="ax-rank-count">${escapeHtml(users)}</span></div>
+              <div class="ax-rank-bar" aria-hidden="true"><span style="width:${Math.max(4, (item.users / max) * 100).toFixed(1)}%"></span></div>
             </li>`;
         }).join('')}
       </ol>`;
@@ -523,18 +551,18 @@
         `<strong>${escapeHtml(row.dataset.tipName)}</strong><span>${escapeHtml(row.dataset.tipDetail)}</span>`);
     };
     document.addEventListener('pointermove', (event) => {
-      const row = event.target.closest?.('.hbar-row');
+      const row = event.target.closest?.('.ax-tip, .hbar-row');
       if (row) show(row, event.clientX, event.clientY);
     });
     document.addEventListener('pointerout', (event) => {
-      if (event.target.closest?.('.hbar-row') && !event.relatedTarget?.closest?.('.hbar-row')) hideChartTooltip();
+      if (event.target.closest?.('.ax-tip, .hbar-row') && !event.relatedTarget?.closest?.('.ax-tip, .hbar-row')) hideChartTooltip();
     });
     document.addEventListener('focusin', (event) => {
-      const row = event.target.closest?.('.hbar-row');
+      const row = event.target.closest?.('.ax-tip, .hbar-row');
       if (row) show(row);
     });
     document.addEventListener('focusout', (event) => {
-      if (event.target.closest?.('.hbar-row')) hideChartTooltip();
+      if (event.target.closest?.('.ax-tip, .hbar-row')) hideChartTooltip();
     });
   }
 
@@ -550,17 +578,17 @@
     const medians = insights?.medians || {};
     const totals = insights?.totals || {};
     if (!totals.savedItineraries) {
-      target.innerHTML = '<div class="admin-card empty-state">No saved itineraries yet, so there is nothing to take a median of.</div>';
+      target.innerHTML = '<div class="ax-empty" style="grid-column:1/-1">No saved itineraries yet.</div>';
       return;
     }
-    const across = `Across ${formatNumber(totals.savedItineraries)} saved ${totals.savedItineraries === 1 ? 'itinerary' : 'itineraries'}.`;
-    renderStatCards(target, [
-      { icon: 'pin', label: 'Activities per itinerary', value: formatMedian(medians.activitiesPerItinerary), detail: `Planned stops, not counting restaurants or hotels. ${across}` },
-      { icon: 'restaurant', label: 'Restaurants per itinerary', value: formatMedian(medians.restaurantsPerItinerary), detail: `Restaurants the user added. ${across}` },
-      { icon: 'hotel', label: 'Hotels per itinerary', value: formatMedian(medians.hotelsPerItinerary), detail: `Hotels the user added. ${across}` },
-      { icon: 'calendar', label: 'Days per itinerary', value: formatMedian(medians.daysPerItinerary), detail: `Trip length in days. ${across}` },
-      { icon: 'users', label: 'Itineraries per user', value: formatMedian(medians.itinerariesPerUser), detail: `Among the ${formatNumber(totals.usersWithItineraries)} ${totals.usersWithItineraries === 1 ? 'user' : 'users'} with a saved itinerary.` },
-    ]);
+    const facts = [
+      ['Days', formatMedian(medians.daysPerItinerary)],
+      ['Activities', formatMedian(medians.activitiesPerItinerary)],
+      ['Restaurants', formatMedian(medians.restaurantsPerItinerary)],
+      ['Hotels', formatMedian(medians.hotelsPerItinerary)],
+    ];
+    target.innerHTML = facts.map(([label, value]) => `<div class="ax-fact"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join('')
+      + `<p class="ax-card-note" style="grid-column:1/-1;margin-top:2px">Across ${escapeHtml(formatNumber(totals.savedItineraries))} saved ${totals.savedItineraries === 1 ? 'itinerary' : 'itineraries'}.</p>`;
   }
 
   const PLAN_CHARTS = [
@@ -583,7 +611,7 @@
     if (!silent) {
       present.forEach((chart) => { document.getElementById(ids[chart.key]).innerHTML = '<div class="empty-state">Loading…</div>'; });
       const medians = document.getElementById('plan-medians');
-      if (medians && prefix === 'plan') medians.innerHTML = '<div class="admin-card empty-state">Loading medians…</div>';
+      if (medians && prefix === 'plan') medians.innerHTML = '<div class="ax-empty" style="grid-column:1/-1">Loading…</div>';
     }
     try {
       const insights = await request(`/api/admin/insights?limit=${encodeURIComponent(limit)}`);
@@ -592,7 +620,7 @@
     } catch (error) {
       present.forEach((chart) => { document.getElementById(ids[chart.key]).innerHTML = '<div class="empty-state">We couldn’t load this list. Try again.</div>'; });
       const medians = document.getElementById('plan-medians');
-      if (medians && prefix === 'plan') medians.innerHTML = '<div class="admin-card empty-state">We couldn’t load the medians. Try again.</div>';
+      if (medians && prefix === 'plan') medians.innerHTML = '<div class="ax-empty" style="grid-column:1/-1">We couldn’t load this. Try again.</div>';
       setStatus(getReadableError(error), 'error');
     }
   }
@@ -606,48 +634,45 @@
     });
   }
 
-  function renderDashboardCharts(analytics) {
-    const itineraries = buildDailySeries(trendToCounts(analytics?.itineraryTrend), analytics?.rangeStart, analytics?.rangeEnd);
-    const registrations = buildDailySeries(trendToCounts(analytics?.registrationTrend), analytics?.rangeStart, analytics?.rangeEnd);
-    const sum = (series) => series.reduce((total, point) => total + point.value, 0);
-    const setTotal = (id, value, unit) => {
-      const node = document.getElementById(id);
-      if (node) node.innerHTML = `<strong>${escapeHtml(formatNumber(value))}</strong><span>${escapeHtml(unit)}</span>`;
-    };
-    setTotal('chart-itineraries-total', sum(itineraries), 'in this period');
-    setTotal('chart-registrations-total', sum(registrations), 'in this period');
-    renderLineChart('chart-itineraries', itineraries, {
-      label: 'Itineraries saved per day', unit: 'itineraries saved', unitSingular: 'itinerary saved',
-      color: CHART_COLORS.itineraries, emptyText: 'No itineraries were saved in this period.',
-    });
-    renderLineChart('chart-registrations', registrations, {
-      label: 'New registrations per day', unit: 'new accounts', unitSingular: 'new account',
-      color: CHART_COLORS.registrations, emptyText: 'No new accounts were registered in this period.',
-    });
+  const DASHBOARD_SERIES = [
+    { key: 'registrations', tab: 'New users', trend: 'registrationTrend', label: 'New registrations per day', unit: 'new accounts', unitSingular: 'new account', color: CHART_COLORS.registrations, emptyText: 'No new accounts in this period.', foot: 'Unverified accounts are removed after 24 hours, so they only appear briefly.' },
+    { key: 'itineraries', tab: 'Itineraries', trend: 'itineraryTrend', label: 'Itineraries saved per day', unit: 'itineraries saved', unitSingular: 'itinerary saved', color: CHART_COLORS.itineraries, emptyText: 'No itineraries were saved in this period.', foot: 'Counts saved itineraries that still exist (trips are removed after they end).' },
+    { key: 'signins', tab: 'Sign-ins', trend: 'signInTrend', usage: true, label: 'User sign-ins per day', unit: 'sign-ins', unitSingular: 'sign-in', color: CHART_COLORS.signIns, emptyText: 'No sign-ins in this period.', foot: 'Email-and-password sign-ins.' },
+    { key: 'chat', tab: 'Chatbot', trend: 'chatTrend', usage: true, label: 'Chatbot messages per day', unit: 'chatbot messages', unitSingular: 'chatbot message', color: CHART_COLORS.chat, emptyText: 'No chatbot messages in this period.', foot: 'Messages users sent to Sidekick. Message text is never stored.' },
+  ];
+  const CHART_TAB_KEY = 'admin.dashboardChartTab';
+  let dashboardChartTab = (() => { try { return localStorage.getItem(CHART_TAB_KEY) || 'registrations'; } catch (error) { return 'registrations'; } })();
+  let lastDashboardAnalytics = null;
 
-    const usageCharts = [
-      { id: 'chart-signins', card: 'card-signins', trend: analytics?.signInTrend, label: 'User sign-ins per day', unit: 'sign-ins', unitSingular: 'sign-in', color: CHART_COLORS.signIns, emptyText: 'No sign-ins were recorded in this period.' },
-      { id: 'chart-chat', card: 'card-chat', trend: analytics?.chatTrend, label: 'Chatbot messages per day', unit: 'chatbot messages', unitSingular: 'chatbot message', color: CHART_COLORS.chat, emptyText: 'No chatbot messages were recorded in this period.' },
-    ];
-    for (const chart of usageCharts) {
-      const card = document.getElementById(chart.card);
-      const tracked = Boolean(analytics?.usageTrackingAvailable) && Array.isArray(chart.trend);
-      card?.classList.toggle('chart-card-untracked', !tracked);
-      if (!tracked) {
-        chartRegistry.delete(chart.id);
-        const total = document.getElementById(`${chart.id}-total`);
-        if (total) total.innerHTML = '<span class="badge neutral">Not tracked yet</span>';
-        const target = document.getElementById(chart.id);
-        if (target) {
-          target.innerHTML = '<div class="untracked-state"><p>Recording hasn’t been set up yet.</p><p>Run backend/migrations/003_app_usage_events.sql in SSMS, then restart the backend. Counting starts from that point; earlier activity can’t be recovered.</p></div>';
-          target.setAttribute('aria-label', `${chart.label}: not tracked yet.`);
-        }
-        continue;
+  function renderDashboardCharts(analytics) {
+    lastDashboardAnalytics = analytics;
+    const tabs = document.getElementById('chart-tabs');
+    if (!tabs) return;
+    const sum = (series) => series.reduce((total, point) => total + point.value, 0);
+    const prepared = DASHBOARD_SERIES.map((series) => {
+      const tracked = !series.usage || (Boolean(analytics?.usageTrackingAvailable) && Array.isArray(analytics?.[series.trend]));
+      const points = tracked ? buildDailySeries(trendToCounts(analytics?.[series.trend]), analytics?.rangeStart, analytics?.rangeEnd) : [];
+      return { ...series, tracked, points, total: sum(points) };
+    });
+    if (!prepared.some((series) => series.key === dashboardChartTab)) dashboardChartTab = 'registrations';
+    tabs.innerHTML = prepared.map((series) => `
+      <button type="button" class="ax-tab" role="tab" data-chart-tab="${series.key}" aria-selected="${series.key === dashboardChartTab}">
+        ${escapeHtml(series.tab)} <strong>${series.tracked ? escapeHtml(formatNumber(series.total)) : '—'}</strong>
+      </button>`).join('');
+    const active = prepared.find((series) => series.key === dashboardChartTab);
+    const foot = document.getElementById('chart-foot');
+    if (foot) foot.textContent = active.foot;
+    const target = document.getElementById('chart-main');
+    if (!active.tracked) {
+      chartRegistry.delete('chart-main');
+      if (target) {
+        target.innerHTML = '<div class="untracked-state"><p>Recording hasn’t been set up yet.</p><p>Run backend/migrations/003_app_usage_events.sql, then restart the backend.</p></div>';
+        target.setAttribute('aria-label', `${active.label}: not tracked yet.`);
       }
-      const series = buildDailySeries(trendToCounts(chart.trend), analytics?.rangeStart, analytics?.rangeEnd);
-      setTotal(`${chart.id}-total`, sum(series), 'in this period');
-      renderLineChart(chart.id, series, chart);
+      return;
     }
+    if (target) target.setAttribute('aria-label', active.label);
+    renderLineChart('chart-main', active.points, { ...active, height: 240 });
   }
 
   function describeTrackingStart(firstEventAt) {
@@ -662,13 +687,11 @@
     if (!summaryTarget) return;
     updateRangeControls(dashboardRangeDays);
     if (!silent) {
-      summaryTarget.innerHTML = '<div class="admin-card empty-state">Loading key numbers…</div>';
-      ['chart-itineraries', 'chart-registrations', 'chart-signins', 'chart-chat'].forEach((id) => {
-        const node = document.getElementById(id);
-        if (node) node.innerHTML = '<div class="empty-state chart-empty">Loading graph…</div>';
-      });
-      if (userBase) userBase.innerHTML = '<div class="admin-card empty-state">Loading user summary…</div>';
-      if (activityList) activityList.innerHTML = '<div class="empty-state">Loading recent sign-ups and saved itineraries…</div>';
+      summaryTarget.innerHTML = '<div class="ax-empty" style="grid-column:1/-1">Loading…</div>';
+      const chart = document.getElementById('chart-main');
+      if (chart) chart.innerHTML = '<div class="empty-state chart-empty">Loading graph…</div>';
+      if (userBase) userBase.innerHTML = '<div class="ax-empty">Loading…</div>';
+      if (activityList) activityList.innerHTML = '<li class="ax-empty" style="display:block">Loading…</li>';
     }
 
     const requestedRange = dashboardRangeDays;
@@ -684,30 +707,24 @@
     if (summary) {
       renderDashboardSummary(summary);
     } else {
-      summaryTarget.innerHTML = '<div class="admin-card empty-state">We couldn’t load the key numbers. Try again.</div>';
+      summaryTarget.innerHTML = '<div class="ax-empty" style="grid-column:1/-1">We couldn’t load the key numbers. Try again.</div>';
     }
 
     if (analyticsResult.status === 'fulfilled') {
       renderDashboardCharts(analyticsResult.value);
       renderUserBaseSummary(analyticsResult.value?.profileSummary, summary);
     } else {
-      ['chart-itineraries', 'chart-registrations', 'chart-signins', 'chart-chat'].forEach((id) => {
-        chartRegistry.delete(id);
-        const node = document.getElementById(id);
-        if (node) node.innerHTML = '<div class="empty-state chart-empty">We couldn’t load this graph. Try again.</div>';
-      });
-      ['chart-itineraries-total', 'chart-registrations-total', 'chart-signins-total', 'chart-chat-total'].forEach((id) => {
-        const node = document.getElementById(id);
-        if (node) node.textContent = '';
-      });
-      if (userBase) userBase.innerHTML = '<div class="admin-card empty-state">We couldn’t load the user summary. Try again.</div>';
+      chartRegistry.delete('chart-main');
+      const chart = document.getElementById('chart-main');
+      if (chart) chart.innerHTML = '<div class="empty-state chart-empty">We couldn’t load this graph. Try again.</div>';
+      if (userBase) userBase.innerHTML = '<div class="ax-empty">We couldn’t load this. Try again.</div>';
     }
 
     if (activityList) {
       if (activityResult.status === 'fulfilled') {
         renderRecentActivity(activityList, activityResult.value);
       } else {
-        activityList.innerHTML = '<div class="empty-state">We couldn’t load recent activity. Try again.</div>';
+        activityList.innerHTML = '<li class="ax-empty" style="display:block">We couldn’t load recent activity. Try again.</li>';
       }
     }
 
@@ -720,43 +737,38 @@
     }
   }
 
+  let activityFilter = 'all';
+  let activityCache = [];
+
+  function renderActivityFeed() {
+    const list = document.getElementById('recent-activity-list');
+    if (!list) return;
+    const items = activityFilter === 'all' ? activityCache : activityCache.filter((item) => item.kind === activityFilter);
+    renderFeed(list, items.slice(0, 30), 'Nothing to show for this filter yet.');
+  }
+
   async function loadActivityFeed() {
     const activityList = document.getElementById('recent-activity-list');
     if (!activityList) return;
-    const auditList = document.getElementById('admin-audit-list');
-    activityList.innerHTML = '<div class="empty-state">Loading recent sign-ups and saved plans…</div>';
-    if (auditList) auditList.innerHTML = '<div class="empty-state">Checking admin sign-in history…</div>';
+    const today = document.getElementById('activity-today');
+    activityList.innerHTML = '<li class="ax-empty" style="display:block">Loading…</li>';
     try {
-      const [activities, audit] = await Promise.all([
-        request('/api/admin/activity'),
-        auditList ? request('/api/admin/audit') : Promise.resolve(null),
-      ]);
-      const items = [...(activities?.recentUsers || []), ...(activities?.recentTrips || []), ...(activities?.recentUsage || [])]
-        .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
-        .slice(0, 12);
-      activityList.innerHTML = items.length
-        ? items.map((item) => `
-            <div class="logger-item">
-            <div class="logger-text">${escapeHtml(item.label)}</div>
-            <div class="logger-time">${escapeHtml(formatDate(item.timestamp))}</div>
-            </div>
-          `).join('')
-        : '<div class="empty-state">Nothing to show yet. New sign-ups and saved plans will appear here.</div>';
-      if (auditList) {
-        auditList.innerHTML = audit?.available
-        ? (audit.events || []).length
-          ? audit.events.map((event) => `
-              <div class="logger-item">
-                <div class="logger-text">${escapeHtml(event.actor || 'Administrator')} · ${escapeHtml(event.eventType)} (${escapeHtml(event.outcome)})</div>
-                <div class="logger-time">${escapeHtml(formatDate(event.timestamp))}</div>
-              </div>
-            `).join('')
-          : '<div class="empty-state">No admin sign-ins have been recorded yet.</div>'
-        : '<div class="empty-state">Admin sign-in history isn’t set up yet.</div>';
+      const activities = await request('/api/admin/activity');
+      activityCache = activityItems(activities);
+      renderActivityFeed();
+      if (today) {
+        const counts = activities?.last24Hours || {};
+        const tile = (iconName, label, value) => ({ icon: iconName, label, value: value == null ? '—' : formatNumber(value), sub: value == null ? 'Not tracked yet' : 'Last 24 hours' });
+        renderKpis(today, [
+          tile('users', 'New users', counts.signups),
+          tile('compass', 'Itineraries saved', counts.trips),
+          tile('signin', 'Sign-ins', counts.signIns),
+          tile('chat', 'Chatbot messages', counts.chatMessages),
+        ]);
       }
     } catch (error) {
-      activityList.innerHTML = '<div class="empty-state">We couldn’t load recent activity. Try again.</div>';
-      if (auditList) auditList.innerHTML = '<div class="empty-state">We couldn’t load admin sign-in history. Try again.</div>';
+      activityList.innerHTML = '<li class="ax-empty" style="display:block">We couldn’t load recent activity. Try again.</li>';
+      if (today) today.innerHTML = '';
       setStatus(getReadableError(error), 'error');
     }
   }
@@ -777,42 +789,56 @@
     if (next) next.disabled = state.page >= pageCount;
   }
 
+  function initials(name, email) {
+    const source = String(name || email || '?').trim();
+    const parts = source.split(/\s+/).filter(Boolean);
+    return ((parts[0]?.[0] || '?') + (parts.length > 1 ? parts[parts.length - 1][0] : '')).toUpperCase();
+  }
+
+  function personCell(name, email) {
+    return `<div class="ax-person"><span class="ax-avatar" aria-hidden="true">${escapeHtml(initials(name, email))}</span><span class="ax-person-text"><strong>${escapeHtml(name || 'Unnamed user')}</strong><small>${escapeHtml(email || '—')}</small></span></div>`;
+  }
+
+  let userSearchToken = 0;
   async function loadUserTable(page = userTableState.page) {
     const tableBody = document.getElementById('user-table-body');
     if (!tableBody) return;
-    tableBody.innerHTML = '<tr><td colspan="100%" class="empty-state">Loading users…</td></tr>';
+    const token = ++userSearchToken;
+    if (!tableBody.children.length) tableBody.innerHTML = '<tr><td colspan="5" class="empty-state">Loading users…</td></tr>';
     try {
       const search = document.getElementById('user-search')?.value.trim() || '';
       const status = document.getElementById('user-status-filter')?.value || 'all';
       const params = new URLSearchParams({ page: String(page), limit: String(userTableState.limit), search, status });
       const payload = await request(`/api/admin/users?${params}`);
+      if (token !== userSearchToken) return; // a newer search is on its way
       const users = payload?.users || [];
       userLastActiveTrackingAvailable = Boolean(payload?.lastActiveTrackingAvailable);
-      const lastActiveNote = document.getElementById('user-last-active-note');
-      if (lastActiveNote && !userLastActiveTrackingAvailable) {
-        lastActiveNote.textContent = 'Last-active tracking is not set up yet. Run backend/migrations/002_user_last_active.sql manually in SSMS to display activity dates. Account deletion remains available.';
-      }
       userTableState.page = payload?.page || page;
       userTableState.total = payload?.total || 0;
-      renderTableBody('user-table-body', users, [
-        { key: 'name', value: (row) => row.name || 'Unnamed user' },
-        { key: 'email', value: (row) => row.email || '—' },
-        { key: 'createdAt', value: (row) => formatDate(row.createdAt) },
-        { key: 'lastActiveAt', value: (row) => {
-          if (!row.lastActiveAt) return userLastActiveTrackingAvailable ? '—' : 'Tracking unavailable';
-          const lastActive = new Date(row.lastActiveAt);
-          const inactiveLongerThan180Days = Number.isFinite(lastActive.getTime())
-            && Date.now() - lastActive.getTime() >= 180 * 24 * 60 * 60 * 1000;
-          return `${formatDate(row.lastActiveAt)}${inactiveLongerThan180Days ? ' · 180+ days inactive' : ''}`;
-        } },
-        { key: 'accountState', html: true, value: (row) => `<span class="badge ${row.isActive ? 'success' : 'neutral'}">${row.isActive ? 'active' : 'inactive'}</span>` },
-        { key: 'presence', html: true, value: (row) => `<span class="badge ${row.isOnline ? 'success' : 'neutral'}">${row.isOnline ? 'online' : 'offline'}</span>` },
-        { key: 'verification', html: true, value: (row) => `<span class="badge ${row.isVerified ? 'success' : 'warning'}">${row.isVerified ? 'verified' : 'unverified'}</span>` },
-        { key: 'details', html: true, value: (row) => `<button class="admin-button-secondary" type="button" data-user-detail="${Number(row.userId)}">Details</button>` },
-      ]);
+      const note = document.getElementById('user-last-active-note');
+      if (note) note.textContent = `${formatNumber(userTableState.total)} ${userTableState.total === 1 ? 'account' : 'accounts'}${search ? ` matching “${search}”` : ''}`;
+      tableBody.innerHTML = users.length ? users.map((row) => {
+        let lastActive = '—';
+        let inactiveNote = '';
+        if (row.lastActiveAt) {
+          lastActive = relativeTime(row.lastActiveAt);
+          const ms = Date.now() - new Date(row.lastActiveAt).getTime();
+          if (Number.isFinite(ms) && ms >= 180 * 24 * 60 * 60 * 1000) inactiveNote = '<span class="ax-sub">180+ days inactive</span>';
+        } else if (!userLastActiveTrackingAvailable) {
+          lastActive = 'Not tracked';
+        }
+        return `<tr>
+          <td>${personCell(row.name, row.email)}</td>
+          <td class="hide-sm">${escapeHtml(formatDateOnly(row.createdAt))}</td>
+          <td class="hide-sm"><span title="${escapeHtml(row.lastActiveAt ? formatDate(row.lastActiveAt) : '')}">${escapeHtml(lastActive)}</span>${inactiveNote}</td>
+          <td>${row.isOnline ? '<span class="ax-pill ok live">Online</span>' : row.isActive ? '<span class="ax-pill">Active</span>' : '<span class="ax-pill off">Disabled</span>'}</td>
+          <td class="act"><button class="admin-button-secondary ax-btn-sm" type="button" data-user-detail="${Number(row.userId)}">View</button></td>
+        </tr>`;
+      }).join('') : `<tr><td colspan="5" class="empty-state">${search ? 'No users match that search.' : 'No users yet.'}</td></tr>`;
       updatePagination('user-page-summary', 'user-page-previous', 'user-page-next', userTableState);
     } catch (error) {
-      tableBody.innerHTML = '<tr><td colspan="100%" class="empty-state">We couldn’t load users. Try again.</td></tr>';
+      if (token !== userSearchToken) return;
+      tableBody.innerHTML = '<tr><td colspan="5" class="empty-state">We couldn’t load users. Try again.</td></tr>';
       setStatus(getReadableError(error), 'error');
     }
   }
@@ -847,8 +873,7 @@
       ['Joined', formatDate(user.createdAt)],
       ['Last app activity', formatDate(user.lastActiveAt)],
       ['Profile updated', formatDate(user.updatedAt)],
-      ['Account status', user.isActive ? 'Active' : 'Inactive'],
-      ['Verification', user.isVerified ? 'Verified' : 'Unverified'],
+      ['Account status', user.isActive ? 'Active' : 'Disabled'],
       ['Saved travel plans', user.tripCount],
     ];
     const list = (label, values) => `
@@ -891,7 +916,7 @@
     const panel = document.getElementById('user-detail-panel');
     const target = document.getElementById('user-detail-content');
     if (!panel || !target) return;
-    panel.hidden = false;
+    openDrawer(panel);
     target.innerHTML = '<div class="empty-state">Loading user profile…</div>';
     try {
       const payload = await request(`/api/admin/users/${encodeURIComponent(userId)}`);
@@ -901,29 +926,68 @@
         lastActiveTrackingAvailable: Boolean(payload?.user?.lastActiveTrackingAvailable),
         inactiveLongerThan180Days: Boolean(payload?.user?.inactiveLongerThan180Days),
       });
-      panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
     } catch (error) {
       target.innerHTML = '<div class="empty-state">We couldn’t load this user. Try again.</div>';
       setStatus(getReadableError(error), 'error');
     }
   }
 
+  // Themed confirmation (the browser's grey prompt looked out of place).
+  // Resolves with the typed text, or null when cancelled.
+  function askTypedConfirmation({ title, message, label, expected, confirmText }) {
+    return new Promise((resolve) => {
+      const root = document.createElement('div');
+      root.className = 'ax-dialog';
+      root.innerHTML = `
+        <div class="ax-dialog-backdrop" data-dialog-cancel></div>
+        <form class="ax-dialog-panel" role="alertdialog" aria-modal="true" aria-labelledby="ax-dialog-title" novalidate>
+          <h2 id="ax-dialog-title">${escapeHtml(title)}</h2>
+          <p>${escapeHtml(message)}</p>
+          <label for="ax-dialog-input">${escapeHtml(label)}</label>
+          <input id="ax-dialog-input" type="text" autocomplete="off" />
+          <p class="ax-dialog-error" role="alert" hidden></p>
+          <div class="ax-dialog-actions">
+            <button type="button" class="admin-button-secondary" data-dialog-cancel>Cancel</button>
+            <button type="submit" class="admin-button-danger">${escapeHtml(confirmText)}</button>
+          </div>
+        </form>`;
+      const input = root.querySelector('input');
+      const error = root.querySelector('.ax-dialog-error');
+      const finish = (value) => { document.removeEventListener('keydown', onKey, true); root.remove(); resolve(value); };
+      const onKey = (event) => { if (event.key === 'Escape') { event.preventDefault(); finish(null); } };
+      root.addEventListener('click', (event) => { if (event.target.closest('[data-dialog-cancel]')) finish(null); });
+      root.querySelector('form').addEventListener('submit', (event) => {
+        event.preventDefault();
+        if (input.value.trim().toLowerCase() !== String(expected || '').trim().toLowerCase()) {
+          error.textContent = 'That doesn’t match. Type the account email exactly.';
+          error.hidden = false;
+          input.focus();
+          return;
+        }
+        finish(input.value.trim());
+      });
+      document.addEventListener('keydown', onKey, true);
+      document.body.appendChild(root);
+      input.focus();
+    });
+  }
+
   async function deleteUserPermanently(userId, userEmail) {
-    const confirmationEmail = window.prompt(
-      `This permanently deletes ${userEmail} and their linked Sidekick data. This cannot be undone.\n\nType the account email to confirm:`,
-    );
+    const confirmationEmail = await askTypedConfirmation({
+      title: 'Delete this account?',
+      message: `This permanently deletes ${userEmail} and their linked Sidekick data (trips, reviews, preferences). This cannot be undone.`,
+      label: 'Type the account email to confirm',
+      expected: userEmail,
+      confirmText: 'Delete permanently',
+    });
     if (confirmationEmail === null) return;
-    if (confirmationEmail.trim().toLowerCase() !== String(userEmail || '').trim().toLowerCase()) {
-      setStatus('The email did not match. The account was not deleted.', 'error');
-      return;
-    }
 
     try {
       await request(`/api/admin/users/${encodeURIComponent(userId)}`, {
         method: 'DELETE',
         body: JSON.stringify({ confirmationEmail }),
       });
-      document.getElementById('user-detail-panel').hidden = true;
+      closeDrawer(document.getElementById('user-detail-panel'));
       await loadUserTable(userTableState.page);
       setStatus('The account and its linked Sidekick data were permanently deleted.', 'info');
     } catch (error) {
@@ -931,70 +995,89 @@
     }
   }
 
+  const STAR = '<path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9Z" fill="currentColor"/>';
+  function stars(rating, large = false) {
+    const value = Math.max(0, Math.min(5, Number(rating) || 0));
+    // Each star fills by its share of the rating (4.5 -> four full, one half).
+    return `<span class="ax-stars${large ? ' lg' : ''}" role="img" aria-label="${escapeHtml(value.toFixed(1).replace(/.0$/, ''))} out of 5 stars">${[1, 2, 3, 4, 5].map((n) => {
+      const fill = Math.round(Math.max(0, Math.min(1, value - (n - 1))) * 100);
+      return `<span class="ax-star" aria-hidden="true"><svg viewBox="0 0 24 24">${STAR}</svg><span class="ax-star-fill" style="width:${fill}%"><svg viewBox="0 0 24 24">${STAR}</svg></span></span>`;
+    }).join('')}</span>`;
+  }
+
   async function loadAppReviews(page = appReviewTableState.page) {
-    const tableBody = document.getElementById('app-reviews-table-body');
+    const list = document.getElementById('app-reviews-list');
     const summary = document.getElementById('review-summary');
-    if (!tableBody || !summary) return;
-    tableBody.innerHTML = '<tr><td colspan="4" class="empty-state">Loading app reviews…</td></tr>';
-    summary.innerHTML = '<div class="admin-card empty-state">Loading rating summary…</div>';
+    if (!list || !summary) return;
+    list.innerHTML = '<div class="admin-card ax-empty">Loading reviews…</div>';
+    summary.innerHTML = '<div class="admin-card ax-empty" style="grid-column:1/-1">Loading rating summary…</div>';
     try {
       const params = new URLSearchParams({ page: String(page), limit: String(appReviewTableState.limit) });
       const payload = await request(`/api/admin/app-reviews?${params}`);
       appReviewTableState.page = payload?.page || page;
       appReviewTableState.total = payload?.total || 0;
+      const total = Number(payload?.total || 0);
+      const average = payload?.averageRating == null ? null : Number(payload.averageRating);
+      const counts = payload?.ratingCounts || {};
+      const maxCount = Math.max(1, ...[5, 4, 3, 2, 1].map((n) => Number(counts[n] || 0)));
       summary.innerHTML = `
-        <div class="admin-card stat-card">
-          <span class="stat-label">Average rating</span>
-          <div class="stat-value">${payload.averageRating == null ? 'Not available' : `${escapeHtml(Number(payload.averageRating).toFixed(1))} / 5`}</div>
-        </div>
-        <div class="admin-card stat-card">
-          <span class="stat-label">Ratings received</span>
-          <div class="stat-value">${escapeHtml(payload.total ?? 0)}</div>
-        </div>
-      `;
+        <article class="admin-card ax-rating-big">
+          <strong>${average == null ? '—' : escapeHtml(average.toFixed(1))}</strong>
+          ${stars(average, true)}
+          <small>${escapeHtml(formatNumber(total))} ${total === 1 ? 'rating' : 'ratings'}</small>
+        </article>
+        <article class="admin-card ax-dist" aria-label="Ratings by number of stars">
+          ${[5, 4, 3, 2, 1].map((n) => {
+            const count = Number(counts[n] || 0);
+            return `<div class="ax-dist-row"><span>${n} star${n === 1 ? '' : 's'}</span><span class="ax-dist-bar"><span style="width:${count ? Math.max(3, Math.round((count / maxCount) * 100)) : 0}%"></span></span><b>${escapeHtml(formatNumber(count))}</b></div>`;
+          }).join('')}
+        </article>`;
       const reviews = payload?.reviews || [];
-      tableBody.innerHTML = reviews.length
-        ? reviews.map((review) => `
-            <tr>
-              <td><span class="badge neutral">${escapeHtml(review.rating)} / 5</span></td>
-              <td class="review-text-cell">${escapeHtml(review.review || 'Rating only')}</td>
-              <td>${escapeHtml(review.userName)}<br><span class="stat-detail">${escapeHtml(review.userEmail)}</span></td>
-              <td>${escapeHtml(formatDate(review.updatedAt || review.createdAt))}</td>
-            </tr>
-          `).join('')
-        : '<tr><td colspan="4" class="empty-state">No app ratings have been submitted yet.</td></tr>';
+      list.innerHTML = reviews.length
+        ? reviews.map((review, index) => `
+            <article class="ax-review" style="animation-delay:${Math.min(index, 8) * 30}ms">
+              <div class="ax-review-top">${stars(review.rating)}<span class="ax-review-date">${escapeHtml(formatDateOnly(review.updatedAt || review.createdAt))}</span></div>
+              <p class="ax-review-text${review.review ? '' : ' is-empty'}">${review.review ? `“${escapeHtml(review.review)}”` : 'Rated without a comment.'}</p>
+              ${personCell(review.userName, review.userEmail)}
+            </article>`).join('')
+        : '<div class="admin-card ax-empty">No app ratings have been submitted yet.</div>';
       updatePagination('app-reviews-page-summary', 'app-reviews-page-previous', 'app-reviews-page-next', appReviewTableState);
     } catch (error) {
-      summary.innerHTML = '<div class="admin-card empty-state">Rating summary is unavailable.</div>';
-      tableBody.innerHTML = '<tr><td colspan="4" class="empty-state">We couldn’t load app reviews. Check the database setup and try again.</td></tr>';
+      summary.innerHTML = '<div class="admin-card ax-empty" style="grid-column:1/-1">Rating summary is unavailable.</div>';
+      list.innerHTML = '<div class="admin-card ax-empty">We couldn’t load app reviews. Check the database setup and try again.</div>';
       setStatus(getReadableError(error), 'error');
     }
   }
 
+  let itinerarySearchToken = 0;
   async function loadItineraryTable(page = itineraryTableState.page) {
     const tableBody = document.getElementById('itinerary-table-body');
     if (!tableBody) return;
-    tableBody.innerHTML = '<tr><td colspan="100%" class="empty-state">Loading saved travel plans…</td></tr>';
+    const token = ++itinerarySearchToken;
+    if (!tableBody.children.length) tableBody.innerHTML = '<tr><td colspan="5" class="empty-state">Loading saved travel plans…</td></tr>';
     try {
       const search = document.getElementById('itinerary-search')?.value.trim() || '';
       const params = new URLSearchParams({ page: String(page), limit: String(itineraryTableState.limit), search });
       const payload = await request(`/api/admin/itineraries?${params}`);
+      if (token !== itinerarySearchToken) return;
       const itineraries = payload?.itineraries || [];
       itineraryTableState.page = payload?.page || page;
       itineraryTableState.total = payload?.total || 0;
-      renderTableBody('itinerary-table-body', itineraries, [
-        { key: 'title', value: (row) => row.title || 'Untitled plan' },
-        { key: 'traveler', value: (row) => `${row.userName || 'Unnamed user'} · ${row.userEmail || '—'}` },
-        { key: 'destination', value: (row) => row.destination || '—' },
-        { key: 'dates', value: (row) => `${formatDateOnly(row.startDate)} – ${formatDateOnly(row.endDate)}` },
-        { key: 'dayCount', value: (row) => row.dayCount },
-        { key: 'activityCount', value: (row) => row.activityCount },
-        { key: 'createdAt', value: (row) => formatDate(row.createdAt) },
-        { key: 'details', html: true, value: (row) => `<button class="admin-button-secondary" type="button" data-itinerary-detail="${Number(row.tripId)}">Details</button>` },
-      ]);
+      tableBody.innerHTML = itineraries.length ? itineraries.map((row) => {
+        const destination = row.destination || row.title || 'Untitled plan';
+        const stops = `${formatNumber(row.dayCount)} ${Number(row.dayCount) === 1 ? 'day' : 'days'} · ${formatNumber(row.activityCount)} ${Number(row.activityCount) === 1 ? 'stop' : 'stops'}`;
+        return `<tr>
+          <td><strong>${escapeHtml(destination)}</strong><span class="ax-sub">${escapeHtml(stops)}</span></td>
+          <td>${personCell(row.userName, row.userEmail)}</td>
+          <td class="hide-sm">${escapeHtml(formatDateOnly(row.startDate))}<span class="ax-sub">to ${escapeHtml(formatDateOnly(row.endDate))}</span></td>
+          <td class="hide-sm"><span title="${escapeHtml(formatDate(row.createdAt))}">${escapeHtml(relativeTime(row.createdAt))}</span></td>
+          <td class="act"><button class="admin-button-secondary ax-btn-sm" type="button" data-itinerary-detail="${Number(row.tripId)}">View</button></td>
+        </tr>`;
+      }).join('') : `<tr><td colspan="5" class="empty-state">${search ? 'No travel plans match that search.' : 'No travel plans saved yet.'}</td></tr>`;
       updatePagination('itinerary-page-summary', 'itinerary-page-previous', 'itinerary-page-next', itineraryTableState);
     } catch (error) {
-      tableBody.innerHTML = '<tr><td colspan="100%" class="empty-state">We couldn’t load travel plans. Try again.</td></tr>';
+      if (token !== itinerarySearchToken) return;
+      tableBody.innerHTML = '<tr><td colspan="5" class="empty-state">We couldn’t load travel plans. Try again.</td></tr>';
       setStatus(getReadableError(error), 'error');
     }
   }
@@ -1041,12 +1124,11 @@
     const target = document.getElementById('itinerary-detail-content');
     if (!panel || !target) return;
     selectedItineraryTripId = String(tripId);
-    panel.hidden = false;
+    openDrawer(panel);
     target.innerHTML = '<div class="empty-state">Loading travel plan…</div>';
     try {
       const payload = await request(`/api/admin/itineraries/${encodeURIComponent(tripId)}`);
       renderItineraryDetails(payload?.itinerary || {});
-      panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
     } catch (error) {
       target.innerHTML = '<div class="empty-state">We couldn’t load this travel plan. Try again.</div>';
       setStatus(getReadableError(error), 'error');
@@ -1385,55 +1467,149 @@
     void loadReportTable(1);
   }
 
+  function uptimeText(seconds) {
+    const s = Number(seconds);
+    if (!Number.isFinite(s)) return '—';
+    const days = Math.floor(s / 86400);
+    const hours = Math.floor((s % 86400) / 3600);
+    const minutes = Math.floor((s % 3600) / 60);
+    return days ? `${days} d ${hours} h` : hours ? `${hours} h ${minutes} min` : `${minutes} min`;
+  }
+
   async function loadIntegrations() {
     const target = document.getElementById('integration-grid');
     if (!target) return;
-    target.innerHTML = '<div class="admin-card empty-state">Checking Sidekick connections…</div>';
-    try {
-      const payload = await request('/api/admin/integrations');
+    const auditList = document.getElementById('admin-audit-list');
+    target.innerHTML = '<div class="admin-card ax-empty" style="grid-column:1/-1">Checking Sidekick services…</div>';
+    if (auditList) auditList.innerHTML = '<li class="ax-empty" style="display:block">Loading…</li>';
+    const [statusResult, auditResult] = await Promise.allSettled([
+      request('/api/admin/integrations'),
+      auditList ? request('/api/admin/audit') : Promise.resolve(null),
+    ]);
+
+    if (statusResult.status === 'fulfilled') {
+      const p = statusResult.value || {};
+      const latency = Number(p?.database?.latencyMs);
       const items = [
-        ['Data storage', payload?.database?.connected ? 'Connected' : 'Unavailable', payload?.database?.connected ? 'success' : 'warning'],
-        ['AI assistant', payload?.ai?.configured ? 'Ready' : 'Needs setup', payload?.ai?.configured ? 'success' : 'warning'],
-        ['Maps', payload?.maps?.configured ? 'Ready' : 'Needs setup', payload?.maps?.configured ? 'success' : 'warning'],
-        ['App environment', payload?.mode === 'production' ? 'Production' : payload?.mode === 'development' ? 'Development' : 'Not available', 'neutral'],
+        { title: 'Database', ok: p?.database?.connected, value: p?.database?.connected ? 'Connected' : 'Unavailable',
+          note: Number.isFinite(latency) ? `Answered in ${latency} ms${latency > 2000 ? ' (slow right now)' : ''}.` : 'Stores accounts, trips and reviews.', warn: latency > 2000 },
+        { title: 'AI assistant', ok: p?.ai?.configured, value: p?.ai?.configured ? 'Ready' : 'Needs an API key',
+          note: p?.ai?.configured ? `Model: ${p.ai.model || '—'}` : 'Add AI_API_KEY to the server settings.' },
+        { title: 'Maps and places', ok: p?.maps?.configured, value: p?.maps?.configured ? 'Ready' : 'Needs an API key',
+          note: p?.maps?.configured ? 'Place search, photos and routes.' : 'Add GOOGLE_MAPS_API_KEY to the server settings.' },
+        { title: 'Email codes', ok: p?.email?.configured, value: p?.email?.configured ? 'Ready' : 'Not set up',
+          note: p?.email?.configured ? 'Sign-up and password-reset codes can be sent.' : 'Add the SMTP settings so users can verify their email.' },
+        { title: 'Maintenance mode', ok: !p?.maintenanceMode, warn: Boolean(p?.maintenanceMode), value: p?.maintenanceMode ? 'On' : 'Off',
+          note: p?.maintenanceMode ? 'The app is paused for users. Turn MAINTENANCE_MODE off to reopen it.' : 'The app is open to users.' },
+        { title: 'Server', ok: true, value: p?.mode === 'production' ? 'Production' : 'Development',
+          note: `Running for ${uptimeText(p?.uptimeSeconds)}. Checked ${new Date(p?.healthCheckTime || Date.now()).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}.`, warn: p?.mode !== 'production' },
       ];
-      target.innerHTML = items.map(([label, value, status]) => `
-        <div class="admin-card">
-          <div class="stat-label">${escapeHtml(label)}</div>
-          <div class="stat-value" style="font-size:1.25rem; margin-top:10px;">${escapeHtml(value)}</div>
-          <div class="stat-detail"><span class="badge ${status}">${status === 'success' ? 'Ready' : status === 'warning' ? 'Needs setup' : 'Not available'}</span></div>
-        </div>
-      `).join('');
+      target.innerHTML = items.map((item) => `
+        <article class="admin-card ax-status ${item.warn ? 'warn' : item.ok ? 'ok' : 'bad'}">
+          <span class="ax-status-dot" aria-hidden="true"></span>
+          <div><h3>${escapeHtml(item.title)}</h3><strong>${escapeHtml(item.value)}</strong><p>${escapeHtml(item.note)}</p></div>
+        </article>`).join('');
+    } else {
+      target.innerHTML = `<article class="admin-card ax-status bad" style="grid-column:1/-1"><span class="ax-status-dot" aria-hidden="true"></span><div><h3>Server</h3><strong>Can’t reach the database</strong><p>${escapeHtml(getReadableError(statusResult.reason))}</p></div></article>`;
+    }
+
+    if (auditList) {
+      if (auditResult.status === 'fulfilled') {
+        const audit = auditResult.value;
+        const events = (audit?.events || []).slice(0, 8);
+        auditList.innerHTML = !audit?.available
+          ? '<li class="ax-empty" style="display:block">Admin sign-in history isn’t set up yet.</li>'
+          : events.length
+            ? events.map((event) => {
+              const ok = /success/i.test(String(event.outcome));
+              const what = /logout/i.test(String(event.eventType)) ? 'signed out' : ok ? 'signed in' : 'failed sign-in attempt';
+              return `<li>
+                <span class="ax-feed-icon ${ok ? 'k-signup' : 'k-trip'}" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${FEED_ICONS.sign_in}</svg></span>
+                <span class="ax-feed-text"><b>${escapeHtml(event.actor || 'Administrator')}</b> ${escapeHtml(what)}</span>
+                <time class="ax-feed-time" title="${escapeHtml(formatDate(event.timestamp))}">${escapeHtml(relativeTime(event.timestamp))}</time>
+              </li>`;
+            }).join('')
+            : '<li class="ax-empty" style="display:block">No admin sign-ins recorded yet.</li>';
+      } else {
+        auditList.innerHTML = '<li class="ax-empty" style="display:block">We couldn’t load admin sign-ins.</li>';
+      }
+    }
+    if (statusResult.status === 'rejected') setStatus(getReadableError(statusResult.reason), 'error');
+  }
+
+  // ---- Reports: audience, what users plan, most engaged users -------------------
+  async function loadEngagedUsers() {
+    const body = document.getElementById('engaged-table-body');
+    if (!body) return;
+    const sortSelect = document.getElementById('engaged-sort');
+    body.innerHTML = '<tr><td colspan="5" class="empty-state">Loading…</td></tr>';
+    try {
+      const params = new URLSearchParams({ page: '1', limit: '10', search: '', status: 'all', sort: sortSelect?.value || 'chat' });
+      let payload;
+      try {
+        payload = await request(`/api/admin/users?${params}`);
+      } catch (error) {
+        // Usage tracking not set up yet: fall back to itineraries.
+        params.set('sort', 'itineraries');
+        if (sortSelect) sortSelect.value = 'itineraries';
+        payload = await request(`/api/admin/users?${params}`);
+      }
+      if (sortSelect && Array.isArray(payload?.availableSorts)) {
+        Array.from(sortSelect.options).forEach((option) => { option.disabled = !payload.availableSorts.includes(option.value); });
+      }
+      const tracked = Boolean(payload?.usageTrackingAvailable);
+      const users = payload?.users || [];
+      body.innerHTML = users.length ? users.map((user) => `<tr>
+          <td>${personCell(user.name, user.email)}</td>
+          <td class="num">${tracked ? `<strong>${escapeHtml(formatNumber(user.chatMessageCount))}</strong>` : '—'}</td>
+          <td class="num">${tracked ? `<strong>${escapeHtml(formatNumber(user.signInCount))}</strong>` : '—'}</td>
+          <td class="num"><strong>${escapeHtml(formatNumber(user.savedItineraryCount))}</strong></td>
+          <td class="hide-sm">${user.lastActiveAt ? `<span title="${escapeHtml(formatDate(user.lastActiveAt))}">${escapeHtml(relativeTime(user.lastActiveAt))}</span>` : '—'}</td>
+        </tr>`).join('') : '<tr><td colspan="5" class="empty-state">No users yet.</td></tr>';
     } catch (error) {
-      target.innerHTML = '<div class="admin-card empty-state">We couldn’t load connection details. Try again.</div>';
+      body.innerHTML = '<tr><td colspan="5" class="empty-state">We couldn’t load this list. Try again.</td></tr>';
       setStatus(getReadableError(error), 'error');
     }
   }
 
-  async function loadSettings() {
-    const target = document.getElementById('settings-summary');
-    if (!target) return;
-    target.innerHTML = '<div class="admin-card empty-state">Loading app setup…</div>';
-    try {
-      const payload = await request('/api/admin/settings');
-      const settings = [
-        ['App environment', payload?.appMode === 'production' ? 'Production' : payload?.appMode === 'development' ? 'Development' : 'Not available'],
-        ['Maintenance', payload?.maintenanceMode ? 'On' : 'Off'],
-        ['AI assistant', payload?.geminiConfigured ? 'Ready' : 'Needs setup'],
-        ['Maps', payload?.googleMapsConfigured ? 'Ready' : 'Needs setup'],
-        ['Admin sign-in', payload?.adminConfigured ? 'Ready' : 'Not set up'],
-        ['Admin sign-in history', payload?.adminAuditLoggingAvailable ? 'Available' : 'Not set up'],
-      ];
-      target.innerHTML = settings.map(([label, value]) => `
-        <div class="admin-card">
-          <div class="stat-label">${escapeHtml(label)}</div>
-          <div class="stat-value" style="font-size:1.2rem; margin-top:12px;">${escapeHtml(value)}</div>
-        </div>
-      `).join('');
-    } catch (error) {
-      target.innerHTML = '<div class="admin-card empty-state">We couldn’t load app setup. Try again.</div>';
-      setStatus(getReadableError(error), 'error');
+  async function initReportsPage() {
+    const audience = document.getElementById('report-audience');
+    if (audience) audience.innerHTML = '<div class="admin-card ax-empty" style="grid-column:1/-1">Loading…</div>';
+    document.getElementById('engaged-sort')?.addEventListener('change', () => void loadEngagedUsers());
+    void loadPlanInsights('picks', 8);
+    void loadEngagedUsers();
+    const [summaryResult, analyticsResult] = await Promise.allSettled([
+      request('/api/admin/summary'),
+      request('/api/admin/analytics?days=30'),
+    ]);
+    if (analyticsResult.status === 'fulfilled') {
+      renderUserBaseSummary(analyticsResult.value?.profileSummary, summaryResult.status === 'fulfilled' ? summaryResult.value : null);
+    } else if (audience) {
+      audience.innerHTML = '<div class="admin-card ax-empty" style="grid-column:1/-1">We couldn’t load this. Try again.</div>';
+      setStatus(getReadableError(analyticsResult.reason), 'error');
     }
+  }
+
+  // ---- Slide-in drawers ------------------------------------------------------------
+  let drawerReturnFocus = null;
+  function openDrawer(drawer) {
+    if (!drawer) return;
+    if (drawer.hidden) drawerReturnFocus = document.activeElement;
+    drawer.hidden = false;
+    document.body.style.overflow = 'hidden';
+    drawer.querySelector('.ax-close')?.focus({ preventScroll: true });
+  }
+
+  function closeDrawer(drawer) {
+    if (!drawer || drawer.hidden) return;
+    drawer.hidden = true;
+    if (!document.querySelector('.ax-drawer:not([hidden])')) document.body.style.removeProperty('overflow');
+    try { drawerReturnFocus?.focus?.({ preventScroll: true }); } catch (error) {}
+  }
+
+  function debounce(fn, ms) {
+    let timer = null;
+    return (...args) => { clearTimeout(timer); timer = setTimeout(() => fn(...args), ms); };
   }
 
   document.addEventListener('DOMContentLoaded', () => {
@@ -1475,13 +1651,16 @@
     const currentPage = document.body.dataset.page;
     if (!ensureAdminSession()) return;
 
-    const userSearchButton = document.getElementById('user-search-submit');
+    // Live search: results update as the admin types (no "Find" button).
     const userSearchInput = document.getElementById('user-search');
     const userStatusFilter = document.getElementById('user-status-filter');
-    if (userSearchButton) userSearchButton.addEventListener('click', () => loadUserTable(1));
-    if (userSearchInput) userSearchInput.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter') loadUserTable(1);
-    });
+    if (userSearchInput) {
+      const liveUserSearch = debounce(() => loadUserTable(1), 250);
+      userSearchInput.addEventListener('input', liveUserSearch);
+      userSearchInput.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') { event.preventDefault(); loadUserTable(1); }
+      });
+    }
     if (userStatusFilter) userStatusFilter.addEventListener('change', () => loadUserTable(1));
     document.getElementById('user-page-previous')?.addEventListener('click', () => loadUserTable(userTableState.page - 1));
     document.getElementById('user-page-next')?.addEventListener('click', () => loadUserTable(userTableState.page + 1));
@@ -1496,15 +1675,17 @@
       }
     });
     document.getElementById('user-detail-close')?.addEventListener('click', () => {
-      document.getElementById('user-detail-panel').hidden = true;
+      closeDrawer(document.getElementById('user-detail-panel'));
     });
 
-    const itinerarySearchButton = document.getElementById('itinerary-search-submit');
     const itinerarySearchInput = document.getElementById('itinerary-search');
-    if (itinerarySearchButton) itinerarySearchButton.addEventListener('click', () => loadItineraryTable(1));
-    if (itinerarySearchInput) itinerarySearchInput.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter') loadItineraryTable(1);
-    });
+    if (itinerarySearchInput) {
+      const liveItinerarySearch = debounce(() => loadItineraryTable(1), 250);
+      itinerarySearchInput.addEventListener('input', liveItinerarySearch);
+      itinerarySearchInput.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') { event.preventDefault(); loadItineraryTable(1); }
+      });
+    }
     document.getElementById('itinerary-page-previous')?.addEventListener('click', () => loadItineraryTable(itineraryTableState.page - 1));
     document.getElementById('itinerary-page-next')?.addEventListener('click', () => loadItineraryTable(itineraryTableState.page + 1));
     document.getElementById('itinerary-table-body')?.addEventListener('click', (event) => {
@@ -1512,12 +1693,34 @@
       if (button) void loadItineraryDetails(button.dataset.itineraryDetail);
     });
     document.getElementById('itinerary-detail-close')?.addEventListener('click', () => {
-      document.getElementById('itinerary-detail-panel').hidden = true;
+      closeDrawer(document.getElementById('itinerary-detail-panel'));
       selectedItineraryTripId = null;
+    });
+    // Drawers close on the backdrop and with Escape.
+    document.addEventListener('click', (event) => {
+      const backdrop = event.target.closest?.('[data-drawer-close]');
+      if (!backdrop) return;
+      const drawer = backdrop.closest('.ax-drawer');
+      closeDrawer(drawer);
+      if (drawer?.id === 'itinerary-detail-panel') selectedItineraryTripId = null;
+    });
+    document.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape' || document.querySelector('.ax-dialog')) return;
+      const open = document.querySelector('.ax-drawer:not([hidden])');
+      if (!open) return;
+      closeDrawer(open);
+      if (open.id === 'itinerary-detail-panel') selectedItineraryTripId = null;
     });
     initBarTooltips();
     if (currentPage === 'dashboard') {
       void loadPlanInsights('plan', 5);
+      document.getElementById('chart-tabs')?.addEventListener('click', (event) => {
+        const tab = event.target.closest?.('[data-chart-tab]');
+        if (!tab || tab.dataset.chartTab === dashboardChartTab) return;
+        dashboardChartTab = tab.dataset.chartTab;
+        try { localStorage.setItem(CHART_TAB_KEY, dashboardChartTab); } catch (error) {}
+        if (lastDashboardAnalytics) renderDashboardCharts(lastDashboardAnalytics);
+      });
       document.querySelectorAll('[data-range]').forEach((button) => {
         button.addEventListener('click', () => {
           const days = Number(button.dataset.range);
@@ -1531,10 +1734,16 @@
     }
     if (currentPage === 'activity') {
       loadActivityFeed();
+      document.getElementById('activity-filters')?.addEventListener('click', (event) => {
+        const chip = event.target.closest?.('[data-activity-filter]');
+        if (!chip) return;
+        activityFilter = chip.dataset.activityFilter;
+        document.querySelectorAll('[data-activity-filter]').forEach((node) => node.setAttribute('aria-selected', String(node === chip)));
+        renderActivityFeed();
+      });
     }
     if (currentPage === 'users') {
       loadUserTable();
-      void loadPlanInsights('picks', 10);
     }
     if (currentPage === 'reviews') {
       loadAppReviews();
@@ -1545,18 +1754,16 @@
       loadItineraryTable();
     }
     if (currentPage === 'analytics') {
-      initReports();
+      void initReportsPage();
     }
     if (currentPage === 'integrations') {
       loadIntegrations();
+      document.getElementById('system-refresh')?.addEventListener('click', () => loadIntegrations());
     }
     if (currentPage === 'settings') {
       loadSettings();
     }
 
-    if (document.getElementById('admin-status-banner')) {
-      setStatus('You’re connected. Some reports may be unavailable if Sidekick doesn’t collect that information.', 'info');
-    }
     if (currentPage === 'dashboard' || currentPage === 'users' || currentPage === 'itineraries') {
       window.setInterval(() => {
         if (document.visibilityState !== 'visible') return;

@@ -435,8 +435,16 @@ function getSelectedDestination() {
 function openModal() {
   const modal = document.getElementById("destination-modal");
   if (!modal) return;
+  // Keep the pop-up at the top level of the page so it always opens in view.
+  if (modal.parentElement !== document.body) document.body.appendChild(modal);
   modal.classList.add("open");
   modal.setAttribute("aria-hidden", "false");
+  // Start at the top of the details (name and photo first), not mid-scroll.
+  const panel = modal.querySelector(".destination-modal-panel");
+  if (panel) panel.scrollTop = 0;
+  // The page behind should not scroll while the details are open.
+  document.documentElement.style.overflow = "hidden";
+  document.body.style.overflow = "hidden";
 }
 
 function closeModal() {
@@ -444,6 +452,8 @@ function closeModal() {
   if (!modal) return;
   modal.classList.remove("open");
   modal.setAttribute("aria-hidden", "true");
+  document.documentElement.style.removeProperty("overflow");
+  document.body.style.removeProperty("overflow");
 }
 
 async function showDestinationDetails(place, prefs, session) {

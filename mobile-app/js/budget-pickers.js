@@ -377,9 +377,10 @@
   function restaurantPrice(place) {
     const range = place.priceRange;
     if (range && Number.isFinite(Number(range.lowPhp))) {
-      const low = Number(range.lowPhp);
+      // Google's cheapest band starts at ₱1 ("₱1–200" means "under ₱200").
+      const low = Number(range.lowPhp) < 50 ? 0 : Number(range.lowPhp);
       const high = Number.isFinite(Number(range.highPhp)) && range.highPhp !== null ? Number(range.highPhp) : null;
-      return { low, high, exact: true };
+      if (!(low === 0 && !(high > 0))) return { low, high, exact: true };
     }
     const level = PRICE_LEVEL_PHP[place.priceLevel];
     return level ? { low: level[0], high: level[1], exact: false } : null;
@@ -387,7 +388,9 @@
 
   function priceText(price) {
     if (!price) return "";
-    const range = price.high !== null && price.high > price.low ? `${peso(price.low)}–${peso(price.high)}` : price.high === null ? `${peso(price.low)}+` : peso(price.low);
+    const range = price.low === 0 && price.high > 0 ? `Under ${peso(price.high)}`
+      : price.high !== null && price.high > price.low ? `${peso(price.low)}–${peso(price.high)}`
+      : price.high === null ? `${peso(price.low)}+` : peso(price.low);
     return `${price.exact ? "" : "about "}${range} per person`;
   }
 

@@ -1,0 +1,309 @@
+/* ==========================================================================
+   Sidekick theme layer (loaded on every app screen, after the page styles).
+   One palette, a faint travel-map background, light motion, and the themed
+   dialog used instead of the phone's grey pop-ups. Page logic is untouched.
+   ========================================================================== */
+
+:root {
+    --sk-primary: #2c91b0;
+    --sk-primary-2: #68ddd9;
+    --sk-primary-dark: #1f6f88;
+    --sk-gradient: linear-gradient(135deg, #2c91b0 0%, #68ddd9 100%);
+    --sk-ink: #163457;
+    --sk-muted: #668096;
+    --sk-line: #d9eaf0;
+    --sk-soft: #eef8fa;
+    --sk-bg: #f5fbfc;
+    --sk-brand: #6b8cae;      /* compass logo */
+    --sk-coral: #ef8a69;      /* small warm accents only */
+    --sk-danger: #c2414f;
+    --sk-danger-soft: #fdeef0;
+    --sk-radius: 18px;
+    --sk-shadow: 0 10px 26px rgba(22, 52, 87, .08);
+    --sk-shadow-lg: 0 20px 44px rgba(22, 52, 87, .16);
+    --sk-ease: cubic-bezier(.22, .9, .35, 1);
+}
+
+/* ---- Travel-map background: faint contour lines, a dotted route and a pin ---- */
+body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='520' height='520' viewBox='0 0 520 520' fill='none' stroke='%232c91b0' stroke-width='1.3' stroke-linecap='round'%3E%3Cpath d='M-20 92c62-30 112 10 174-10s92-62 164-40 112 52 222 18' opacity='.55'/%3E%3Cpath d='M-20 124c62-30 112 10 174-10s92-62 164-40 112 52 222 18' opacity='.35'/%3E%3Cpath d='M-20 352c84 22 124-42 206-20s104 72 186 40 84-42 168-28' opacity='.55'/%3E%3Cpath d='M-20 386c84 22 124-42 206-20s104 72 186 40 84-42 168-28' opacity='.35'/%3E%3Cellipse cx='392' cy='214' rx='60' ry='36' opacity='.45'/%3E%3Cellipse cx='392' cy='214' rx='36' ry='21' opacity='.45'/%3E%3Cellipse cx='392' cy='214' rx='14' ry='8' opacity='.45'/%3E%3Cpath d='M64 456C130 330 246 330 322 254S454 134 482 66' stroke-dasharray='5 9' stroke-width='1.8' opacity='.7'/%3E%3Ccircle cx='64' cy='456' r='5' fill='%232c91b0' stroke='none' opacity='.55'/%3E%3Cpath d='M482 50c-8 0-14 6-14 14 0 10 14 23 14 23s14-13 14-23c0-8-6-14-14-14z' fill='%23ef8a69' stroke='none' opacity='.6'/%3E%3C/svg%3E");
+    background-size: 520px 520px;
+    opacity: .09;
+}
+
+body {
+    background: radial-gradient(circle at 12% 0%, rgba(104, 221, 217, .18), transparent 34%),
+                radial-gradient(circle at 100% 100%, rgba(44, 145, 176, .08), transparent 40%),
+                var(--sk-bg);
+    color: var(--sk-ink);
+}
+
+/* Screens let the map show through; cards keep their own white surface. */
+.screen { background: transparent; }
+
+/* ---- Text ---------------------------------------------------------------- */
+.screen-title {
+    font-family: "Manrope", "Avenir Next", sans-serif;
+    font-size: 24px;
+    font-weight: 800;
+    letter-spacing: -.02em;
+    color: var(--sk-ink);
+}
+
+.screen-subtitle {
+    font-size: 15px;
+    color: var(--sk-muted);
+    margin-bottom: 22px;
+}
+
+/* ---- Buttons: one primary colour, one outline style ---------------------- */
+.btn-primary, .send-btn {
+    background: var(--sk-gradient);
+    color: #fff;
+    box-shadow: 0 8px 18px rgba(44, 145, 176, .22);
+}
+
+.btn-primary:hover { background: linear-gradient(135deg, #24819e, #55cfcb); }
+
+.btn-outline {
+    background: rgba(255, 255, 255, .9);
+    color: var(--sk-primary-dark);
+    border: 1.5px solid #bfe1e9;
+}
+
+.btn-outline:hover { background: var(--sk-soft); border-color: #9bd5e0; }
+
+.btn:active:not(:disabled) { transform: scale(.97); }
+
+.btn:focus-visible, .nav-item:focus-visible {
+    outline: 3px solid rgba(44, 145, 176, .35);
+    outline-offset: 2px;
+}
+
+.bottom-nav .nav-item.active { color: var(--sk-primary); }
+.bottom-nav .nav-item.active svg { stroke: var(--sk-primary); }
+.bottom-nav .nav-item.active::after { background: var(--sk-primary-2); }
+
+/* ---- Motion: light, quick, and switched off for "reduce motion" ---------- */
+@keyframes skRise {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: none; }
+}
+
+@keyframes skFade {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+@keyframes skSheetUp {
+    from { opacity: .4; transform: translateY(28px); }
+    to { opacity: 1; transform: none; }
+}
+
+@keyframes skPop {
+    from { opacity: 0; transform: translateY(14px) scale(.97); }
+    to { opacity: 1; transform: none; }
+}
+
+/* "backwards" (not "both") so no transform is left on the screen afterwards;
+   a leftover transform would pin fixed pop-ups to the page instead of the view. */
+.screen, .perf-lite .screen { animation: skFade 280ms ease backwards; }
+
+.place-card, .destination-card, .settings-card, .activity-card {
+    animation: skRise 420ms var(--sk-ease) backwards;
+}
+.place-card:nth-child(2), .destination-card:nth-child(2), .settings-card:nth-of-type(2) { animation-delay: 60ms; }
+.place-card:nth-child(3), .destination-card:nth-child(3), .settings-card:nth-of-type(3) { animation-delay: 120ms; }
+.place-card:nth-child(4), .destination-card:nth-child(4), .settings-card:nth-of-type(4) { animation-delay: 180ms; }
+.place-card:nth-child(n+5), .destination-card:nth-child(n+5) { animation-delay: 220ms; }
+
+.perf-lite .btn { transition: transform 120ms ease, background 160ms ease; }
+
+/* Pop-ups ease in instead of appearing abruptly. Centred panels are placed with
+   translate(-50%, -50%), so their animation keeps that offset (no jump at the end). */
+@keyframes skPopCentered {
+    from { opacity: 0; transform: translate(-50%, calc(-50% + 14px)) scale(.97); }
+    to { opacity: 1; transform: translate(-50%, -50%); }
+}
+
+.destination-modal.open .destination-modal-panel,
+.chat-place-modal.open .chat-place-panel,
+.stay-eat-modal.open .stay-eat-modal-panel { animation: skPopCentered 300ms var(--sk-ease) backwards; }
+.destination-modal.open .destination-modal-backdrop,
+.chat-place-modal.open .chat-place-backdrop,
+.stay-eat-modal.open .stay-eat-modal-backdrop { animation: skFade 200ms ease backwards; }
+
+/* On phones the destination details are a bottom sheet (no centring transform). */
+@media (max-width: 600px) {
+    .destination-modal.open .destination-modal-panel { animation-name: skSheetUp; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 1ms !important;
+        animation-delay: 0ms !important;
+        transition-duration: 1ms !important;
+    }
+}
+
+/* ==========================================================================
+   Themed dialog (js/ui.js) - replaces the phone's grey alert/confirm/prompt.
+   ========================================================================== */
+.sk-dialog {
+    position: fixed;
+    inset: 0;
+    z-index: 30000;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    padding: 0 12px calc(12px + env(safe-area-inset-bottom));
+}
+
+@media (min-width: 601px) {
+    .sk-dialog { align-items: center; padding: 24px; }
+}
+
+.sk-dialog-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(13, 32, 54, .5);
+    animation: skFade 180ms ease backwards;
+}
+
+.sk-dialog-panel {
+    position: relative;
+    width: min(100%, 440px);
+    max-height: calc(100dvh - 32px);
+    overflow: auto;
+    background: #fff;
+    border-radius: 24px;
+    padding: 22px 20px 18px;
+    box-shadow: var(--sk-shadow-lg);
+    animation: skPop 260ms var(--sk-ease) backwards;
+}
+
+.sk-dialog-icon {
+    width: 44px;
+    height: 44px;
+    border-radius: 14px;
+    display: grid;
+    place-items: center;
+    margin-bottom: 12px;
+    background: var(--sk-soft);
+    color: var(--sk-primary);
+}
+
+.sk-dialog-icon svg { width: 22px; height: 22px; }
+.sk-dialog.is-danger .sk-dialog-icon { background: var(--sk-danger-soft); color: var(--sk-danger); }
+
+.sk-dialog-title {
+    margin: 0 0 6px;
+    font-family: "Manrope", "Avenir Next", sans-serif;
+    font-size: 19px;
+    font-weight: 800;
+    color: var(--sk-ink);
+}
+
+.sk-dialog-message {
+    margin: 0;
+    font-size: 15px;
+    line-height: 1.5;
+    color: #3d5670;
+    white-space: pre-line;
+}
+
+.sk-dialog-details {
+    margin: 14px 0 0;
+    padding: 4px 14px;
+    border-radius: 14px;
+    background: var(--sk-soft);
+    list-style: none;
+}
+
+.sk-dialog-details li {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 9px 0;
+    font-size: 14px;
+    border-bottom: 1px solid rgba(44, 145, 176, .12);
+}
+
+.sk-dialog-details li:last-child { border-bottom: 0; }
+.sk-dialog-details span { color: var(--sk-muted); flex: none; }
+.sk-dialog-details strong { color: var(--sk-ink); text-align: right; font-weight: 700; overflow-wrap: anywhere; }
+
+.sk-dialog-form { display: flex; flex-direction: column; gap: 12px; margin-top: 14px; }
+.sk-dialog-field { display: flex; flex-direction: column; gap: 6px; }
+.sk-dialog-field label { font-size: 13px; font-weight: 700; color: var(--sk-ink); }
+.sk-dialog-field small { font-size: 12px; color: var(--sk-muted); }
+
+.sk-dialog-field input,
+.sk-dialog-field select {
+    height: 46px;
+    padding: 0 14px;
+    border: 1px solid var(--sk-line);
+    border-radius: 12px;
+    background: #f7fbfc;
+    font: inherit;
+    font-size: 15px;
+    color: var(--sk-ink);
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.sk-dialog-error {
+    margin: 12px 0 0;
+    padding: 9px 12px;
+    border-radius: 12px;
+    background: var(--sk-danger-soft);
+    color: var(--sk-danger);
+    font-size: 13px;
+}
+
+.sk-dialog-error[hidden] { display: none; }
+
+.sk-dialog-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 20px;
+}
+
+.sk-dialog-actions .btn { flex: 1 1 0; min-height: 48px; padding: 10px 14px; font-size: 15px; }
+.sk-dialog-actions .btn-danger {
+    background: var(--sk-danger);
+    color: #fff;
+    box-shadow: 0 8px 18px rgba(194, 65, 79, .22);
+}
+
+/* Small confirmation bubble ("Reminder added") */
+.sk-toast {
+    position: fixed;
+    left: 50%;
+    bottom: calc(var(--bottom-overlay-height, var(--nav-height)) + 24px + env(safe-area-inset-bottom));
+    transform: translateX(-50%);
+    z-index: 30001;
+    max-width: calc(100% - 32px);
+    padding: 11px 18px;
+    border-radius: 999px;
+    background: var(--sk-ink);
+    color: #fff;
+    font-size: 14px;
+    font-weight: 600;
+    box-shadow: var(--sk-shadow-lg);
+    animation: skRise 240ms var(--sk-ease) backwards;
+    pointer-events: none;
+}
+
+/* ---- One accent colour: interactive bits that were still slate blue ------
+   (The compass logo keeps its slate brand colour.) */
+.day-number { background: var(--sk-gradient); }
+.progress-fill { background: var(--sk-gradient); }
+.budget-option.selected { background: #1f7a8c; border-color: #1f7a8c; color: #fff; }
+.dest-search-input:focus { border-color: var(--sk-primary); }
+.toggle-input:checked { background: var(--sk-primary); }

@@ -164,7 +164,7 @@
     try {
       setItineraryForEmail(owner, current);
     } catch (error) {
-      window.alert("Your changes could not be saved on this device. Free up some storage and try again.");
+      window.SidekickUI.alert("Your changes could not be saved on this device. Free up some storage and try again.", { title: "Not saved" });
       return;
     }
     try { updateHeaderDate(null, current); } catch (error) {}
@@ -335,7 +335,7 @@
       { name: "note", label: "Notes", type: "textarea", maxLength: 300, value: place ? String(place.note || place.address || "") : "" },
     ];
     openForm({
-      title: place ? (kind === "hotel" ? "Add hotel to itinerary" : "Add restaurant to itinerary") : "Add activity",
+      title: place ? (kind === "hotel" ? "Add hotel to itinerary" : kind === "restaurant" ? "Add restaurant to itinerary" : "Add to itinerary") : "Add activity",
       fields,
       submitText: "Add",
       onSubmit: (values) => {
@@ -351,7 +351,7 @@
           iso: new Date(dueAt).toISOString(),
         };
         if (place) {
-          activity.category = kind;
+          if (kind) activity.category = kind;
           activity.placeId = place.placeId || "";
           activity.locationAddress = place.address || "";
           if (place.lat != null && place.lng != null && Number.isFinite(Number(place.lat)) && Number.isFinite(Number(place.lng))) {
@@ -412,16 +412,20 @@
     });
   }
 
-  function remove(dayIndex, activityIndex) {
+  async function remove(dayIndex, activityIndex) {
     const day = current?.itinerary?.[dayIndex];
     const activity = day?.activities?.[activityIndex];
     if (!activity) return;
     const total = current.itinerary.reduce((sum, d) => sum + (d.activities || []).length, 0);
     if (total <= 1) {
-      window.alert("An itinerary needs at least one activity. Use the trash button at the top to remove the whole itinerary.");
+      await window.SidekickUI.alert("An itinerary needs at least one activity. Use the trash button at the top to remove the whole itinerary.", { title: "Keep one activity" });
       return;
     }
-    if (!window.confirm(`Remove "${activity.title || "this activity"}" from your itinerary?`)) return;
+    const ok = await window.SidekickUI.confirm(`"${activity.title || "This activity"}" will be removed from your itinerary.`, {
+      title: "Remove this activity?", confirmText: "Remove", tone: "danger",
+    });
+    // The itinerary may have changed while the dialog was open.
+    if (!ok || current?.itinerary?.[dayIndex]?.activities?.[activityIndex] !== activity) return;
     ensureIds();
     const before = previousMap();
     day.activities.splice(activityIndex, 1);

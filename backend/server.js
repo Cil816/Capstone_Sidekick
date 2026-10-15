@@ -179,11 +179,13 @@ if (isProduction) {
     '/reports': 'admin-analytics.html',
     '/reviews': 'admin-reviews.html',
     '/activity': 'admin-activity.html',
-    '/connections': 'admin-integrations.html',
-    '/setup': 'admin-settings.html',
+    '/system': 'admin-integrations.html',
   };
   const ADMIN_PAGE_ROUTES = Object.fromEntries(Object.entries(ADMIN_PAGES).map(([route, file]) => [file, route]));
   ADMIN_PAGE_ROUTES['index.html'] = '/';
+  // "Connections" and "App setup" were merged into one System status page.
+  ADMIN_PAGE_ROUTES['admin-settings.html'] = '/system';
+  const RENAMED_ROUTES = { '/connections': '/system', '/setup': '/system' };
   const queryOf = (req) => {
     const index = req.originalUrl.indexOf('?');
     return index === -1 ? '' : req.originalUrl.slice(index);
@@ -201,6 +203,7 @@ if (isProduction) {
     if (ADMIN_PAGE_ROUTES[file]) return res.redirect(302, ADMIN_PAGE_ROUTES[file] + queryOf(req));
     // "/users/" -> "/users", so the page's relative css/js links still resolve.
     const trimmed = req.path.replace(/\/+$/, '');
+    if (RENAMED_ROUTES[trimmed || req.path]) return res.redirect(302, RENAMED_ROUTES[trimmed || req.path] + queryOf(req));
     if (trimmed && trimmed !== req.path && ADMIN_PAGES[trimmed]) return res.redirect(302, trimmed + queryOf(req));
     return next();
   });
@@ -536,7 +539,11 @@ function mapPriceRange(range) {
   const end = range.endPrice;
   const highPhp = end && String(end.currencyCode || '').toUpperCase() === 'PHP' ? toAmount(end) : null;
   if (!Number.isFinite(lowPhp) || lowPhp < 0) return null;
-  return { lowPhp: Math.round(lowPhp), highPhp: Number.isFinite(highPhp) && highPhp >= lowPhp ? Math.round(highPhp) : null };
+  const high = Number.isFinite(highPhp) && highPhp >= lowPhp ? Math.round(highPhp) : null;
+  // Google's cheapest spending band starts at ₱1 ("₱1–200"), which really means
+  // "under ₱200". Report it as 0 so the app shows "Under ₱200", never "₱1".
+  if (lowPhp < 50) return high ? { lowPhp: 0, highPhp: high } : null;
+  return { lowPhp: Math.round(lowPhp), highPhp: high };
 }
 
 function haversineKm(a, b) {
@@ -1486,8 +1493,16 @@ async function generateAgentReply({ email, message, selectedDestination, history
     };
   }
 
-  if (/\b(name|email)\b/.test(lowerMessage) && /\b(my|i)\b/.test(lowerMessage)) {
-    return { reply: `Your name is ${currentUser.name} and your email is ${currentUser.email}.`, meta: { source: 'sidekick-direct' } };
+  // "What's my name?" / "What's my email?": answer only what was asked. Only
+  // clear questions about the user's own details match ("my name", "who am I"),
+  // not travel questions that merely contain "name" and "I".
+  const asksOwnName = /\bmy\s+(?:full\s+)?name\b|\bwho\s+am\s+i\b/.test(lowerMessage);
+  const asksOwnEmail = /\bmy\s+(?:e-?mail|email\s+address)\b|\bmy\s+(?:full\s+)?name\s+(?:and|&)\s+e-?mail\b/.test(lowerMessage);
+  if ((asksOwnName || asksOwnEmail) && message.trim().length <= 80) {
+    const parts = [];
+    if (asksOwnName) parts.push(currentUser.name ? `Your name is ${currentUser.name}.` : 'I don\'t have a name saved for your account.');
+    if (asksOwnEmail) parts.push(`Your email is ${currentUser.email}.`);
+    return { reply: parts.join(' '), meta: { source: 'sidekick-direct' } };
   }
 
   if (/\b(saved|current|my)\b.*\b(preferences?|travel style|interests?)\b/.test(lowerMessage)) {
@@ -1514,7 +1529,7 @@ async function generateAgentReply({ email, message, selectedDestination, history
     `Current preferences: ${JSON.stringify(currentProfile)}`,
     `Conversation history: ${(history || []).slice(-3).map((item) => `${item.role}: ${String(item.content || '').slice(0, 500)}`).join(' | ') || 'none'}`,
   ].join('\n');
-  const systemInstruction = 'You are Sidekick, a friendly Philippine travel companion. Write so anyone can understand on a phone screen: simple, everyday words, short sentences, no jargon. Start with the direct answer. Keep most replies to 2-4 short sentences; when listing options or steps, use at most 5 bullets of one short line each, with the place name in **bold** at the start. Only give longer answers when the user asks for a plan, comparison, or detailed explanation. Do not greet again in the middle of a conversation, avoid canned phrases such as "How can I help?", and do not repeat what the user said. Ask at most one short question, only when you truly need it. When the user asks about tourist spots, places to visit, or what a place is like, call searchPlaces with a precise query that includes the area (for example "Kawasan Falls, Badian, Cebu") so the app can show real photos, and mention those places by their exact names. For itinerary requests, include specific places and times, and route durations only when verified. Do not invent prices, opening hours, or route times; say plainly when they are unavailable. Never output headings for short replies, raw JSON, Markdown fences, or decorative symbols. Use Sidekick tools for current user data and mutations. Never claim a mutation succeeded unless its tool succeeds. Ask for confirmation before destructive deletion. Do not reveal credentials or internal tool details.';
+  const systemInstruction = 'You are Sidekick, a friendly Philippine travel companion. Write so anyone can understand on a phone screen: simple, everyday words, short sentences, no jargon. Start with the direct answer. Keep most replies to 2-4 short sentences; when listing options or steps, use at most 5 bullets of one short line each, with the place name in **bold** at the start. Only give longer answers when the user asks for a plan, comparison, or detailed explanation. Do not greet again in the middle of a conversation, avoid canned phrases such as "How can I help?", and do not repeat what the user said. Ask at most one short question, only when you truly need it. When the user asks about tourist spots, places to visit, or what a place is like, call searchPlaces with a precise query that includes the area (for example "Kawasan Falls, Badian, Cebu") so the app can show real photos, and mention those places by their exact names. For itinerary requests, include specific places and times, and route durations only when verified. Do not invent prices, opening hours, or route times; say plainly when they are unavailable. Never output headings for short replies, raw JSON, Markdown fences, or decorative symbols. Use Sidekick tools for current user data and mutations. Never claim a mutation succeeded unless its tool succeeds. Ask for confirmation before destructive deletion. Do not reveal credentials or internal tool details. When the user asks about their own details, answer only the item they asked for (for example, only the name for "what is my name"); never add their email or other personal details they did not ask for.';
   const reviewSystemInstruction = `${systemInstruction} When asked what visitors think or to assess a place from reviews, use only supplied Google rating and review excerpts, summarize praise or criticism only when supported, distinguish the aggregate rating from the sample of up to five excerpts, and clearly say when review details are unavailable. Paraphrase reviews rather than quoting them, and include the supplied Google Maps listing link when available.`;
   const contents = [{ role: 'user', parts: [{ text: `${contextText}\n\nUser request:\n${message}` }] }];
   const uiActions = [];
@@ -2894,7 +2909,7 @@ app.get('/api/admin/app-reviews', requireAdminAuth, async (req, res) => {
       return sendJson(res, 503, { error: 'App reviews are not set up yet. Run backend/migrations/001_create_app_reviews.sql manually in SSMS.' });
     }
 
-    const [summary, rows, count] = await Promise.all([
+    const [summary, rows, count, distribution] = await Promise.all([
       pool.query`
         SELECT COUNT_BIG(*) AS total_reviews, AVG(CAST(rating AS decimal(4,2))) AS average_rating
         FROM dbo.app_reviews
@@ -2910,13 +2925,21 @@ app.get('/api/admin/app-reviews', requireAdminAuth, async (req, res) => {
           OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY
         `),
       pool.query`SELECT COUNT_BIG(*) AS total FROM dbo.app_reviews`,
+      pool.query`SELECT rating, COUNT_BIG(*) AS reviews FROM dbo.app_reviews GROUP BY rating`,
     ]);
     const summaryRow = summary.recordset[0] || {};
+    // How many reviews gave each star rating (5 down to 1), for the breakdown bars.
+    const ratingCounts = { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 };
+    for (const row of distribution.recordset || []) {
+      const stars = Math.round(Number(row.rating));
+      if (stars >= 1 && stars <= 5) ratingCounts[stars] += Number(row.reviews || 0);
+    }
     return sendJson(res, 200, {
       page: pagination.page,
       limit: pagination.limit,
       total: Number(count.recordset[0]?.total || 0),
       averageRating: summaryRow.average_rating == null ? null : Number(summaryRow.average_rating),
+      ratingCounts,
       reviews: (rows.recordset || []).map((review) => ({
         reviewId: review.review_id,
         rating: Number(review.rating),
@@ -3617,13 +3640,22 @@ app.get('/api/admin/insights', requireAdminAuth, async (req, res) => {
 app.get('/api/admin/integrations', requireAdminAuth, async (req, res) => {
   try {
     const pool = await getPool();
+    const startedAt = Date.now();
     await pool.query`SELECT 1 AS connected`;
+    const latencyMs = Date.now() - startedAt;
     return sendJson(res, 200, {
       database: {
         connected: true,
         name: config.database,
         authMode: useWindowsAuthentication ? 'windows' : 'sql-user',
+        latencyMs,
       },
+      email: {
+        configured: Boolean(String(process.env.SMTP_HOST || '').trim() && String(process.env.SMTP_USER || '').trim()),
+      },
+      maintenanceMode: isMaintenanceMode(),
+      adminAuditAvailable: await hasAdminAuditLogTable(pool),
+      uptimeSeconds: Math.round(process.uptime()),
       ai: {
         configured: Boolean(getAiApiKey()),
         model: getAiModel(),
@@ -3644,27 +3676,68 @@ app.get('/api/admin/integrations', requireAdminAuth, async (req, res) => {
 app.get('/api/admin/activity', requireAdminAuth, async (req, res) => {
   try {
     const pool = await getPool();
-    const [users, trips] = await Promise.all([
-      pool.query`SELECT TOP 8 user_id, created_at FROM dbo.users ORDER BY created_at DESC, user_id DESC`,
-      pool.query`SELECT TOP 8 trip_id, created_at FROM dbo.trips ORDER BY created_at DESC, trip_id DESC`,
+    const [users, trips, last24] = await Promise.all([
+      pool.query`SELECT TOP 10 user_id, name, created_at FROM dbo.users ORDER BY created_at DESC, user_id DESC`,
+      pool.query`
+        SELECT TOP 10 t.trip_id, t.destination, t.created_at, u.name
+        FROM dbo.trips t LEFT JOIN dbo.users u ON u.user_id = t.user_id
+        ORDER BY t.created_at DESC, t.trip_id DESC`,
+      pool.query`
+        SELECT
+          (SELECT COUNT_BIG(*) FROM dbo.users WHERE created_at >= DATEADD(hour, -24, SYSUTCDATETIME())) AS signups,
+          (SELECT COUNT_BIG(*) FROM dbo.trips WHERE created_at >= DATEADD(hour, -24, SYSUTCDATETIME())) AS trips`,
     ]);
-    const usage = await hasAppUsageEventsTable(pool)
-      ? await pool.query`SELECT TOP 8 event_type, created_at FROM dbo.app_usage_events ORDER BY created_at DESC, event_id DESC`
-      : null;
+    const usageAvailable = await hasAppUsageEventsTable(pool);
+    const [signIns, chats, usage24] = usageAvailable
+      ? await Promise.all([
+        pool.query`
+          SELECT TOP 10 e.created_at, u.name
+          FROM dbo.app_usage_events e LEFT JOIN dbo.users u ON u.user_id = e.user_id
+          WHERE e.event_type = 'sign_in'
+          ORDER BY e.created_at DESC, e.event_id DESC`,
+        // Chatbot messages are grouped per user per day, so one busy chat is one line.
+        pool.query`
+          SELECT TOP 10 MAX(u.name) AS name, COUNT_BIG(*) AS messages, MAX(e.created_at) AS last_at
+          FROM dbo.app_usage_events e LEFT JOIN dbo.users u ON u.user_id = e.user_id
+          WHERE e.event_type = 'chat_message'
+          GROUP BY e.user_id, CAST(e.created_at AS date)
+          ORDER BY MAX(e.created_at) DESC`,
+        pool.query`
+          SELECT
+            SUM(CASE WHEN event_type = 'sign_in' THEN 1 ELSE 0 END) AS sign_ins,
+            SUM(CASE WHEN event_type = 'chat_message' THEN 1 ELSE 0 END) AS chat_messages
+          FROM dbo.app_usage_events WHERE created_at >= DATEADD(hour, -24, SYSUTCDATETIME())`,
+      ])
+      : [null, null, null];
+    const counts = last24.recordset[0] || {};
+    const usageCounts = usage24?.recordset?.[0] || {};
 
+    // "label" and "timestamp" are what older pages read; the rest adds who/what.
+    // Chat contents are never stored or returned.
     return sendJson(res, 200, {
-      // Only the event kind and time; no user names or chat contents.
-      recentUsage: (usage?.recordset || []).map((event) => ({
-        label: event.event_type === 'sign_in' ? 'User signed in' : 'Chatbot message sent',
-        timestamp: event.created_at,
-      })),
+      last24Hours: {
+        signups: Number(counts.signups || 0),
+        trips: Number(counts.trips || 0),
+        signIns: usageAvailable ? Number(usageCounts.sign_ins || 0) : null,
+        chatMessages: usageAvailable ? Number(usageCounts.chat_messages || 0) : null,
+      },
+      recentUsage: [
+        ...(signIns?.recordset || []).map((event) => ({
+          kind: 'sign_in', label: 'User signed in', name: event.name || null, timestamp: event.created_at,
+        })),
+        ...(chats?.recordset || []).map((row) => ({
+          kind: 'chat',
+          label: Number(row.messages) === 1 ? 'Chatbot message sent' : `${Number(row.messages)} chatbot messages sent`,
+          name: row.name || null,
+          count: Number(row.messages),
+          timestamp: row.last_at,
+        })),
+      ],
       recentUsers: (users.recordset || []).map((user) => ({
-        label: 'User account registered',
-        timestamp: user.created_at,
+        kind: 'signup', label: 'User account registered', name: user.name || null, timestamp: user.created_at,
       })),
       recentTrips: (trips.recordset || []).map((trip) => ({
-        label: 'Trip record saved',
-        timestamp: trip.created_at,
+        kind: 'trip', label: 'Trip record saved', name: trip.name || null, detail: trip.destination || null, timestamp: trip.created_at,
       })),
     });
   } catch (error) {
@@ -5526,7 +5599,9 @@ app.post('/api/hotels/budget-options', requireAppAuth, async (req, res) => {
       for (const entry of Array.isArray(parsed.hotelRates) ? parsed.hotelRates : []) {
         const band = normalizeSourcedPriceBand(entry, allowedSources);
         const placeId = String(entry?.placeId || '');
-        if (placeId && band && band.lowPhp > 0) byPlaceId[placeId] = { ...band, basis: String(entry.basis || '').slice(0, 200) };
+        // A room under ₱300 a night is not a real hotel rate (usually a misread
+        // fee or per-person figure), so it is treated as "no evidence".
+        if (placeId && band && band.lowPhp >= 300) byPlaceId[placeId] = { ...band, basis: String(entry.basis || '').slice(0, 200) };
       }
       rates = { byPlaceId, expiresAt: Date.now() + 6 * 60 * 60 * 1000 };
       if (hotelRateCache.size >= 200) hotelRateCache.delete(hotelRateCache.keys().next().value);

@@ -9,10 +9,15 @@ document.addEventListener('DOMContentLoaded', () => {
     window.SidekickCore.ensureReminderNotificationsReady(session.email).then((granted) => {
       if (!granted) {
         console.warn('[Alerts] Local notification permission is not granted. Reminders may not appear outside the app.');
+        // Tell the user (not just the console) so they know why alerts won't pop up.
+        const note = document.getElementById('alerts-permission-note');
+        if (note && window.Capacitor?.isNativePlatform?.()) note.hidden = false;
       }
     }).catch(() => {});
   }
 
+  const ui = window.SidekickUI;
+  const esc = (value) => window.SidekickCore.escapeHtml(String(value ?? ''));
   const titleEl = document.getElementById('title');
   const dtEl = document.getElementById('datetime');
   const typeEl = document.getElementById('type');
@@ -29,6 +34,22 @@ document.addEventListener('DOMContentLoaded', () => {
   const saveItineraryEditBtn = document.getElementById('save-itinerary-edit');
   const cancelItineraryEditBtn = document.getElementById('cancel-itinerary-edit');
   let editingReminder = null;
+
+  const ICONS = {
+    Itinerary: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>',
+    Booking: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 9a3 3 0 0 0 0 6v3h20v-3a3 3 0 0 0 0-6V6H2Z"/><path d="M13 6v2M13 16v2M13 11v2"/></svg>',
+    Advisory: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4M12 17h.01"/></svg>',
+    Schedule: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>',
+  };
+
+  // "Thu, Oct 15 · 11:00 PM" (no seconds, easy to scan)
+  function formatWhen(timestamp) {
+    const date = new Date(Number(timestamp));
+    if (!Number.isFinite(date.getTime())) return '';
+    const day = date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+    const time = date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+    return `${day} · ${time}`;
+  }
 
   function toDatetimeLocalValue(timestamp) {
     const date = new Date(Number(timestamp || Date.now()));
@@ -51,65 +72,92 @@ document.addEventListener('DOMContentLoaded', () => {
       : `Editing this itinerary schedule and refreshing synced reminder offsets.`;
     itineraryEditorDtEl.value = toDatetimeLocalValue(reminder.dueAt);
     itineraryEditorEl.style.display = 'block';
+    itineraryEditorEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+
+  function heading(text, count) {
+    const el = document.createElement('h2');
+    el.className = 'sk-reminders-heading';
+    el.innerHTML = `${esc(text)} <span>${count}</span>`;
+    return el;
   }
 
   function render() {
+    // The bulk buttons sit inside the first heading; move them out before clearing.
+    if (bulkActionsEl && listEl.contains(bulkActionsEl)) listEl.before(bulkActionsEl);
     listEl.innerHTML = '';
     const reminders = (window.SidekickCore.getRemindersFor(session.email) || []).slice();
-    reminders.sort((a,b) => (Number(a.dueAt||0) - Number(b.dueAt||0)));
+    reminders.sort((a, b) => (Number(a.dueAt || 0) - Number(b.dueAt || 0)));
     if (bulkActionsEl) bulkActionsEl.hidden = reminders.length === 0;
     if (turnOffAllBtn) turnOffAllBtn.disabled = reminders.length === 0 || reminders.every((reminder) => reminder.suppressed);
 
     const now = Date.now();
-    const upcoming = reminders.filter(r => !r.firedAt && Number(r.dueAt||0) >= now);
-    const past = reminders.filter(r => r.firedAt || Number(r.dueAt||0) < now);
+    const upcoming = reminders.filter((r) => !r.firedAt && Number(r.dueAt || 0) >= now);
+    const past = reminders.filter((r) => r.firedAt || Number(r.dueAt || 0) < now);
 
     if (upcoming.length === 0 && past.length === 0) {
-      listEl.innerHTML = `<div style="color:#6b7280;padding:16px">No reminders yet. Create one above or sync your itinerary.</div>`;
+      listEl.innerHTML = '<div class="sk-reminders-empty"><strong>No reminders yet</strong>Add one above, or sync the stops from your itinerary.</div>';
       return;
     }
 
     if (upcoming.length) {
-      const upHeader = document.createElement('div'); upHeader.style.marginTop = '6px'; upHeader.innerHTML = '<strong>Upcoming</strong>';
-      listEl.appendChild(upHeader);
-      upcoming.forEach(r => listEl.appendChild(renderReminderRow(r)));
+      listEl.appendChild(heading('Upcoming', upcoming.length));
+      upcoming.forEach((r) => listEl.appendChild(renderReminderRow(r, false)));
     }
 
     if (past.length) {
-      const pastHeader = document.createElement('div'); pastHeader.style.marginTop = '10px'; pastHeader.innerHTML = '<strong>Past / Fired</strong>';
-      listEl.appendChild(pastHeader);
-      past.forEach(r => listEl.appendChild(renderReminderRow(r)));
+      listEl.appendChild(heading('Past', past.length));
+      past.forEach((r) => listEl.appendChild(renderReminderRow(r, true)));
     }
+
+    // "Turn off all" / "Remove all" on the same line as the first heading.
+    const firstHeading = listEl.querySelector('.sk-reminders-heading');
+    if (bulkActionsEl && firstHeading) firstHeading.appendChild(bulkActionsEl);
   }
 
-  function renderReminderRow(r) {
-    const el = document.createElement('div'); el.className = 'reminder';
-    el.style.display = 'flex'; el.style.justifyContent = 'space-between'; el.style.alignItems = 'center'; el.style.padding = '10px'; el.style.borderRadius='10px'; el.style.border='1px solid #eee'; el.style.background='#fff'; el.style.marginTop='6px';
-    const left = document.createElement('div');
-    const whenText = new Date(Number(r.dueAt)).toLocaleString();
-    const eventText = r.parentDueAt ? new Date(Number(r.parentDueAt)).toLocaleString() : '';
-    const offsetText = r.offsetLabel ? ` <small style="color:#6b7280;margin-left:6px">(${window.SidekickCore.escapeHtml(r.offsetLabel)})</small>` : '';
-    const suppressedBadge = r.suppressed ? ` <span style="color:#b91c1c;margin-left:8px;font-size:12px">(disabled)</span>` : '';
-    const eventMeta = r.type === 'Itinerary' && eventText
-      ? `<div class='meta' style='color:#6b7280;font-size:13px'>Event: ${window.SidekickCore.escapeHtml(eventText)}</div>`
+  function renderReminderRow(r, isPast) {
+    const el = document.createElement('article');
+    el.className = `sk-reminder-card${r.suppressed ? ' is-off' : ''}${isPast ? ' is-past' : ''}`;
+    const chips = [
+      r.type === 'Itinerary' ? '<span class="sk-chip">From itinerary</span>' : `<span class="sk-chip">${esc(r.type || 'Reminder')}</span>`,
+      r.offsetLabel ? `<span class="sk-chip is-warm">${esc(r.offsetLabel)}</span>` : '',
+      r.suppressed ? '<span class="sk-chip is-off">Off</span>' : '',
+    ].join('');
+    const eventLine = r.parentDueAt && Number(r.parentDueAt) !== Number(r.dueAt)
+      ? `<p class="sk-reminder-when"><b>Event</b> ${esc(formatWhen(r.parentDueAt))}</p>`
       : '';
-    left.innerHTML = `<div style="font-weight:600">${window.SidekickCore.escapeHtml(r.title || r.type)} ${r.type==='Itinerary'?'<small style="color:#6b7280;margin-left:6px">(From itinerary)</small>':''}${suppressedBadge}</div><div class='meta' style='color:#6b7280;font-size:13px'>Alert: ${window.SidekickCore.escapeHtml(whenText)}${offsetText}</div>${eventMeta}`;
-    const right = document.createElement('div');
-    right.style.display = 'flex';
-    right.style.gap = '6px';
-    right.style.flexWrap = 'wrap';
-    if (r.type === 'Itinerary') {
-      const editBtn = document.createElement('button'); editBtn.className='btn'; editBtn.style.padding='6px 8px'; editBtn.textContent = 'Edit';
-      editBtn.onclick = () => openItineraryEditor(r);
-      right.appendChild(editBtn);
-    }
-    const toggleBtn = document.createElement('button'); toggleBtn.className='btn'; toggleBtn.style.padding='6px 8px'; toggleBtn.textContent = r.suppressed ? 'Enable' : 'Turn off';
-    toggleBtn.onclick = () => { try { window.SidekickCore.setReminderSuppressed(session.email, r.id, !r.suppressed); if (!r.suppressed && window.SidekickCore.scheduleAllFor) window.SidekickCore.scheduleAllFor(session.email); } catch(e){}; render(); };
-    const del = document.createElement('button'); del.className='btn'; del.style.padding='6px 8px'; del.textContent = 'Remove';
-    del.onclick = () => { window.SidekickCore.removeReminderFor(session.email, r.id); render(); };
-    right.appendChild(toggleBtn);
-    right.appendChild(del);
-    el.appendChild(left); el.appendChild(right);
+    el.innerHTML = `
+      <div class="sk-reminder-icon" aria-hidden="true">${ICONS[r.type] || ICONS.Schedule}</div>
+      <div>
+        <h3 class="sk-reminder-title">${esc(r.title || r.type)}</h3>
+        <div class="sk-reminder-chips">${chips}</div>
+        <p class="sk-reminder-when"><b>Alert</b> ${esc(formatWhen(r.dueAt))}</p>
+        ${eventLine}
+      </div>
+      <div class="sk-reminder-actions"></div>`;
+    const actions = el.querySelector('.sk-reminder-actions');
+    const button = (label, onClick, className = '') => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = label;
+      if (className) btn.className = className;
+      btn.setAttribute('aria-label', `${label}: ${r.title || r.type}`);
+      btn.addEventListener('click', onClick);
+      actions.appendChild(btn);
+    };
+    if (r.type === 'Itinerary') button('Edit', () => openItineraryEditor(r));
+    button(r.suppressed ? 'Turn on' : 'Turn off', () => {
+      try {
+        window.SidekickCore.setReminderSuppressed(session.email, r.id, !r.suppressed);
+        if (!r.suppressed && window.SidekickCore.scheduleAllFor) window.SidekickCore.scheduleAllFor(session.email);
+      } catch (e) {}
+      render();
+    });
+    button('Remove', () => {
+      window.SidekickCore.removeReminderFor(session.email, r.id);
+      render();
+      ui.toast('Reminder removed');
+    }, 'is-danger');
     return el;
   }
 
@@ -118,8 +166,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const title = String(titleEl.value || '').trim();
     const dt = dtEl.value;
     const type = typeEl.value;
-    if (!title || !dt) return alert('Provide title and datetime');
+    if (!title || !dt) {
+      ui.alert(!title ? 'Give your reminder a short title, like "Flight to Cebu".' : 'Choose the date and time for this reminder.', { title: 'Almost there' });
+      return;
+    }
     const dueAt = new Date(dt).getTime();
+    if (!Number.isFinite(dueAt)) {
+      ui.alert('Choose a valid date and time.', { title: 'Check the date' });
+      return;
+    }
     // add main reminder
     window.SidekickCore.addReminderFor(session.email, { title, type, dueAt, note: type, parentDueAt: dueAt });
     // also create pre-alert offsets (1d,10h,5h,1h)
@@ -138,6 +193,7 @@ document.addEventListener('DOMContentLoaded', () => {
     titleEl.value = '';
     dtEl.value = '';
     render();
+    ui.toast('Reminder added');
   });
 
   if (syncBtn) {
@@ -148,8 +204,9 @@ document.addEventListener('DOMContentLoaded', () => {
           window.SidekickCore.syncRemindersFromItinerary(session.email);
           if (window.SidekickCore.scheduleAllFor) window.SidekickCore.scheduleAllFor(session.email);
           render();
+          ui.toast('Synced with your itinerary');
         } else {
-          alert('Itinerary sync not available.');
+          ui.alert('Itinerary sync is not available right now.', { title: 'Sync unavailable' });
         }
       } catch (err) { }
     });
@@ -161,14 +218,18 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!reminders.some((reminder) => !reminder.suppressed)) return;
       window.SidekickCore.turnOffAllRemindersFor(session.email);
       render();
+      ui.toast('All reminders turned off');
     });
   }
 
   if (removeAllBtn) {
-    removeAllBtn.addEventListener('click', () => {
+    removeAllBtn.addEventListener('click', async () => {
       const reminders = window.SidekickCore.getRemindersFor(session.email) || [];
       if (!reminders.length) return;
-      if (!confirm(`Remove all ${reminders.length} reminders? This cannot be undone.`)) return;
+      const ok = await ui.confirm(`All ${reminders.length} reminders will be removed from this phone. This cannot be undone.`, {
+        title: 'Remove all reminders?', confirmText: 'Remove all', tone: 'danger',
+      });
+      if (!ok) return;
       window.SidekickCore.removeAllRemindersFor(session.email);
       closeItineraryEditor();
       render();
@@ -180,7 +241,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!editingReminder || !itineraryEditorDtEl?.value) return;
       const newAlertDueAt = new Date(itineraryEditorDtEl.value).getTime();
       if (!Number.isFinite(newAlertDueAt)) {
-        alert('Provide a valid date and time.');
+        ui.alert('Choose a valid date and time.', { title: 'Check the date' });
         return;
       }
 
@@ -195,7 +256,7 @@ document.addEventListener('DOMContentLoaded', () => {
       });
 
       if (!updated) {
-        alert('Unable to update that itinerary schedule.');
+        ui.alert('That itinerary schedule could not be updated.', { title: 'Not saved' });
         return;
       }
 
@@ -205,6 +266,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       closeItineraryEditor();
       render();
+      ui.toast('Schedule updated');
     });
   }
 

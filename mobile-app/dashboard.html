@@ -7,11 +7,21 @@
     <link rel="stylesheet" href="css/common.css">
     <link rel="stylesheet" href="css/dashboard.css">
     <link rel="stylesheet" href="css/app-rating.css">
+    <link rel="stylesheet" href="css/theme.css">
     <link rel="stylesheet" href="css/a11y.css">
 </head>
 <body>
     <div class="app-container">
         <div class="screen dashboard-screen">
+            <div class="dashboard-hero">
+            <svg class="dashboard-hero-art" viewBox="0 0 220 160" fill="none" aria-hidden="true" focusable="false">
+                <path d="M8 130C46 92 78 112 112 82S168 34 210 22" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="4 8"/>
+                <circle cx="8" cy="130" r="5" fill="currentColor"/>
+                <path d="M210 4c-8 0-14 6-14 14 0 10 14 24 14 24s14-14 14-24c0-8-6-14-14-14Z" fill="#ef8a69"/>
+                <circle cx="210" cy="18" r="4.5" fill="#fff"/>
+                <path d="M30 40c18-10 34 4 52-4s26-20 46-14" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" opacity=".5"/>
+                <path d="M40 58c18-10 34 4 52-4s26-20 46-14" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" opacity=".35"/>
+            </svg>
             <div class="header-section">
                 <h1 class="screen-title">Hello, <span id="user-name">Traveler</span></h1>
                 <p class="screen-subtitle">Where do you want to go today?</p>
@@ -27,6 +37,7 @@
                 </div>
                 <div id="destination-search-suggestions" class="destination-search-suggestions" role="listbox" aria-label="Destination suggestions" hidden></div>
                 <p id="destination-search-status" class="destination-search-status" aria-live="polite"></p>
+            </div>
             </div>
             
             <div class="section">
@@ -163,6 +174,7 @@
 
     <script src="js/config.local.js"></script>
     <script src="js/core.js"></script>
+    <script src="js/ui.js"></script>
     <script src="js/app-rating.js"></script>
     <script src="js/dashboard.js"></script>
     <script src="js/nav.js"></script>

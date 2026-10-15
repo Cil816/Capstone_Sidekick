@@ -465,18 +465,12 @@ function getDraftBudgetCacheKey(itineraryData) {
   return `trip-budget-v3-${(firstHash >>> 0).toString(16)}-${(secondHash >>> 0).toString(16)}`;
 }
 
-function fallbackReply(userText, state, prefs) {
-  const base = window.SidekickCore.buildAssistantReply(userText, {
-    interests: prefs?.interests || [],
-    travelTypes: prefs?.travelTypes || [],
-    budget: state.budget || "Mid-Range",
-  });
-
-  if (companionNeedsEssentials(state)) {
-    return `${base}\n\nTo generate your itinerary, tell me destination and number of days. Example: \"Bohol for 3 days\".`;
-  }
-
-  return `${base}\n\nI already captured your trip basics. Say \"generate itinerary now\" to create and save your plan.`;
+// Shown when the AI can't answer. An honest "try again" beats a canned reply
+// that ignores what the user actually asked.
+function fallbackReply(userText, state, prefs, error) {
+  const message = String(error?.message || "");
+  if (/too many/i.test(message)) return message;
+  return "I couldn’t reach Sidekick AI just now. Please send your message again in a moment.";
 }
 
 function buildPrefsForGenerator(prefs, state) {
@@ -1007,8 +1001,11 @@ function handleKeyPress(event) {
   if (event.key === "Enter") sendMessage();
 }
 
-function clearChat() {
-  if (!confirm("Clear chat history?")) return;
+async function clearChat() {
+  const ok = await window.SidekickUI.confirm("Your messages with Sidekick on this phone will be deleted.", {
+    title: "Clear chat history?", confirmText: "Clear chat", tone: "danger",
+  });
+  if (!ok) return;
   const session = window.SidekickCore.getAuthSession();
   if (!session?.email) return;
 
@@ -1121,7 +1118,7 @@ async function sendMessage() {
         const actionSummary = applyAgentActions(session.email, backendReply.actions);
         if (actionSummary.length) reply = `${reply}\n\n${actionSummary.join("\n")}`;
         } catch (error) {
-          reply = fallbackReply(userText, companionState, prefs);
+          reply = fallbackReply(userText, companionState, prefs, error);
         }
       }
     }

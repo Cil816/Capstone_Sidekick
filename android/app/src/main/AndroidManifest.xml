@@ -43,4 +43,6 @@
     <!-- Reminders fire at the exact minute (Android 12: granted automatically; Android 13+: USE_EXACT_ALARM). -->
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    <!-- Lets reminders vibrate (some phones, e.g. Samsung, stay silent-and-still without it). Granted automatically. -->
+    <uses-permission android:name="android.permission.VIBRATE" />
 </manifest>

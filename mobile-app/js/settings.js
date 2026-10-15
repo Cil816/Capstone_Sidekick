@@ -68,8 +68,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const clearChatBtn = document.getElementById('clear-chat-btn');
   if (clearChatBtn) {
-    clearChatBtn.addEventListener('click', () => {
-      if (!confirm('Clear all chat history?')) return;
+    clearChatBtn.addEventListener('click', async () => {
+      const ok = await window.SidekickUI.confirm('All your messages with Sidekick on this phone will be deleted.', { title: 'Clear chat history?', confirmText: 'Clear chat', tone: 'danger' });
+      if (!ok) return;
       window.SidekickCore.clearChatForEmail(session.email);
       showMessage('Chat history cleared.');
     });
@@ -78,7 +79,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const clearItineraryBtn = document.getElementById('clear-itinerary-btn');
   if (clearItineraryBtn) {
     clearItineraryBtn.addEventListener('click', async () => {
-      if (!confirm('Remove your itinerary and itinerary reminders?')) return;
+      const ok = await window.SidekickUI.confirm('Your itinerary and its reminders will be removed. This cannot be undone.', { title: 'Remove itinerary?', confirmText: 'Remove', tone: 'danger' });
+      if (!ok) return;
       clearItineraryBtn.disabled = true;
       try {
         await window.SidekickCore.clearItineraryForEmail(session.email);
@@ -94,8 +96,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const resetPrefsBtn = document.getElementById('reset-prefs-btn');
   if (resetPrefsBtn) {
-    resetPrefsBtn.addEventListener('click', () => {
-      if (!confirm('Reset your onboarding preferences and go to onboarding now?')) return;
+    resetPrefsBtn.addEventListener('click', async () => {
+      const ok = await window.SidekickUI.confirm('You will choose your travel style and interests again.', { title: 'Reset your preferences?', confirmText: 'Reset' });
+      if (!ok) return;
       window.SidekickCore.resetPreferencesForEmail(session.email);
       localStorage.removeItem('userPreferences');
       try { sessionStorage.removeItem('sidekick.onboarding.v1'); } catch (error) {}

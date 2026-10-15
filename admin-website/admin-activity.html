@@ -5,6 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Activity · Sidekick Admin</title>
     <link rel="stylesheet" href="css/admin.css" />
+    <link rel="stylesheet" href="css/admin-v3.css" />
+    <script src="js/auth-guard.js"></script>
   </head>
   <body data-page="activity">
     <div class="admin-shell">
@@ -12,44 +14,51 @@
         <div class="admin-sidebar-header">
           <img class="admin-logo" src="assets/sidekick-logo-512.png" alt="" />
           <div>
-            <div style="font-weight:800;">Sidekick</div>
-            <small style="color:rgba(255,255,255,0.7);">Administrator</small>
+            <div class="ax-brand-name">Sidekick</div>
+            <div class="ax-brand-role">Administrator</div>
           </div>
         </div>
-        <nav>
-          <a class="admin-nav-link" href="admin.html">Dashboard</a>
-          <a class="admin-nav-link" href="admin-users.html">Users</a>
-          <a class="admin-nav-link" href="admin-itineraries.html">Travel plans</a>
-          <a class="admin-nav-link" href="admin-analytics.html">Reports</a>
-          <a class="admin-nav-link" href="admin-reviews.html">App reviews</a>
-          <a class="admin-nav-link active" href="admin-activity.html">Activity</a>
-          <a class="admin-nav-link" href="admin-integrations.html">Connections</a>
-          <a class="admin-nav-link" href="admin-settings.html">App setup</a>
+        <nav aria-label="Admin pages">
+          <a class="admin-nav-link" href="admin.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg><span>Dashboard</span></a>
+          <a class="admin-nav-link" href="admin-users.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 19v-1a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v1"/><circle cx="9" cy="7" r="3.5"/><path d="M22 19v-1a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg><span>Users</span></a>
+          <a class="admin-nav-link" href="admin-itineraries.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4 3 6v14l6-2 6 2 6-2V4l-6 2-6-2Z"/><path d="M9 4v14M15 6v14"/></svg><span>Travel plans</span></a>
+          <a class="admin-nav-link" href="admin-analytics.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18"/><path d="M7 15v-4M12 15V7M17 15v-7"/></svg><span>Reports</span></a>
+          <a class="admin-nav-link" href="admin-reviews.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9Z"/></svg><span>App reviews</span></a>
+          <a class="admin-nav-link active" href="admin-activity.html" aria-current="page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l2.5-6 5 12 2.5-6H21"/></svg><span>Activity</span></a>
+          <a class="admin-nav-link" href="admin-integrations.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/></svg><span>System status</span></a>
         </nav>
-        <button class="admin-button-secondary" data-admin-logout type="button">Log out</button>
+        <button class="admin-button-secondary" data-admin-logout type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg><span>Log out</span></button>
       </aside>
 
       <main class="admin-main">
         <div class="admin-topbar">
           <div>
             <h1 class="admin-page-title">Activity</h1>
-            <p class="admin-subtitle">See recent sign-ups, saved plans, user sign-ins, chatbot messages, and admin sign-ins.</p>
+            <p class="admin-subtitle">What happened recently. Chatbot messages are grouped per person per day.</p>
           </div>
+          
         </div>
 
         <div id="admin-status-banner" class="admin-status-banner" aria-live="polite"></div>
 
-        <div class="admin-card">
-          <div class="admin-panel-header"><h2>Recent activity</h2></div>
-          <div id="recent-activity-list" class="admin-logger"></div>
-        </div>
-        <div class="admin-card admin-detail-panel">
-          <div class="admin-panel-header"><h2>Admin sign-in history</h2></div>
-          <p class="admin-subtitle">Sign-in history is available when audit logging has been set up.</p>
-          <div id="admin-audit-list" class="admin-logger"></div>
-        </div>
+        <section class="ax-today" id="activity-today" aria-label="Last 24 hours"></section>
+        <section class="admin-card" aria-labelledby="feed-heading">
+          <div class="ax-card-head">
+            <div><h2 class="ax-card-title" id="feed-heading">Recent activity</h2><p class="ax-card-note">Newest first</p></div>
+            <div class="ax-filter-chips ax-tabs" id="activity-filters" role="group" aria-label="Show">
+              <button type="button" class="ax-tab" data-activity-filter="all" aria-selected="true">All</button>
+              <button type="button" class="ax-tab" data-activity-filter="signup" aria-selected="false">Sign-ups</button>
+              <button type="button" class="ax-tab" data-activity-filter="trip" aria-selected="false">Itineraries</button>
+              <button type="button" class="ax-tab" data-activity-filter="sign_in" aria-selected="false">Sign-ins</button>
+              <button type="button" class="ax-tab" data-activity-filter="chat" aria-selected="false">Chatbot</button>
+            </div>
+          </div>
+          <ul id="recent-activity-list" class="ax-feed"></ul>
+        </section>
       </main>
     </div>
+
+    <div id="chart-tooltip" class="chart-tooltip" role="presentation" hidden></div>
 
     <script src="js/config.js"></script>
     <script src="js/admin.js"></script>

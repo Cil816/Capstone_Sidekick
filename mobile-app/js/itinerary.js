@@ -127,6 +127,8 @@ function displayPlacesOnItineraryMap(places) {
     marker.addListener("click", () => {
       _selectedPlace = place;
       document.dispatchEvent(new CustomEvent("sidekick:selected-place", { detail: place }));
+      // Show the spot's details in front of the user.
+      window.SidekickStayEat?.openPlace?.(place);
     });
     _itineraryMapMarkers.push(marker);
     bounds.extend(position);
@@ -257,6 +259,8 @@ async function searchPlacesForBuilder(query) {
         document.dispatchEvent(new CustomEvent("sidekick:selected-place", { detail: place }));
         mapEl.querySelectorAll(".map-place-result").forEach((item) => item.classList.remove("selected"));
         button.classList.add("selected");
+        // Show the spot's details in front of the user.
+        window.SidekickStayEat?.openPlace?.(place);
       });
       mapEl.appendChild(button);
     });
@@ -891,18 +895,33 @@ function attachAddActivityHandler(itineraryData, prefs, email, startDate) {
   const addBtn = document.getElementById("add-activity-btn");
   if (!addBtn) return;
 
-  addBtn.onclick = () => {
+  addBtn.onclick = async () => {
     const dayCount = Math.max(1, itineraryData.itinerary?.length || 1);
-    const dayStr = window.prompt(`Add activity for which day? (1-${dayCount})`, "1");
-    if (dayStr === null) return;
-    const dayNumber = Number(dayStr);
-    if (!Number.isInteger(dayNumber) || dayNumber < 1 || dayNumber > dayCount) {
-      window.alert(`Choose a day from 1 to ${dayCount}.`);
-      return;
-    }
-    const title = String(window.prompt("Activity title", "New experience") || "").trim();
-    const location = String(window.prompt("Where is it?", "Near your travel area") || "").trim();
-    if (!title || !location) return;
+    const picked = (typeof _selectedPlace === 'object' && _selectedPlace
+      && Number.isFinite(Number(_selectedPlace.lat)) && Number.isFinite(Number(_selectedPlace.lng))) ? _selectedPlace : null;
+    // One themed form instead of four separate phone pop-ups.
+    const values = await window.SidekickUI.form({
+      title: "Add an activity",
+      confirmText: "Add activity",
+      fields: [
+        { name: "day", label: "Day", type: "select", value: "1", options: Array.from({ length: dayCount }, (_, i) => [String(i + 1), `Day ${i + 1}`]) },
+        { name: "title", label: "What will you do?", placeholder: "e.g. Sunset at the view deck", maxLength: 120 },
+        { name: "location", label: "Where is it?", placeholder: "e.g. Kibungan View Deck", value: picked?.name || "", maxLength: 160 },
+        { name: "time", label: "Time (optional)", type: "time", hint: "Leave empty to use the next open time slot." },
+        ...(picked ? [{ name: "attach", label: `Pin it to "${picked.name || "the selected place"}" on the map?`, type: "select", value: "yes", options: [["yes", "Yes, use that place"], ["no", "No"]] }] : []),
+      ],
+      validate: (v) => {
+        if (!v.title) return "Enter what you will do.";
+        if (!v.location) return "Enter where it is.";
+        if (v.time && !/^([01]?\d|2[0-3]):[0-5]\d$/.test(v.time)) return "Choose a valid time.";
+        return "";
+      },
+    });
+    if (!values) return;
+    const dayNumber = Number(values.day);
+    if (!Number.isInteger(dayNumber) || dayNumber < 1 || dayNumber > dayCount) return;
+    const title = values.title;
+    const location = values.location;
 
     const dayIdx = dayNumber - 1;
     if (!itineraryData.itinerary?.[dayIdx]) return;
@@ -910,16 +929,13 @@ function attachAddActivityHandler(itineraryData, prefs, email, startDate) {
     // Put it into the next available slot label.
     const nextTime = ["Morning", "Afternoon", "Evening", "Night"][itineraryData.itinerary[dayIdx].activities.length % 4];
 
-    // Ask user for specific time (optional) in HH:MM 24h format, otherwise derive from slot
-    const timeInput = String(window.prompt("Time (HH:MM) optional — leave empty to use slot time:", "")).trim();
+    // Specific time (optional, HH:MM 24h from the time picker), otherwise derive from slot
+    const timeInput = String(values.time || "").trim();
     const timeMap = { Morning: 9, Afternoon: 14, Evening: 18, Night: 21 };
     const dayDate = new Date(startDate);
     dayDate.setDate(dayDate.getDate() + dayIdx);
     let dueAt = null;
-    if (timeInput && !/^([01]?\d|2[0-3]):[0-5]\d$/.test(timeInput)) {
-      window.alert('Enter a valid time in 24-hour format, such as 09:30.');
-      return;
-    }
+    if (timeInput && !/^([01]?\d|2[0-3]):[0-5]\d$/.test(timeInput)) return;
     if (timeInput) {
       const [hh, mm] = timeInput.split(":").map((v) => Number(v));
       dayDate.setHours(hh, mm, 0, 0);
@@ -938,18 +954,14 @@ function attachAddActivityHandler(itineraryData, prefs, email, startDate) {
       dueAt,
       iso: new Date(dueAt).toISOString(),
     };
-    // Offer to attach coordinates from selected place (if available)
+    // Attach the place picked on the map, when the user chose to.
     try{
-      if (typeof _selectedPlace === 'object' && _selectedPlace &&
-          Number.isFinite(Number(_selectedPlace.lat)) && Number.isFinite(Number(_selectedPlace.lng))) {
-        const attach = confirm('Attach coordinates from the selected place to this activity?');
-        if (attach) {
-          activityObj.location = _selectedPlace.name || activityObj.location;
-          activityObj.locationCoords = { lat: _selectedPlace.lat, lng: _selectedPlace.lng };
-          activityObj.locationAddress = _selectedPlace.address || '';
-          activityObj.placeId = _selectedPlace.placeId || '';
-          activityObj.photoResource = _selectedPlace.photoResource || '';
-        }
+      if (picked && values.attach === 'yes') {
+        activityObj.location = picked.name || activityObj.location;
+        activityObj.locationCoords = { lat: picked.lat, lng: picked.lng };
+        activityObj.locationAddress = picked.address || '';
+        activityObj.placeId = picked.placeId || '';
+        activityObj.photoResource = picked.photoResource || '';
       }
     }catch(e){}
 
@@ -1206,7 +1218,8 @@ document.addEventListener("DOMContentLoaded", () => {
   if (removeAllBtn) {
     removeAllBtn.addEventListener('click', async (e) => {
       e.preventDefault();
-      if (!window.confirm('Remove your entire itinerary? This cannot be undone.')) return;
+      const ok = await window.SidekickUI.confirm('Every day and activity in this itinerary, and its reminders, will be removed. This cannot be undone.', { title: 'Remove your itinerary?', confirmText: 'Remove', tone: 'danger' });
+      if (!ok) return;
       removeAllBtn.disabled = true;
       try {
         await window.SidekickCore.clearItineraryForEmail(email);
@@ -1217,7 +1230,7 @@ document.addEventListener("DOMContentLoaded", () => {
         localStorage.setItem('sidekick.remindersByEmail.v1', JSON.stringify(all));
         document.dispatchEvent(new CustomEvent('sidekick:reminders-updated', { detail: { email } }));
       } catch (error) {
-        window.alert(error.message || 'Unable to remove the itinerary. Please try again.');
+        window.SidekickUI.alert(error.message || 'Unable to remove the itinerary. Please try again.', { title: 'Not removed' });
         removeAllBtn.disabled = false;
         return;
       }
@@ -1275,9 +1288,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
   if (buildBtn) buildBtn.addEventListener('click', async (e) => {
     e.preventDefault();
+    // A second tap while the confirmation is open must not start a second build.
+    if (document.querySelector('.sk-dialog')) return;
     const destinationName = String(destinationInput?.value || '').trim();
     if (!destinationName) {
-      window.alert('Enter a destination before building your itinerary.');
+      await window.SidekickUI.alert('Enter a destination before building your itinerary.', { title: 'Where to?' });
       destinationInput?.focus();
       return;
     }
@@ -1285,25 +1300,36 @@ document.addEventListener("DOMContentLoaded", () => {
     try {
       tripDates = itineraryDates(startInput?.value, endInput?.value);
     } catch (error) {
-      window.alert(error.message);
+      window.SidekickUI.alert(error.message, { title: 'Check your dates' });
       return;
     }
     const rawBudget = Number(budgetInput?.value);
     if (!Number.isFinite(rawBudget) || rawBudget <= 0 || !Number.isSafeInteger(rawBudget)) {
-      window.alert('Enter a whole-number trip budget in Philippine pesos.');
+      await window.SidekickUI.alert('Enter a whole-number trip budget in Philippine pesos.', { title: 'Add your budget' });
       budgetInput?.focus();
       return;
     }
     const { start: startVal, end: endVal, durationDays } = tripDates;
     if (durationDays > 14) {
-      window.alert('Itinerary plans can cover up to 14 days. Choose a shorter date range.');
+      window.SidekickUI.alert('Itinerary plans can cover up to 14 days. Choose a shorter date range.', { title: 'Trip too long' });
       return;
     }
     const originText = String(originInput?.value || '').trim().slice(0, 180);
     const budgetLabel = `PHP ${rawBudget.toLocaleString()} total`;
     const tempPrefs = { ...prefs, preferredPlaces: [destinationName], budget: budgetLabel, budgetAmountPhp: rawBudget, transportation: 'DRIVE' };
-    const confirmation = `Build a ${durationDays}-day itinerary from ${startVal.toDateString()} through ${endVal.toDateString()}?\nTotal budget: ${budgetLabel}\nDestination: ${destinationName}${originText ? `\nStarting location: ${originText}` : ''}`;
-    if (!window.confirm(confirmation)) return;
+    const shortDate = (date) => date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+    const confirmed = await window.SidekickUI.confirm('', {
+      title: `Build your ${durationDays}-day trip?`,
+      confirmText: 'Build itinerary',
+      cancelText: 'Not yet',
+      details: [
+        ['Destination', destinationName],
+        ['Dates', durationDays === 1 ? shortDate(startVal) : `${shortDate(startVal)} – ${shortDate(endVal)}`],
+        ['Budget', `₱${rawBudget.toLocaleString()} total`],
+        ...(originText ? [['Starting from', originText]] : []),
+      ],
+    });
+    if (!confirmed) return;
 
     // Offer hotels that fit the budget before generating.
     let chosenStay = null;
@@ -1388,7 +1414,7 @@ document.addEventListener("DOMContentLoaded", () => {
       try { window.SidekickCore?.syncRemindersFromItinerary?.(email); } catch (error) {}
       try { window.SidekickCore?.scheduleAllFor?.(email); } catch (error) {}
     } catch (error) {
-      window.alert(error.message || 'Verified itinerary generation failed.');
+      window.SidekickUI.alert(error.message || 'Verified itinerary generation failed.', { title: 'Itinerary not built' });
     } finally {
       buildBtn.disabled = false;
       buildBtn.textContent = 'Build Itinerary';
