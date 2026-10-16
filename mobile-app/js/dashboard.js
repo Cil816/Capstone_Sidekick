@@ -695,9 +695,15 @@ async function showDestinationDetails(place, prefs, session) {
   }
 }
 
+// "Generate itinerary" hands the trip to the Itinerary screen, which builds it
+// with its own Build Itinerary flow (trip confirmation, budget hotel choice,
+// generation, budget estimate and reminders), so both buttons give the same result.
+const PENDING_BUILD_KEY = "sidekick.itinerary.pendingBuild";
+
 async function generateFocusedItinerary(place, prefs, session) {
   if (!session?.email || !place?.name) return;
   const button = document.getElementById("destination-generate");
+  if (button?.disabled) return;
   const budgetInput = document.getElementById("destination-plan-budget");
   const daysInput = document.getElementById("destination-plan-days");
   const errorEl = document.getElementById("destination-plan-error");
@@ -723,68 +729,67 @@ async function generateFocusedItinerary(place, prefs, session) {
     daysInput?.focus();
     return;
   }
-  const startDate = (() => {
-    const now = new Date();
-    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-  })();
-  const budgetLabel = `PHP ${budgetAmountPhp.toLocaleString()} total`;
+  // The trip starts today and lasts the chosen number of days.
+  const dateValue = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  const start = new Date();
+  const end = new Date(start);
+  end.setDate(end.getDate() + durationDays - 1);
+  const origin = _selectedOriginPlace
+    ? String(_selectedOriginPlace.address || _selectedOriginPlace.name || "").trim()
+    : String(document.getElementById("destination-origin")?.value || "").trim();
+
+  // Check the budget against the cheapest restaurants and hotels before leaving,
+  // so an unrealistic budget can be fixed right here.
+  const trip = { destination: place.name, startDate: dateValue(start), endDate: dateValue(end), budgetAmountPhp };
   if (button) {
     button.disabled = true;
-    button.textContent = "Verifying itinerary...";
+    button.textContent = "Checking budget…";
   }
+  let budgetCheck = null;
   try {
-    const response = await window.SidekickCore.apiRequest("/api/itinerary/generate", {
-      method: "POST",
-      body: JSON.stringify({
-        email: session.email,
-        message: `Plan a practical ${durationDays}-day trip to ${place.name}. My total budget is PHP ${budgetAmountPhp}. Keep the full trip within this budget when possible. Use my saved preferences and suggest a balanced itinerary.`,
-        selectedDestination: { name: place.name, placeId: place.placeId, lat: place.lat, lng: place.lng },
-        origin: _selectedOriginPlace ? {
-          name: _selectedOriginPlace.name,
-          address: _selectedOriginPlace.address,
-          placeId: _selectedOriginPlace.placeId,
-          lat: _selectedOriginPlace.lat,
-          lng: _selectedOriginPlace.lng,
-        } : null,
-        profile: {
-          ...(prefs || {}),
-          preferredPlaces: [place.name, ...(prefs?.preferredPlaces || [])],
-          startDate,
-          durationDays,
-          budget: budgetLabel,
-          budgetAmountPhp,
-          transportation: "DRIVE",
-        },
-      }),
+    budgetCheck = await window.SidekickCore.checkTripBudget({
+      ...trip,
+      lat: Number.isFinite(Number(place.lat)) ? Number(place.lat) : null,
+      lng: Number.isFinite(Number(place.lng)) ? Number(place.lng) : null,
     });
-    if (!Array.isArray(response.itinerary)) throw new Error("The itinerary service returned no itinerary.");
-    const byEmail = window.SidekickCore.getItineraryByEmail();
-    byEmail[session.email] = {
-      itinerary: window.SidekickCore.applyLocalScheduleTimes(response.itinerary, response.meta?.startDate || startDate),
-      meta: {
-        ...(response.meta || {}),
-        focusedPlace: place.name,
-        startDate: response.meta?.startDate || startDate,
-        durationDays,
-        budget: budgetLabel,
-        budgetAmountPhp,
-        serverTripId: response.tripId,
-      },
-    };
-    window.SidekickCore.setItineraryByEmail(byEmail);
-    window.SidekickAppRating?.afterItineraryGenerated({ deferUntilItineraryPage: true });
-    window.location.href = "itinerary.html";
-  } catch (error) {
-    if (errorEl) {
-      errorEl.textContent = error.message || "Unable to generate a verified itinerary.";
-      errorEl.hidden = false;
-    }
   } finally {
     if (button) {
       button.disabled = false;
-      button.textContent = "Generate itinerary for this place";
+      button.textContent = "Generate itinerary";
     }
   }
+  if (budgetCheck?.checked && !budgetCheck.realistic) {
+    const problem = window.SidekickCore.describeUnrealisticBudget(budgetCheck, place.name);
+    await window.SidekickUI.alert(problem.message, { title: problem.title, details: problem.details, confirmText: "Edit my trip" });
+    if (errorEl) {
+      errorEl.textContent = `Budget too low for ${durationDays} day${durationDays === 1 ? "" : "s"}. Enter at least ₱${Math.round(budgetCheck.minimumPhp).toLocaleString()}${budgetCheck.maxAffordableDays >= 1 && budgetCheck.maxAffordableDays < durationDays ? ` or choose ${budgetCheck.maxAffordableDays} day${budgetCheck.maxAffordableDays === 1 ? "" : "s"}` : ""}.`;
+      errorEl.hidden = false;
+    }
+    budgetInput?.focus();
+    return;
+  }
+
+  try {
+    sessionStorage.setItem(PENDING_BUILD_KEY, JSON.stringify({
+      budgetCheckedKey: budgetCheck?.checked ? window.SidekickCore.tripBudgetKey(trip) : "",
+      destination: place.name,
+      placeId: place.placeId || "",
+      lat: Number.isFinite(Number(place.lat)) ? Number(place.lat) : null,
+      lng: Number.isFinite(Number(place.lng)) ? Number(place.lng) : null,
+      startDate: dateValue(start),
+      endDate: dateValue(end),
+      budgetAmountPhp,
+      origin: origin.slice(0, 180),
+      createdAt: Date.now(),
+    }));
+  } catch (error) {
+    if (errorEl) {
+      errorEl.textContent = "Unable to open the itinerary builder. Please try again.";
+      errorEl.hidden = false;
+    }
+    return;
+  }
+  window.location.href = "itinerary.html";
 }
 
 // ---- "See all" list screen -------------------------------------------------

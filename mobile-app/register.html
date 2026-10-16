@@ -9,9 +9,10 @@
     <link rel="stylesheet" href="css/otp.css">
     <link rel="stylesheet" href="css/legal.css">
     <link rel="stylesheet" href="css/theme.css">
+    <link rel="stylesheet" href="css/travel-map.css">
     <link rel="stylesheet" href="css/a11y.css">
 </head>
-<body>
+<body data-map-stop="register-email">
     <div class="app-container">
         <div class="screen register-screen">
             <div class="header">
@@ -22,12 +23,12 @@
                 </a>
             </div>
             
-            <div class="content">
+            <div class="content" data-map-slide>
                 <h1 class="screen-title">Create account</h1>
                 <p class="screen-subtitle">Start your adventure today</p>
                 
                 <form class="form" id="register-form" novalidate>
-                    <section id="registration-email-step">
+                    <section id="registration-email-step" data-map-step="register-email">
                         <div class="form-group">
                             <label for="register-email">Email</label>
                             <input type="email" id="register-email" placeholder="your@email.com" autocomplete="email" required>
@@ -35,7 +36,7 @@
                         <button type="button" class="btn btn-primary btn-full" id="send-registration-code">Verify email</button>
                     </section>
 
-                    <section id="registration-code-step" hidden>
+                    <section id="registration-code-step" data-map-step="register-code" hidden>
                         <p class="screen-subtitle">Enter the 6-digit code sent to <strong id="registration-code-email"></strong>.</p>
                         <div class="form-group">
                             <label for="registration-otp">Verification code</label>
@@ -48,7 +49,7 @@
                         </div>
                     </section>
 
-                    <section id="registration-details-step" hidden>
+                    <section id="registration-details-step" data-map-step="register-details" hidden>
                         <p class="screen-subtitle">Email verified: <strong id="registration-verified-email"></strong></p>
                         <div class="form-group">
                             <label for="register-name">Full Name</label>
@@ -98,5 +99,6 @@
     <script src="js/ui.js"></script>
     <script src="js/otp-input.js"></script>
     <script src="js/register.js"></script>
+    <script src="js/travel-map.js"></script>
 </body>
 </html>

@@ -1,17 +1,21 @@
+/* Card layout shared by the login and register screens (login.html also adds
+   the register-screen class and loads this file), so both look the same. */
 .register-screen {
     --register-ink: #263b51;
     --register-muted: #718096;
     --register-accent: #319eaf;
 }
 
+/* Header and card use the same width, leaving 16px of space on each side on
+   phones so the card never touches the screen edge. */
 .register-screen .header {
-    width: min(100%, 520px);
+    width: min(calc(100% - 32px), 520px);
     margin: 0 auto;
     padding: 16px 0 8px;
 }
 
 .register-screen .content {
-    width: min(100%, 520px);
+    width: min(calc(100% - 32px), 520px);
     margin: clamp(8px, 3vh, 28px) auto 32px;
     padding: clamp(22px, 5vw, 36px);
     border: 1px solid #e8eef4;
@@ -38,6 +42,11 @@
 }
 
 .register-screen .form {
+    gap: 16px;
+}
+
+/* The register form spaces its rows inside each step section instead. */
+.register-screen #register-form {
     gap: 0;
 }
 
@@ -131,11 +140,15 @@
     opacity: 0.65;
 }
 
+/* Checkbox beside its text, with wrapped lines lining up under the text. */
 .register-screen .terms-check {
+    display: flex;
     align-items: flex-start;
+    gap: 10px;
     margin: 2px 0;
     color: #526274;
     font-size: 14px;
+    line-height: 1.5;
 }
 
 .register-screen .terms-check input {
@@ -145,9 +158,18 @@
     margin-top: 2px;
 }
 
+/* Terms and Privacy open in a pop-up, so they are buttons; style them as
+   plain inline links (no grey box) so the sentence reads naturally. */
 .terms-link {
+    display: inline;
+    padding: 0;
+    border: 0;
+    background: none;
     color: #287f97;
+    cursor: pointer;
+    font: inherit;
     font-weight: 600;
+    text-decoration: underline;
     text-underline-offset: 3px;
 }
 
@@ -170,6 +192,7 @@
     margin-top: 24px;
     color: #788596;
     font-size: 14px;
+    text-align: center;
 }
 
 .register-screen .footer-text a {
@@ -177,9 +200,14 @@
     font-weight: 700;
 }
 
+/* Centred on screen (see the dialog rule in common.css), with room to spare
+   on short phones. */
 .terms-dialog {
+    margin: auto;
     width: min(420px, calc(100vw - 32px));
     max-width: none;
+    max-height: calc(100dvh - 32px);
+    overflow: auto;
     border: 1px solid #e3ebf1;
     border-radius: 18px;
     padding: 24px;

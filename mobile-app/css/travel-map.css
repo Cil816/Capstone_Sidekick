@@ -1,0 +1,127 @@
+/* ==========================================================================
+   Travel map shared by the welcome, login, register and onboarding screens.
+   One large illustrated map sits behind the page; js/travel-map.js pans it to
+   each screen's "stop" on the dotted route, so moving between screens and
+   steps feels like travelling across the same map. The map is drawn inline
+   (no download) and works offline.
+   ========================================================================== */
+
+.sk-map {
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    overflow: hidden;
+    pointer-events: none;
+    background: #e8f3ec;
+}
+
+.sk-map-canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1200 1600'%3E%3Crect width='1200' height='1600' fill='%23e8f3ec'/%3E%3Cpath d='M0 980c90-20 150 60 170 150s70 170 190 210 260 20 380 120 260 120 460 60V1600H0z' fill='%23bfe1ed'/%3E%3Cpath d='M0 1010c80-15 130 55 150 140s70 175 195 215 255 25 375 125 260 115 480 55' stroke='%23a9d6e5' stroke-width='3' fill='none'/%3E%3Cpath d='M60 1420c25-25 75-20 90 5s-15 45-50 42-55-27-40-47z' fill='%23d6ecdd'/%3E%3Cpath d='M240 1520c20-18 60-12 68 8s-12 34-40 30-40-22-28-38z' fill='%23d6ecdd'/%3E%3Cpath d='M1210 180c-120 60-190 150-230 260s-40 220-150 320-260 140-330 280-120 260-260 330' stroke='%23bfe1ed' stroke-width='34' fill='none' stroke-linecap='round'/%3E%3Ccircle cx='140' cy='230' r='70' fill='%23cde8d5'/%3E%3Ccircle cx='1040' cy='420' r='55' fill='%23cde8d5'/%3E%3Ccircle cx='700' cy='760' r='48' fill='%23cde8d5'/%3E%3Ccircle cx='1080' cy='1180' r='65' fill='%23cde8d5'/%3E%3Ccircle cx='260' cy='1180' r='50' fill='%23cde8d5'/%3E%3Ccircle cx='520' cy='120' r='40' fill='%23cde8d5'/%3E%3Ccircle cx='120' cy='220' r='9' fill='%23b9dfc6'/%3E%3Ccircle cx='131' cy='225' r='7' fill='%23c4e5cf'/%3E%3Ccircle cx='160' cy='250' r='9' fill='%23b9dfc6'/%3E%3Ccircle cx='171' cy='255' r='7' fill='%23c4e5cf'/%3E%3Ccircle cx='1030' cy='405' r='9' fill='%23b9dfc6'/%3E%3Ccircle cx='1041' cy='410' r='7' fill='%23c4e5cf'/%3E%3Ccircle cx='690' cy='750' r='9' fill='%23b9dfc6'/%3E%3Ccircle cx='701' cy='755' r='7' fill='%23c4e5cf'/%3E%3Ccircle cx='1070' cy='1170' r='9' fill='%23b9dfc6'/%3E%3Ccircle cx='1081' cy='1175' r='7' fill='%23c4e5cf'/%3E%3Ccircle cx='250' cy='1170' r='9' fill='%23b9dfc6'/%3E%3Ccircle cx='261' cy='1175' r='7' fill='%23c4e5cf'/%3E%3Ccircle cx='515' cy='110' r='9' fill='%23b9dfc6'/%3E%3Ccircle cx='526' cy='115' r='7' fill='%23c4e5cf'/%3E%3Cpath d='M-20 200L1220 150' stroke='%23c9dce2' stroke-width='13' fill='none' stroke-linecap='round'/%3E%3Cpath d='M-20 200L1220 150' stroke='%23ffffff' stroke-width='9' fill='none' stroke-linecap='round'/%3E%3Cpath d='M-20 470L1220 410' stroke='%23c9dce2' stroke-width='13' fill='none' stroke-linecap='round'/%3E%3Cpath d='M-20 470L1220 410' stroke='%23ffffff' stroke-width='9' fill='none' stroke-linecap='round'/%3E%3Cpath d='M-20 700L1220 660' stroke='%23c9dce2' stroke-width='13' fill='none' stroke-linecap='round'/%3E%3Cpath d='M-20 700L1220 660' stroke='%23ffffff' stroke-width='9' fill='none' stroke-linecap='round'/%3E%3Cpath d='M-20 1000L1220 950' stroke='%23c9dce2' stroke-width='13' fill='none' stroke-linecap='round'/%3E%3Cpath d='M-20 1000L1220 950' stroke='%23ffffff' stroke-width='9' fill='none' stroke-linecap='round'/%3E%3Cpath d='M-20 1300L1220 1240' stroke='%23c9dce2' stroke-width='13' fill='none' stroke-linecap='round'/%3E%3Cpath d='M-20 1300L1220 1240' stroke='%23ffffff' stroke-width='9' fill='none' stroke-linecap='round'/%3E%3Cpath d='M180 -20L120 1620' stroke='%23c9dce2' stroke-width='13' fill='none' stroke-linecap='round'/%3E%3Cpath d='M180 -20L120 1620' stroke='%23ffffff' stroke-width='9' fill='none' stroke-linecap='round'/%3E%3Cpath d='M450 -20L420 1620' stroke='%23c9dce2' stroke-width='13' fill='none' stroke-linecap='round'/%3E%3Cpath d='M450 -20L420 1620' stroke='%23ffffff' stroke-width='9' fill='none' stroke-linecap='round'/%3E%3Cpath d='M760 -20L790 1620' stroke='%23c9dce2' stroke-width='13' fill='none' stroke-linecap='round'/%3E%3Cpath d='M760 -20L790 1620' stroke='%23ffffff' stroke-width='9' fill='none' stroke-linecap='round'/%3E%3Cpath d='M1050 -20L1110 1620' stroke='%23c9dce2' stroke-width='13' fill='none' stroke-linecap='round'/%3E%3Cpath d='M1050 -20L1110 1620' stroke='%23ffffff' stroke-width='9' fill='none' stroke-linecap='round'/%3E%3Cpath d='M-20 330L1220 290' stroke='%23c9dce2' stroke-width='9' fill='none' stroke-linecap='round'/%3E%3Cpath d='M-20 330L1220 290' stroke='%23ffffff' stroke-width='5' fill='none' stroke-linecap='round'/%3E%3Cpath d='M-20 860L1220 810' stroke='%23c9dce2' stroke-width='9' fill='none' stroke-linecap='round'/%3E%3Cpath d='M-20 860L1220 810' stroke='%23ffffff' stroke-width='5' fill='none' stroke-linecap='round'/%3E%3Cpath d='M300 -20L280 1620' stroke='%23c9dce2' stroke-width='9' fill='none' stroke-linecap='round'/%3E%3Cpath d='M300 -20L280 1620' stroke='%23ffffff' stroke-width='5' fill='none' stroke-linecap='round'/%3E%3Cpath d='M610 -20L620 1620' stroke='%23c9dce2' stroke-width='9' fill='none' stroke-linecap='round'/%3E%3Cpath d='M610 -20L620 1620' stroke='%23ffffff' stroke-width='5' fill='none' stroke-linecap='round'/%3E%3Cpath d='M920 -20L960 1620' stroke='%23c9dce2' stroke-width='9' fill='none' stroke-linecap='round'/%3E%3Cpath d='M920 -20L960 1620' stroke='%23ffffff' stroke-width='5' fill='none' stroke-linecap='round'/%3E%3Cpath d='M-20 620c260-80 420 90 640 20s360-160 600-60' stroke='%23ecc98a' stroke-width='20' fill='none' stroke-linecap='round'/%3E%3Cpath d='M-20 620c260-80 420 90 640 20s360-160 600-60' stroke='%23f7dfae' stroke-width='13' fill='none' stroke-linecap='round'/%3E%3Cpath d='M600 330C555.0 368.3 388.3 483.3 330 560C271.7 636.7 250.0 723.3 250 790C250.0 856.7 293.3 911.7 330 960C366.7 1008.3 446.7 1060.0 470 1080' stroke='%23ffffff' stroke-width='9' fill='none' stroke-linecap='round' opacity='.7'/%3E%3Cpath d='M600 330C555.0 368.3 388.3 483.3 330 560C271.7 636.7 250.0 723.3 250 790C250.0 856.7 293.3 911.7 330 960C366.7 1008.3 446.7 1060.0 470 1080' stroke='%232c91b0' stroke-width='4.5' stroke-dasharray='2 12' stroke-linecap='round' fill='none'/%3E%3Cpath d='M600 330C646.7 368.3 820.0 488.3 880 560C940.0 631.7 961.7 698.3 960 760C958.3 821.7 910.0 873.3 870 930C830.0 986.7 763.3 1053.3 720 1100C676.7 1146.7 646.7 1173.3 610 1210C573.3 1246.7 518.3 1301.7 500 1320' stroke='%23ffffff' stroke-width='9' fill='none' stroke-linecap='round' opacity='.7'/%3E%3Cpath d='M600 330C646.7 368.3 820.0 488.3 880 560C940.0 631.7 961.7 698.3 960 760C958.3 821.7 910.0 873.3 870 930C830.0 986.7 763.3 1053.3 720 1100C676.7 1146.7 646.7 1173.3 610 1210C573.3 1246.7 518.3 1301.7 500 1320' stroke='%232c91b0' stroke-width='4.5' stroke-dasharray='2 12' stroke-linecap='round' fill='none'/%3E%3Cpath d='M330 560C395.0 650.0 655.0 1010.0 720 1100' stroke='%23ffffff' stroke-width='9' fill='none' stroke-linecap='round' opacity='.7'/%3E%3Cpath d='M330 560C395.0 650.0 655.0 1010.0 720 1100' stroke='%232c91b0' stroke-width='4.5' stroke-dasharray='2 12' stroke-linecap='round' fill='none'/%3E%3Cg transform='translate(600 330) scale(1.25)'%3E%3Cellipse cx='0' cy='2' rx='10' ry='3.5' fill='%23163457' opacity='.12'/%3E%3Cpath d='M0 0c-10-12-16-20-16-28a16 16 0 0 1 32 0c0 8-6 16-16 28z' fill='%23ef8a69'/%3E%3Ccircle cx='0' cy='-28' r='6' fill='%23fff'/%3E%3C/g%3E%3Cg transform='translate(330 560) scale(0.95)'%3E%3Cellipse cx='0' cy='2' rx='10' ry='3.5' fill='%23163457' opacity='.12'/%3E%3Cpath d='M0 0c-10-12-16-20-16-28a16 16 0 0 1 32 0c0 8-6 16-16 28z' fill='%232c91b0'/%3E%3Ccircle cx='0' cy='-28' r='6' fill='%23fff'/%3E%3C/g%3E%3Cg transform='translate(250 790) scale(0.95)'%3E%3Cellipse cx='0' cy='2' rx='10' ry='3.5' fill='%23163457' opacity='.12'/%3E%3Cpath d='M0 0c-10-12-16-20-16-28a16 16 0 0 1 32 0c0 8-6 16-16 28z' fill='%232c91b0'/%3E%3Ccircle cx='0' cy='-28' r='6' fill='%23fff'/%3E%3C/g%3E%3Cg transform='translate(330 960) scale(0.95)'%3E%3Cellipse cx='0' cy='2' rx='10' ry='3.5' fill='%23163457' opacity='.12'/%3E%3Cpath d='M0 0c-10-12-16-20-16-28a16 16 0 0 1 32 0c0 8-6 16-16 28z' fill='%232c91b0'/%3E%3Ccircle cx='0' cy='-28' r='6' fill='%23fff'/%3E%3C/g%3E%3Cg transform='translate(470 1080) scale(0.95)'%3E%3Cellipse cx='0' cy='2' rx='10' ry='3.5' fill='%23163457' opacity='.12'/%3E%3Cpath d='M0 0c-10-12-16-20-16-28a16 16 0 0 1 32 0c0 8-6 16-16 28z' fill='%232c91b0'/%3E%3Ccircle cx='0' cy='-28' r='6' fill='%23fff'/%3E%3C/g%3E%3Cg transform='translate(880 560) scale(0.95)'%3E%3Cellipse cx='0' cy='2' rx='10' ry='3.5' fill='%23163457' opacity='.12'/%3E%3Cpath d='M0 0c-10-12-16-20-16-28a16 16 0 0 1 32 0c0 8-6 16-16 28z' fill='%232c91b0'/%3E%3Ccircle cx='0' cy='-28' r='6' fill='%23fff'/%3E%3C/g%3E%3Cg transform='translate(960 760) scale(0.95)'%3E%3Cellipse cx='0' cy='2' rx='10' ry='3.5' fill='%23163457' opacity='.12'/%3E%3Cpath d='M0 0c-10-12-16-20-16-28a16 16 0 0 1 32 0c0 8-6 16-16 28z' fill='%232c91b0'/%3E%3Ccircle cx='0' cy='-28' r='6' fill='%23fff'/%3E%3C/g%3E%3Cg transform='translate(870 930) scale(0.95)'%3E%3Cellipse cx='0' cy='2' rx='10' ry='3.5' fill='%23163457' opacity='.12'/%3E%3Cpath d='M0 0c-10-12-16-20-16-28a16 16 0 0 1 32 0c0 8-6 16-16 28z' fill='%232c91b0'/%3E%3Ccircle cx='0' cy='-28' r='6' fill='%23fff'/%3E%3C/g%3E%3Cg transform='translate(720 1100) scale(0.95)'%3E%3Cellipse cx='0' cy='2' rx='10' ry='3.5' fill='%23163457' opacity='.12'/%3E%3Cpath d='M0 0c-10-12-16-20-16-28a16 16 0 0 1 32 0c0 8-6 16-16 28z' fill='%232c91b0'/%3E%3Ccircle cx='0' cy='-28' r='6' fill='%23fff'/%3E%3C/g%3E%3Cg transform='translate(610 1210) scale(0.95)'%3E%3Cellipse cx='0' cy='2' rx='10' ry='3.5' fill='%23163457' opacity='.12'/%3E%3Cpath d='M0 0c-10-12-16-20-16-28a16 16 0 0 1 32 0c0 8-6 16-16 28z' fill='%232c91b0'/%3E%3Ccircle cx='0' cy='-28' r='6' fill='%23fff'/%3E%3C/g%3E%3Cg transform='translate(500 1320)'%3E%3Cellipse cx='0' cy='2' rx='12' ry='4' fill='%23163457' opacity='.12'/%3E%3Cpath d='M0 0V-46' stroke='%23163457' stroke-width='3.5' stroke-linecap='round'/%3E%3Cpath d='M2 -46h26l-7 9 7 9H2z' fill='%23ef8a69'/%3E%3C/g%3E%3Cg transform='translate(1080 120)' opacity='.6'%3E%3Ccircle r='34' fill='%23ffffff' opacity='.5'/%3E%3Ccircle r='34' fill='none' stroke='%232c91b0' stroke-width='2'/%3E%3Cpath d='M0-27l8 27-8 27-8-27z' fill='%232c91b0'/%3E%3Cpath d='M0-27l8 27h-16z' fill='%23ef8a69'/%3E%3C/g%3E%3C/svg%3E");
+    background-size: 100% 100%;
+    background-repeat: no-repeat;
+    will-change: transform;
+    transition: transform 1150ms cubic-bezier(.65, .05, .25, 1);
+}
+
+.sk-map-canvas.sk-no-anim {
+    transition: none;
+}
+
+/* Light wash so text stays easy to read; stronger near the top. */
+.sk-map-wash {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(180deg, rgba(246, 251, 252, .9) 0%, rgba(246, 251, 252, .64) 34%, rgba(246, 251, 252, .42) 100%);
+}
+
+/* The welcome screen has text directly on the map, so it gets an even wash. */
+body[data-map-stop="index"] .sk-map-wash {
+    background: radial-gradient(ellipse at 50% 55%, rgba(246, 251, 252, .9) 0%, rgba(246, 251, 252, .72) 55%, rgba(246, 251, 252, .5) 100%);
+}
+
+/* Content slides in from the side it is travelling toward. */
+@keyframes skSlideFromRight {
+    from { opacity: 0; transform: translateX(42px); }
+    to { opacity: 1; transform: none; }
+}
+
+@keyframes skSlideFromLeft {
+    from { opacity: 0; transform: translateX(-42px); }
+    to { opacity: 1; transform: none; }
+}
+
+.sk-slide-next { animation: skSlideFromRight 460ms cubic-bezier(.22, .9, .35, 1) backwards; }
+.sk-slide-prev { animation: skSlideFromLeft 460ms cubic-bezier(.22, .9, .35, 1) backwards; }
+
+/* Welcome screen: a location pin drops onto the map before Login/Register opens. */
+.sk-pin-drop {
+    position: fixed;
+    left: 50%;
+    top: 15%;
+    z-index: 50;
+    width: 44px;
+    height: 58px;
+    margin-left: -22px;
+    pointer-events: none;
+}
+
+.sk-pin-drop svg {
+    display: block;
+    width: 44px;
+    height: 58px;
+    margin: 0;
+    filter: drop-shadow(0 6px 8px rgba(22, 52, 87, .22));
+    animation: skPinFall 560ms cubic-bezier(.3, 1.5, .55, 1) both;
+}
+
+.sk-pin-drop::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    bottom: -6px;
+    width: 18px;
+    height: 7px;
+    margin-left: -9px;
+    border-radius: 50%;
+    background: rgba(22, 52, 87, .2);
+    animation: skPinShadow 560ms ease-out both;
+}
+
+.sk-pin-drop::before {
+    content: "";
+    position: absolute;
+    left: 50%;
+    bottom: -14px;
+    width: 22px;
+    height: 22px;
+    margin-left: -11px;
+    border: 2px solid #ef8a69;
+    border-radius: 50%;
+    opacity: 0;
+    animation: skPinRipple 700ms ease-out 380ms both;
+}
+
+@keyframes skPinFall {
+    0% { opacity: 0; transform: translateY(-120px); }
+    60% { opacity: 1; transform: translateY(6px); }
+    100% { opacity: 1; transform: none; }
+}
+
+@keyframes skPinShadow {
+    0% { opacity: 0; transform: scale(.3); }
+    100% { opacity: 1; transform: none; }
+}
+
+@keyframes skPinRipple {
+    0% { opacity: .9; transform: scale(.4); }
+    100% { opacity: 0; transform: scale(3); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .sk-map-canvas { transition: none; }
+    .sk-slide-next,
+    .sk-slide-prev { animation: none; }
+}

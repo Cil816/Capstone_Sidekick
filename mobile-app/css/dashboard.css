@@ -494,10 +494,11 @@
     line-height: 1.45;
 }
 
+/* One card now (Distance), so it spans the full width. */
 .destination-meta-grid {
     margin-top: 12px;
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: minmax(0, 1fr);
     gap: 8px;
 }
 
@@ -603,13 +604,25 @@
     display: none;
 }
 
+/* Generate itinerary and Ask AI side by side. */
 .destination-actions {
     margin-top: 12px;
+    display: flex;
+    gap: 8px;
 }
 
 .destination-actions .btn {
-    width: 100%;
-    min-height: 44px;
+    flex: 1 1 0;
+    min-width: 0;
+    width: auto;
+    min-height: 46px;
+    margin: 0;
+    padding: 10px 12px;
+    white-space: nowrap;
+}
+
+.destination-actions #destination-generate {
+    flex-grow: 1.5;
 }
 
 @media (max-width: 900px) {
@@ -619,16 +632,10 @@
 }
 
 @media (max-width: 600px) {
+    /* Destination details stay centred on phones, like every other pop-up. */
     .destination-modal-panel {
-        left: 0;
-        right: 0;
-        top: auto;
-        bottom: 0;
-        transform: none;
-        width: 100%;
-        max-height: 84vh;
-        border-radius: 16px 16px 0 0;
-        padding: 14px 14px calc(14px + env(safe-area-inset-bottom));
+        width: calc(100vw - 32px);
+        max-height: calc(100dvh - 48px);
     }
 
     .place-card {
@@ -885,4 +892,44 @@
     .dashboard-hero .header-section { padding-left: 16px; padding-right: 96px; }
     .dashboard-hero .search-section { padding-left: 16px; padding-right: 16px; }
     .dashboard-hero-art { width: 118px; }
+}
+
+/* ---- Recommended row: every card the same size --------------------------
+   Cards used to size themselves to the place name, so long names made much
+   wider cards. Now each card has one fixed width (a hint of the next card
+   still shows), the same photo height, a two-line title area and a one-line
+   location, so every card matches whatever the name length. */
+#recommended-row {
+    align-items: stretch;
+}
+
+#recommended-row .place-card {
+    flex: 0 0 auto;
+    width: min(250px, 70vw);
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+#recommended-row .place-image {
+    flex: 0 0 auto;
+    height: 140px;
+}
+
+#recommended-row .place-info {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+}
+
+#recommended-row .place-info h3 {
+    min-height: calc(2 * 1.35em);
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+}
+
+#recommended-row .place-info p {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
 }

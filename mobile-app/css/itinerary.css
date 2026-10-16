@@ -640,3 +640,14 @@
 .hotel-review-head { margin: 0 0 4px; font-size: 12px; font-weight: 600; color: #0f766e; }
 .hotel-review-head a { color: inherit; }
 .hotel-review-text { margin: 0; font-size: 13px; line-height: 1.5; color: var(--itinerary-ink, #163457); overflow-wrap: anywhere; }
+
+/* Customize looks pressed while the builder is open (tap again to hide it). */
+#show-builder.is-open {
+    background: #1f7a8c;
+    border-color: #1f7a8c;
+    color: #fff;
+}
+
+#show-builder.is-open:hover {
+    background: #1b6e84;
+}

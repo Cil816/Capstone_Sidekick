@@ -1012,7 +1012,7 @@ async function clearChat() {
   setChatForEmail(session.email, []);
   try { sessionStorage.removeItem(getChatScrollPositionKey(session.email)); } catch (error) {}
   const prefs = window.SidekickCore.getPreferences() || {};
-  const opening = `${window.SidekickCore.getInitialAssistantMessage(prefs)}\n\nI'm your Sidekick travel companion. Tell me your destination and trip length to start.`;
+  const opening = window.SidekickCore.getInitialAssistantMessage(prefs);
   setChatForEmail(session.email, [{ role: "ai", content: opening, ts: Date.now() }]);
   renderMessages(getChatForEmail(session.email));
 }
@@ -1147,7 +1147,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const existing = getChatForEmail(session.email);
   if (!existing.length) {
-    const opening = `${window.SidekickCore.getInitialAssistantMessage(prefs)}\n\nI'm your Sidekick travel companion. Try: \"Plan a 3-day trip to Palawan\".`;
+    const opening = window.SidekickCore.getInitialAssistantMessage(prefs);
     setChatForEmail(session.email, [{ role: "ai", content: opening, ts: Date.now() }]);
   }
 

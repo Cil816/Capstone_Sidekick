@@ -1133,11 +1133,11 @@ function buildAssistantReply(userText, prefs) {
   return `Based on your interests (${mention}), here are a few ideas to match what you want:\n\n- ${topInterests[0] ? `A highlight built around ${topInterests[0]}.` : "A custom highlight for you."}\n- ${topInterests[1] ? `A second stop that leans into ${topInterests[1]}.` : "A second stop that balances your day."}\n- ${topInterests[2] ? `A photo-worthy moment for ${topInterests[2]}.` : "A photo-worthy moment."}\n\n${styleLine}\n${budgetLine}\n\nQuick question: what day/time are you most focused on (morning, afternoon, or evening)?`;
 }
 
-function getInitialAssistantMessage(prefs) {
-  const interests = prefs?.interests || [];
-  const picks = interests.slice(0, 3);
-  const mention = picks.length ? picks.join(", ") : "your travel style";
-  return `Hi! I’m your Sidekick AI. Tell me what you want to do next in the Philippines, and I’ll tailor ideas to ${mention}.`;
+// Sidekick's first chat message: a short, friendly welcome with the user's first name.
+function getInitialAssistantMessage() {
+  const name = String(getAuthSession()?.name || "").trim();
+  const firstName = name && name !== "Pending registration" ? name.split(/\s+/)[0] : "";
+  return `Hello${firstName ? `, ${firstName}` : ""}! Welcome to Sidekick. Where would you like to go today?`;
 }
 
 function isPerfLiteMode() {
@@ -1208,7 +1208,61 @@ window.SidekickCore = {
   buildAssistantReply,
   getInitialAssistantMessage,
   isPerfLiteMode,
+  checkTripBudget,
+  describeUnrealisticBudget,
+  tripBudgetKey,
 };
+
+// ---- Trip budget check -------------------------------------------------------
+// Used by every "Build itinerary" button before anything is generated. The backend
+// compares the budget with the cheapest restaurant and hotel prices it finds.
+const tripBudgetResults = new Map();
+
+function tripBudgetKey({ destination, startDate, endDate, budgetAmountPhp }) {
+  return [String(destination || "").trim().toLowerCase(), startDate, endDate, Number(budgetAmountPhp)].join("|");
+}
+
+// Resolves to the backend's result, or null when the check could not run
+// (offline, rate limited...). A failed check never blocks building a trip.
+async function checkTripBudget({ destination, lat = null, lng = null, startDate, endDate, budgetAmountPhp }) {
+  const key = tripBudgetKey({ destination, startDate, endDate, budgetAmountPhp });
+  if (tripBudgetResults.has(key)) return tripBudgetResults.get(key);
+  try {
+    const result = await apiRequest("/api/trip/budget-check", {
+      method: "POST",
+      body: JSON.stringify({ destination, lat, lng, startDate, endDate, budgetAmountPhp }),
+    });
+    if (result && result.checked) tripBudgetResults.set(key, result);
+    return result || null;
+  } catch (error) {
+    console.warn("Budget check unavailable:", error.message);
+    return null;
+  }
+}
+
+// Plain-language explanation of an unrealistic budget for an error message.
+function describeUnrealisticBudget(result, destination) {
+  const peso = (amount) => `₱${Math.round(Number(amount) || 0).toLocaleString()}`;
+  const days = Number(result.days) || 1;
+  const meals = result.meals || {};
+  const lodging = result.lodging || {};
+  const details = [["Your budget", peso(result.budgetAmountPhp)]];
+  if (lodging.needed && lodging.totalPhp > 0) {
+    const label = lodging.source === "researched" && lodging.name ? `Cheapest hotel found (${lodging.name})` : "Cheapest rooms";
+    details.push([label, `${peso(lodging.nightlyLowPhp)} a night × ${lodging.nights} night${lodging.nights === 1 ? "" : "s"}`]);
+  }
+  const mealLabel = meals.estimated ? "Basic meals" : `Cheapest meals found${meals.name ? ` (${meals.name})` : ""}`;
+  details.push([mealLabel, `${peso(meals.perMealPhp)} × ${meals.mealsPerDay || 2} a day × ${days} day${days === 1 ? "" : "s"}`]);
+  details.push(["Lowest realistic cost", peso(result.minimumPhp)]);
+  const shorter = result.maxAffordableDays >= 1 && result.maxAffordableDays < days
+    ? ` or shorten the trip to ${result.maxAffordableDays} day${result.maxAffordableDays === 1 ? "" : "s"}`
+    : "";
+  return {
+    title: "This budget isn't realistic",
+    message: `${peso(result.budgetAmountPhp)} isn't enough for ${days} day${days === 1 ? "" : "s"} in ${destination}, even at the cheapest prices we found. Raise your budget to at least ${peso(result.minimumPhp)}${shorter}.`,
+    details,
+  };
+}
 
 function startAppPresenceHeartbeat() {
   let requestInProgress = false;

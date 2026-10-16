@@ -68,7 +68,9 @@
 .itinerary-edit-link.danger { color: #9e4757; }
 
 /* Icon-only controls need 3:1 against their background. */
-.clear-chat-btn { color: #5f6b7a; }
+/* Clear-chat (delete) button in red: 5.4:1 on white, readable as a destructive action. */
+.clear-chat-btn { color: #c2414f; }
+.clear-chat-btn:hover { color: #a8323f; background: #fdeef0; }
 .chat-place-media { color: #5f7f99; }
 .stay-eat-chevron,
 .see-all-chevron { color: #7b8794; }

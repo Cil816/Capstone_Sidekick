@@ -9,12 +9,13 @@
     <link rel="stylesheet" href="css/welcome.css">
     <link rel="stylesheet" href="css/legal.css">
     <link rel="stylesheet" href="css/theme.css">
+    <link rel="stylesheet" href="css/travel-map.css">
     <link rel="stylesheet" href="css/a11y.css">
 </head>
-<body>
+<body data-map-stop="index">
     <div class="app-container">
         <div class="screen welcome-screen">
-            <div class="welcome-container">
+            <div class="welcome-container" data-map-slide>
                 <div class="logo-section">
                     <div class="logo-circle">
                         <svg class="compass-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -29,8 +30,8 @@
                 <p class="tagline">Your intelligent guide to exploring the Philippines</p>
                 
                 <div class="button-group">
-                    <a href="login.html" class="btn btn-primary">Login</a>
-                    <a href="register.html" class="btn btn-outline">Register</a>
+                    <a href="login.html" class="btn btn-primary" data-map-pin>Login</a>
+                    <a href="register.html" class="btn btn-outline" data-map-pin>Register</a>
                 </div>
                 <nav class="legal-links" aria-label="Legal">
                     <a href="privacy.html">Privacy Policy</a>
@@ -46,4 +47,5 @@
 <script src="js/core.js"></script>
 <script src="js/ui.js"></script>
 <script src="js/welcome.js"></script>
+<script src="js/travel-map.js"></script>
 </html>

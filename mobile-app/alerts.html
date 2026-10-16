@@ -7,9 +7,10 @@
   <link rel="stylesheet" href="css/common.css">
   <link rel="stylesheet" href="css/alerts.css">
   <link rel="stylesheet" href="css/theme.css">
+  <link rel="stylesheet" href="css/tab-motion.css">
   <link rel="stylesheet" href="css/a11y.css">
 </head>
-<body>
+<body data-tab="alerts">
   <div class="app-container">
     <div class="screen alerts-screen">
       <div class="header">
@@ -97,7 +98,8 @@
     </a>
     <a href="chat.html" class="nav-item">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+        <circle cx="12" cy="12" r="10"></circle>
+                        <polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"></polygon>
       </svg>
       <span>Sidekick</span>
     </a>
@@ -122,5 +124,6 @@
   <script src="js/ui.js"></script>
   <script src="js/alerts.js"></script>
   <script src="js/nav.js"></script>
+  <script src="js/tab-motion.js"></script>
 </body>
 </html>

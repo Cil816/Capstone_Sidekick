@@ -5524,6 +5524,178 @@ function hotelRateResponseSchema() {
   };
 }
 
+function coordinatesOrNull(lat, lng) {
+  return Number.isFinite(Number(lat)) && Number.isFinite(Number(lng))
+    && lat !== null && lng !== null && lat !== '' && lng !== ''
+    ? { lat: Number(lat), lng: Number(lng) }
+    : null;
+}
+
+// Up to 12 well-rated hotels near the destination, from Google Places. The Places
+// requests are cached by callGooglePlacesApi, so repeated calls cost nothing extra.
+async function findHotelCandidates(destination, lat, lng) {
+  let center = coordinatesOrNull(lat, lng);
+  if (!center) {
+    const located = await callGooglePlacesApi('places:searchText', { textQuery: `${destination}, Philippines`, maxResultCount: 1 });
+    const first = (located.places || []).map(mapPlace).find((place) => Number.isFinite(place.lat) && Number.isFinite(place.lng));
+    if (first) center = { lat: first.lat, lng: first.lng };
+  }
+  const bias = center ? { locationBias: { circle: { center: { latitude: center.lat, longitude: center.lng }, radius: 30000 } } } : {};
+  const searches = await Promise.all(['hotels', 'resorts', 'budget hotels and inns'].map((query) => (
+    callGooglePlacesApi('places:searchText', { textQuery: `${query} in ${destination}`, maxResultCount: 10, ...bias }).catch(() => ({ places: [] }))
+  )));
+  const candidates = Array.from(new Map(searches.flatMap((data) => data.places || []).map(mapPlace)
+    .filter((place) => place.placeId && Number.isFinite(place.lat) && Number.isFinite(place.lng))
+    .filter((place) => place.types.some((type) => HOTEL_TYPE_PATTERN.test(String(type).toLowerCase())))
+    .filter((place) => !center || haversineKm(center, place) <= 40)
+    .map((place) => [place.placeId, place])).values())
+    .sort((a, b) => (Number(b.rating) || 0) - (Number(a.rating) || 0) || (Number(b.ratingCount) || 0) - (Number(a.ratingCount) || 0))
+    .slice(0, 12);
+  return { center, candidates };
+}
+
+// Nightly rates for the candidate hotels from one grounded web search (the costly
+// step), cached for 6 hours per destination, dates and hotel list. The budget check
+// and the hotel picker share this cache, so a check followed by the picker searches once.
+async function researchHotelRates({ destination, startDate, endDate, nights, candidates }) {
+  const cacheKey = JSON.stringify([destination.toLowerCase(), startDate, endDate, candidates.map((place) => place.placeId)]);
+  const cached = hotelRateCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached;
+  const grounded = await callGeminiSearchApi({
+    contextText: [
+      `Destination: ${destination}, Philippines`,
+      `Stay: ${startDate} to ${endDate} (${nights} night${nights === 1 ? '' : 's'})`,
+      `Hotels verified by Google Places: ${JSON.stringify(candidates.map((place) => ({ placeId: place.placeId, name: place.name, address: place.address })))}`,
+    ].join('\n'),
+    message: 'Search the web now for the current price of a standard room for one night at each listed hotel, for stays around these dates. Prefer the hotel\'s official site and major booking sites. Return one JSON object only, without markdown, shaped as {"hotelRates":[{"placeId":"exact supplied placeId","lowPhp":null,"highPhp":null,"basis":"brief price basis","sourceUrls":[]}]}, one item per supplied hotel, preserving each exact placeId. Give a realistic low and high nightly rate in PHP (convert with a current rate if needed) only when a current source supports it, and include the URL(s) of the pages that support it. Use null for both bounds when you cannot find evidence. Never invent a price or a source URL.',
+    responseSchema: hotelRateResponseSchema(),
+  });
+  const parsed = extractJsonObject(grounded.text);
+  if (!parsed) throw new Error('Hotel price search returned data that could not be read.');
+  const allowedSources = new Set(grounded.sources.map((source) => source.url));
+  const byPlaceId = {};
+  for (const entry of Array.isArray(parsed.hotelRates) ? parsed.hotelRates : []) {
+    const band = normalizeSourcedPriceBand(entry, allowedSources);
+    const placeId = String(entry?.placeId || '');
+    // A room under ₱300 a night is not a real hotel rate (usually a misread
+    // fee or per-person figure), so it is treated as "no evidence".
+    if (placeId && band && band.lowPhp >= MIN_REALISTIC_ROOM_PHP) byPlaceId[placeId] = { ...band, basis: String(entry.basis || '').slice(0, 200) };
+  }
+  const rates = { byPlaceId, expiresAt: Date.now() + 6 * 60 * 60 * 1000 };
+  if (hotelRateCache.size >= 200) hotelRateCache.delete(hotelRateCache.keys().next().value);
+  hotelRateCache.set(cacheKey, rates);
+  return rates;
+}
+
+// Budget check thresholds (PHP).
+const MIN_REALISTIC_ROOM_PHP = 300;    // the cheapest real room rate accepted anywhere
+const COMFORTABLE_ROOM_PHP = 2500;     // most areas have rooms at or under this
+const FALLBACK_MEAL_PHP = 100;         // a basic meal when no restaurant prices are listed
+const MIN_MEAL_PHP = 80;
+const MEALS_PER_DAY = 2;
+const PRICE_LEVEL_MEAL_PHP = { PRICE_LEVEL_INEXPENSIVE: 100, PRICE_LEVEL_MODERATE: 300, PRICE_LEVEL_EXPENSIVE: 700, PRICE_LEVEL_VERY_EXPENSIVE: 1500 };
+const FOOD_TYPE_PATTERN = /(restaurant|cafe|coffee|food|bakery|bar_and_grill|diner|eatery|meal_takeaway)/;
+
+// Per-person meal price from Google's price data (cheapest realistic figure).
+function mealPricePhp(place) {
+  const range = place.priceRange;
+  if (range && Number.isFinite(Number(range.lowPhp)) && range.lowPhp > 0) return Math.max(MIN_MEAL_PHP, range.lowPhp);
+  // "Under ₱200" style bands report a low of 0: count half the upper bound.
+  if (range && Number.isFinite(Number(range.highPhp)) && range.highPhp > 0) return Math.max(MIN_MEAL_PHP, Math.round(range.highPhp / 2));
+  return PRICE_LEVEL_MEAL_PHP[place.priceLevel] || null;
+}
+
+// Checks whether a trip budget is realistic before an itinerary is built: the
+// cheapest priced restaurant for two meals a day, plus the cheapest priced hotel
+// for every night. To save credits, the hotel price web search runs only when the
+// answer depends on it; clearly-enough and clearly-too-small budgets are decided
+// from cheap Google Places data alone. Its results are shared with the hotel picker.
+app.post('/api/trip/budget-check', requireAppAuth, async (req, res) => {
+  const destination = String(req.body?.destination || '').trim().slice(0, 180);
+  const startDate = String(req.body?.startDate || '').slice(0, 10);
+  const endDate = String(req.body?.endDate || '').slice(0, 10);
+  const budgetAmountPhp = Number(req.body?.budgetAmountPhp);
+  if (!destination) return sendJson(res, 400, { error: 'A destination is required to check the budget.' });
+  let days;
+  try {
+    days = inclusiveDayCount(startDate, endDate);
+  } catch (error) {
+    return sendJson(res, 400, { error: error.message });
+  }
+  if (days < 1 || days > 14) return sendJson(res, 400, { error: 'Trips can cover between 1 and 14 days.' });
+  if (!Number.isSafeInteger(budgetAmountPhp) || budgetAmountPhp < 1 || budgetAmountPhp > 100000000) {
+    return sendJson(res, 400, { error: 'A whole-number trip budget in PHP is required.' });
+  }
+  const nights = days - 1; // a day trip needs no hotel
+  const meals = days * MEALS_PER_DAY;
+  if (isDevelopmentMode) {
+    return sendJson(res, 200, { checked: false, realistic: true, isDevelopmentMock: true });
+  }
+  if (isRateLimited(`budget-check:${req.appUser.userId}`, 30, 60 * 60 * 1000)) {
+    return sendJson(res, 429, { error: 'Too many budget checks. Please try again later.' });
+  }
+  try {
+    const { center, candidates } = await findHotelCandidates(destination, req.body?.lat, req.body?.lng);
+
+    // Cheapest restaurant near the destination (one cached Places search, no web search).
+    const bias = center ? { locationBias: { circle: { center: { latitude: center.lat, longitude: center.lng }, radius: 20000 } } } : {};
+    const food = await callGooglePlacesApi('places:searchText', { textQuery: `restaurants in ${destination}`, maxResultCount: 20, ...bias }).catch(() => ({ places: [] }));
+    const pricedFood = (food.places || []).map(mapPlace)
+      .filter((place) => place.types.some((type) => FOOD_TYPE_PATTERN.test(String(type).toLowerCase())))
+      .map((place) => ({ place, perMealPhp: mealPricePhp(place) }))
+      .filter((item) => item.perMealPhp)
+      .sort((a, b) => a.perMealPhp - b.perMealPhp);
+    const cheapestFood = pricedFood[0] || null;
+    const perMealPhp = cheapestFood ? cheapestFood.perMealPhp : FALLBACK_MEAL_PHP;
+    const mealsTotal = perMealPhp * meals;
+    const mealsInfo = { name: cheapestFood?.place.name || '', perMealPhp, mealsPerDay: MEALS_PER_DAY, totalPhp: mealsTotal, estimated: !cheapestFood };
+
+    let lodging = { needed: nights > 0, nights, nightlyLowPhp: 0, totalPhp: 0, name: '', source: 'not-needed' };
+    if (nights > 0) {
+      const leftForRooms = budgetAmountPhp - mealsTotal;
+      if (leftForRooms < MIN_REALISTIC_ROOM_PHP * nights) {
+        // Below even the cheapest real room rate: no need to search hotel prices.
+        lodging = { ...lodging, nightlyLowPhp: MIN_REALISTIC_ROOM_PHP, totalPhp: MIN_REALISTIC_ROOM_PHP * nights, source: 'minimum-rate' };
+      } else if (leftForRooms >= COMFORTABLE_ROOM_PHP * nights || !candidates.length) {
+        // Plenty left for rooms (or no hotels listed to price): no search needed.
+        lodging = { ...lodging, source: candidates.length ? 'comfortable' : 'unpriced' };
+      } else {
+        // The answer depends on real prices: research them (shared, cached result).
+        const rates = await researchHotelRates({ destination, startDate, endDate, nights, candidates });
+        const cheapest = candidates
+          .map((place) => ({ place, rate: rates.byPlaceId[place.placeId] }))
+          .filter((item) => item.rate)
+          .sort((a, b) => a.rate.lowPhp - b.rate.lowPhp)[0];
+        lodging = cheapest
+          ? { ...lodging, name: cheapest.place.name, nightlyLowPhp: cheapest.rate.lowPhp, totalPhp: cheapest.rate.lowPhp * nights, source: 'researched' }
+          : { ...lodging, source: 'unpriced' };
+      }
+    }
+
+    const minimumPhp = mealsTotal + lodging.totalPhp;
+    const realistic = budgetAmountPhp >= minimumPhp;
+    // Longest trip this budget covers at the cheapest prices found.
+    let maxAffordableDays = 0;
+    for (let d = 1; d <= 14; d += 1) {
+      if (perMealPhp * MEALS_PER_DAY * d + lodging.nightlyLowPhp * (d - 1) <= budgetAmountPhp) maxAffordableDays = d;
+    }
+    return sendJson(res, 200, {
+      checked: true,
+      realistic,
+      budgetAmountPhp,
+      days,
+      nights,
+      minimumPhp,
+      maxAffordableDays,
+      meals: mealsInfo,
+      lodging,
+    });
+  } catch (error) {
+    console.error('Budget check error:', error.message);
+    return sendJson(res, 503, { error: error.message || 'The budget check is currently unavailable.' });
+  }
+});
+
 // Lists real hotels near the destination whose researched nightly rate fits the
 // lodging share of the user's budget. Uses one grounded web search per hotel list,
 // cached for 6 hours so changing the budget does not search again.
@@ -5556,57 +5728,11 @@ app.post('/api/hotels/budget-options', requireAppAuth, async (req, res) => {
     return sendJson(res, 429, { error: 'Too many hotel searches. Please try again later.' });
   }
   try {
-    let center = Number.isFinite(Number(req.body?.lat)) && Number.isFinite(Number(req.body?.lng))
-      && req.body.lat !== null && req.body.lng !== null && req.body.lat !== '' && req.body.lng !== ''
-      ? { lat: Number(req.body.lat), lng: Number(req.body.lng) }
-      : null;
-    if (!center) {
-      const located = await callGooglePlacesApi('places:searchText', { textQuery: `${destination}, Philippines`, maxResultCount: 1 });
-      const first = (located.places || []).map(mapPlace).find((place) => Number.isFinite(place.lat) && Number.isFinite(place.lng));
-      if (first) center = { lat: first.lat, lng: first.lng };
-    }
-    const bias = center ? { locationBias: { circle: { center: { latitude: center.lat, longitude: center.lng }, radius: 30000 } } } : {};
-    const searches = await Promise.all(['hotels', 'resorts', 'budget hotels and inns'].map((query) => (
-      callGooglePlacesApi('places:searchText', { textQuery: `${query} in ${destination}`, maxResultCount: 10, ...bias }).catch(() => ({ places: [] }))
-    )));
-    const candidates = Array.from(new Map(searches.flatMap((data) => data.places || []).map(mapPlace)
-      .filter((place) => place.placeId && Number.isFinite(place.lat) && Number.isFinite(place.lng))
-      .filter((place) => place.types.some((type) => HOTEL_TYPE_PATTERN.test(String(type).toLowerCase())))
-      .filter((place) => !center || haversineKm(center, place) <= 40)
-      .map((place) => [place.placeId, place])).values())
-      .sort((a, b) => (Number(b.rating) || 0) - (Number(a.rating) || 0) || (Number(b.ratingCount) || 0) - (Number(a.ratingCount) || 0))
-      .slice(0, 12);
+    const { candidates } = await findHotelCandidates(destination, req.body?.lat, req.body?.lng);
     if (!candidates.length) {
       return sendJson(res, 200, { ...base, hotels: [], message: 'No hotels were found near this destination.' });
     }
-
-    const cacheKey = JSON.stringify([destination.toLowerCase(), startDate, endDate, candidates.map((place) => place.placeId)]);
-    let rates = hotelRateCache.get(cacheKey);
-    if (!rates || rates.expiresAt <= Date.now()) {
-      const grounded = await callGeminiSearchApi({
-        contextText: [
-          `Destination: ${destination}, Philippines`,
-          `Stay: ${startDate} to ${endDate} (${nights} night${nights === 1 ? '' : 's'})`,
-          `Hotels verified by Google Places: ${JSON.stringify(candidates.map((place) => ({ placeId: place.placeId, name: place.name, address: place.address })))}`,
-        ].join('\n'),
-        message: 'Search the web now for the current price of a standard room for one night at each listed hotel, for stays around these dates. Prefer the hotel\'s official site and major booking sites. Return one JSON object only, without markdown, shaped as {"hotelRates":[{"placeId":"exact supplied placeId","lowPhp":null,"highPhp":null,"basis":"brief price basis","sourceUrls":[]}]}, one item per supplied hotel, preserving each exact placeId. Give a realistic low and high nightly rate in PHP (convert with a current rate if needed) only when a current source supports it, and include the URL(s) of the pages that support it. Use null for both bounds when you cannot find evidence. Never invent a price or a source URL.',
-        responseSchema: hotelRateResponseSchema(),
-      });
-      const parsed = extractJsonObject(grounded.text);
-      if (!parsed) throw new Error('Hotel price search returned data that could not be read.');
-      const allowedSources = new Set(grounded.sources.map((source) => source.url));
-      const byPlaceId = {};
-      for (const entry of Array.isArray(parsed.hotelRates) ? parsed.hotelRates : []) {
-        const band = normalizeSourcedPriceBand(entry, allowedSources);
-        const placeId = String(entry?.placeId || '');
-        // A room under ₱300 a night is not a real hotel rate (usually a misread
-        // fee or per-person figure), so it is treated as "no evidence".
-        if (placeId && band && band.lowPhp >= 300) byPlaceId[placeId] = { ...band, basis: String(entry.basis || '').slice(0, 200) };
-      }
-      rates = { byPlaceId, expiresAt: Date.now() + 6 * 60 * 60 * 1000 };
-      if (hotelRateCache.size >= 200) hotelRateCache.delete(hotelRateCache.keys().next().value);
-      hotelRateCache.set(cacheKey, rates);
-    }
+    const rates = await researchHotelRates({ destination, startDate, endDate, nights, candidates });
 
     const priced = candidates
       .map((place) => ({ place, rate: rates.byPlaceId[place.placeId] }))

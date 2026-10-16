@@ -1,5 +1,7 @@
 // Selected place storage for the Places API (New) search results.
 let _selectedPlace = null;
+// Budget-check key of a trip that Home already checked (see the Build handler).
+let preCheckedBudgetKey = '';
 let _destinationMarker = null;
 let _itineraryMap = null;
 let _itineraryMapMarkers = [];
@@ -1197,6 +1199,12 @@ document.addEventListener("DOMContentLoaded", () => {
   function showBuilder(show = true) {
     if (!builderEl) return;
     builderEl.style.display = show ? 'block' : 'none';
+    // Keep the Customize button in step: it looks pressed while the builder is open.
+    if (showBuilderBtn) {
+      showBuilderBtn.setAttribute('aria-expanded', show ? 'true' : 'false');
+      showBuilderBtn.setAttribute('aria-controls', 'itinerary-builder');
+      showBuilderBtn.classList.toggle('is-open', show);
+    }
     if (show) {
       if (startInput?.value && endInput) {
         endInput.min = startInput.value;
@@ -1213,7 +1221,8 @@ document.addEventListener("DOMContentLoaded", () => {
     });
     endInput.addEventListener('change', () => updateBuilderDatePreview(startInput.value, endInput.value));
   }
-  if (showBuilderBtn) showBuilderBtn.addEventListener('click', () => showBuilder(true));
+  // Customize opens the builder; tapping it again hides it.
+  if (showBuilderBtn) showBuilderBtn.addEventListener('click', () => showBuilder(builderEl?.style.display === 'none'));
   const removeAllBtn = document.getElementById('remove-all-itinerary');
   if (removeAllBtn) {
     removeAllBtn.addEventListener('click', async (e) => {
@@ -1331,6 +1340,40 @@ document.addEventListener("DOMContentLoaded", () => {
     });
     if (!confirmed) return;
 
+    // Check the budget against the cheapest restaurants and hotels found before
+    // generating anything. Skipped when Home already checked this exact trip.
+    const budgetKey = window.SidekickCore.tripBudgetKey({
+      destination: destinationName, startDate: formatDateInput(startVal), endDate: formatDateInput(endVal), budgetAmountPhp: rawBudget,
+    });
+    if (budgetKey !== preCheckedBudgetKey) {
+      const pickedId = destinationInput?.dataset.placeId || '';
+      const knownPlace = pickedId && _selectedPlace?.placeId === pickedId && hasPlaceCoordinates(_selectedPlace) ? _selectedPlace : null;
+      buildBtn.disabled = true;
+      buildBtn.textContent = 'Checking your budget…';
+      let budgetCheck = null;
+      try {
+        budgetCheck = await window.SidekickCore.checkTripBudget({
+          destination: destinationName,
+          lat: knownPlace ? Number(knownPlace.lat) : null,
+          lng: knownPlace ? Number(knownPlace.lng) : null,
+          startDate: formatDateInput(startVal),
+          endDate: formatDateInput(endVal),
+          budgetAmountPhp: rawBudget,
+        });
+      } finally {
+        buildBtn.disabled = false;
+        buildBtn.textContent = 'Build Itinerary';
+      }
+      if (budgetCheck?.checked && !budgetCheck.realistic) {
+        const problem = window.SidekickCore.describeUnrealisticBudget(budgetCheck, destinationName);
+        showBuilder(true);
+        await window.SidekickUI.alert(problem.message, { title: problem.title, details: problem.details, confirmText: 'Edit my trip' });
+        budgetInput?.focus();
+        return;
+      }
+    }
+    preCheckedBudgetKey = '';
+
     // Offer hotels that fit the budget before generating.
     let chosenStay = null;
     if (window.SidekickBudgetPickers?.askHotel) {
@@ -1423,6 +1466,34 @@ document.addEventListener("DOMContentLoaded", () => {
 
   if (existing?.meta?.budgetAmountPhp && budgetInput) budgetInput.value = existing.meta.budgetAmountPhp;
   if (existing?.meta?.origin && originInput) originInput.value = existing.meta.origin.address || existing.meta.origin.name || '';
+
+  // "Generate itinerary" on a Home destination hands its trip here: fill the
+  // builder with it and run the same Build Itinerary flow as tapping the button.
+  let pendingBuild = null;
+  try {
+    pendingBuild = JSON.parse(sessionStorage.getItem('sidekick.itinerary.pendingBuild') || 'null');
+    sessionStorage.removeItem('sidekick.itinerary.pendingBuild');
+  } catch (error) {}
+  if (pendingBuild && pendingBuild.destination && Date.now() - Number(pendingBuild.createdAt || 0) < 2 * 60 * 1000 && buildBtn) {
+    // Home already checked this trip's budget; don't check (or pay for) it again.
+    if (pendingBuild.budgetCheckedKey) preCheckedBudgetKey = pendingBuild.budgetCheckedKey;
+    if (destinationInput) {
+      destinationInput.value = pendingBuild.destination;
+      destinationInput.dataset.placeId = pendingBuild.placeId || '';
+    }
+    const pendingPlace = { name: pendingBuild.destination, placeId: pendingBuild.placeId || '', lat: pendingBuild.lat, lng: pendingBuild.lng };
+    if (pendingPlace.placeId && hasPlaceCoordinates(pendingPlace)) _selectedPlace = pendingPlace;
+    if (startInput) startInput.value = pendingBuild.startDate;
+    if (endInput) {
+      endInput.min = pendingBuild.startDate;
+      endInput.value = pendingBuild.endDate;
+    }
+    if (budgetInput) budgetInput.value = pendingBuild.budgetAmountPhp;
+    if (originInput) originInput.value = pendingBuild.origin || '';
+    updateBuilderDatePreview(startInput?.value, endInput?.value);
+    showBuilder(true);
+    buildBtn.click();
+  }
 });
 
 function applyLocalScheduleTimes(itinerary, firstDay) {

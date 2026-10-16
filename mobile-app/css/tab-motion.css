@@ -1,0 +1,229 @@
+/* ==========================================================================
+   Shared look and motion for the main tab screens (Home, Itinerary, Chat,
+   Alerts, Profile and Settings). Behaviour lives in js/tab-motion.js.
+
+   - A soft teal gradient that fills the whole screen down to the bottom,
+     with a few slowly drifting light glows behind the content.
+   - Pages slide toward the tab you are moving to: forward (to the right in
+     the bottom bar) moves left, back moves right.
+   ========================================================================== */
+
+/* Full-screen gradient. It sits behind the faint map pattern from theme.css. */
+.sk-tab-bg {
+    position: fixed;
+    inset: 0;
+    z-index: -2;
+    overflow: hidden;
+    pointer-events: none;
+    background:
+        radial-gradient(120% 60% at 0% 0%, rgba(104, 221, 217, .30), transparent 60%),
+        radial-gradient(100% 50% at 100% 100%, rgba(44, 145, 176, .14), transparent 65%),
+        linear-gradient(180deg, #d6f1f4 0%, #e5f6f8 32%, #eef9f9 58%, #e2f3f6 82%, #d5eef3 100%);
+}
+
+/* Soft glowing circles that drift very slowly. */
+.sk-tab-bg span {
+    position: absolute;
+    border-radius: 50%;
+    will-change: transform;
+}
+
+.sk-tab-bg span:nth-child(1) {
+    top: -12%;
+    left: -18%;
+    width: 70vmax;
+    height: 70vmax;
+    background: radial-gradient(circle, rgba(104, 221, 217, .30) 0%, rgba(104, 221, 217, 0) 62%);
+    animation: skGlowA 26s ease-in-out infinite alternate;
+}
+
+.sk-tab-bg span:nth-child(2) {
+    bottom: -20%;
+    right: -22%;
+    width: 75vmax;
+    height: 75vmax;
+    background: radial-gradient(circle, rgba(44, 145, 176, .20) 0%, rgba(44, 145, 176, 0) 62%);
+    animation: skGlowB 32s ease-in-out infinite alternate;
+}
+
+.sk-tab-bg span:nth-child(3) {
+    top: 38%;
+    left: 52%;
+    width: 46vmax;
+    height: 46vmax;
+    background: radial-gradient(circle, rgba(255, 255, 255, .55) 0%, rgba(255, 255, 255, 0) 62%);
+    animation: skGlowC 38s ease-in-out infinite alternate;
+}
+
+/* Tiny "dust" sparkles, drawn once and drifting together. */
+.sk-tab-bg span:nth-child(4) {
+    inset: -10%;
+    border-radius: 0;
+    background-image:
+        radial-gradient(circle at 12% 18%, rgba(255, 255, 255, .9) 0 1.5px, transparent 2.5px),
+        radial-gradient(circle at 78% 26%, rgba(255, 255, 255, .8) 0 1.5px, transparent 2.5px),
+        radial-gradient(circle at 34% 62%, rgba(255, 255, 255, .8) 0 2px, transparent 3px),
+        radial-gradient(circle at 88% 70%, rgba(255, 255, 255, .7) 0 1.5px, transparent 2.5px),
+        radial-gradient(circle at 56% 88%, rgba(255, 255, 255, .8) 0 1.5px, transparent 2.5px),
+        radial-gradient(circle at 20% 92%, rgba(255, 255, 255, .7) 0 2px, transparent 3px);
+    opacity: .8;
+    animation: skDust 40s linear infinite alternate;
+}
+
+@keyframes skGlowA { to { transform: translate(14vw, 10vh) scale(1.08); } }
+@keyframes skGlowB { to { transform: translate(-12vw, -8vh) scale(1.1); } }
+@keyframes skGlowC { to { transform: translate(-18vw, 6vh) scale(.9); } }
+@keyframes skDust  { to { transform: translate(-3vw, -4vh); } }
+
+/* The home hero blends into the full-screen gradient instead of ending in a band. */
+body[data-tab] .dashboard-hero {
+    background: linear-gradient(180deg, rgba(214, 241, 244, .85) 0%, rgba(214, 241, 244, 0) 100%);
+}
+
+/* ---- Page transitions --------------------------------------------------- */
+/* Entering: slides in from the side it is travelling from. "backwards" so no
+   transform is left on the screen afterwards (it would pin fixed pop-ups). */
+@keyframes skTabInFromRight {
+    from { opacity: 0; transform: translateX(56px); }
+    to { opacity: 1; transform: none; }
+}
+
+@keyframes skTabInFromLeft {
+    from { opacity: 0; transform: translateX(-56px); }
+    to { opacity: 1; transform: none; }
+}
+
+@keyframes skTabOutToLeft {
+    to { opacity: 0; transform: translateX(-56px); }
+}
+
+@keyframes skTabOutToRight {
+    to { opacity: 0; transform: translateX(56px); }
+}
+
+body[data-tab] .screen.sk-tab-in-next,
+.perf-lite body[data-tab] .screen.sk-tab-in-next {
+    animation: skTabInFromRight 380ms cubic-bezier(.22, .9, .35, 1) backwards;
+}
+
+body[data-tab] .screen.sk-tab-in-prev,
+.perf-lite body[data-tab] .screen.sk-tab-in-prev {
+    animation: skTabInFromLeft 380ms cubic-bezier(.22, .9, .35, 1) backwards;
+}
+
+body[data-tab] .screen.sk-tab-out-next {
+    animation: skTabOutToLeft 170ms ease-in forwards;
+}
+
+body[data-tab] .screen.sk-tab-out-prev {
+    animation: skTabOutToRight 170ms ease-in forwards;
+}
+
+/* Lighter phones: keep the gradient, stop the drifting glows. */
+.perf-lite .sk-tab-bg span {
+    animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .sk-tab-bg span { animation: none; }
+    body[data-tab] .screen.sk-tab-in-next,
+    body[data-tab] .screen.sk-tab-in-prev,
+    body[data-tab] .screen.sk-tab-out-next,
+    body[data-tab] .screen.sk-tab-out-prev { animation: none; }
+}
+
+/* ---- Bottom bar: the selected tab's icon rises into a raised circle ------
+   Replaces the old highlight (a tinted box plus a dot) that was taller than
+   the bar, so it spilled out of the tab and the dot ran into the label. */
+body[data-tab] .bottom-nav.overlay {
+    height: 60px;
+    padding: 0 6px;
+    overflow: visible;
+}
+
+body[data-tab] .bottom-nav .nav-item,
+body[data-tab] .bottom-nav .nav-item.active {
+    height: 100%;
+    gap: 2px;
+    padding: 0;
+    background: transparent;
+    -webkit-tap-highlight-color: transparent;
+}
+
+body[data-tab] .bottom-nav .nav-item.active::after {
+    content: none;
+    display: none;
+}
+
+/* Every icon sits in the same round space, so nothing shifts when it is selected. */
+body[data-tab] .bottom-nav .nav-item svg {
+    box-sizing: content-box;
+    width: 22px;
+    height: 22px;
+    margin: 0;
+    padding: 9px;
+    border-radius: 50%;
+    background-color: transparent;
+    transition: transform 380ms cubic-bezier(.34, 1.56, .64, 1), background-color 200ms ease, box-shadow 200ms ease, stroke 200ms ease;
+}
+
+body[data-tab] .bottom-nav .nav-item:not(.active):hover svg {
+    background-color: rgba(44, 145, 176, .08);
+}
+
+body[data-tab] .bottom-nav .nav-item:not(.active):active svg {
+    transform: scale(.88);
+}
+
+/* Selected: a teal circle with a white ring that lifts above the bar
+   (white icon on teal: 5.0:1 contrast). */
+body[data-tab] .bottom-nav .nav-item.active svg {
+    transform: translateY(-16px);
+    background-color: #1f7a8c;
+    background-image: linear-gradient(135deg, #1b6e84 0%, #2c91b0 100%);
+    stroke: #fff;
+    box-shadow: 0 0 0 4px rgba(255, 255, 255, .96), 0 10px 20px rgba(31, 122, 140, .34);
+    animation: skNavRise 520ms cubic-bezier(.34, 1.56, .64, 1) backwards;
+}
+
+/* Label (shown on wider screens) moves up under the raised icon. */
+body[data-tab] .bottom-nav .nav-item span {
+    transition: transform 380ms cubic-bezier(.34, 1.56, .64, 1), color 200ms ease;
+}
+
+body[data-tab] .bottom-nav .nav-item.active span {
+    transform: translateY(-11px);
+    color: #1f6f88;
+    font-weight: 700;
+}
+
+/* The Alerts count badge follows its icon. */
+body[data-tab] .bottom-nav .nav-item .reminders-badge {
+    transition: transform 380ms cubic-bezier(.34, 1.56, .64, 1);
+}
+
+body[data-tab] .bottom-nav .nav-item.active .reminders-badge {
+    transform: translateY(-16px);
+}
+
+@keyframes skNavRise {
+    from { transform: translateY(0) scale(.6); box-shadow: none; }
+}
+
+/* Hiding the bar on scroll must also hide the raised circle. */
+body[data-tab] .bottom-nav.overlay.navbar-hidden {
+    transform: translateX(-50%) translateY(175%);
+}
+
+/* ---- Home: no extra empty space under the last section -------------------- */
+body[data-tab="dashboard"] .dashboard-screen {
+    padding-bottom: 0;
+}
+
+body[data-tab="dashboard"] .dashboard-screen > .section:last-of-type {
+    padding-bottom: 12px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    body[data-tab] .bottom-nav .nav-item.active svg { animation: none; }
+}

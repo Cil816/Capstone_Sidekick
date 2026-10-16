@@ -138,10 +138,6 @@ body {
 .chat-place-modal.open .chat-place-backdrop,
 .stay-eat-modal.open .stay-eat-modal-backdrop { animation: skFade 200ms ease backwards; }
 
-/* On phones the destination details are a bottom sheet (no centring transform). */
-@media (max-width: 600px) {
-    .destination-modal.open .destination-modal-panel { animation-name: skSheetUp; }
-}
 
 @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after {
@@ -154,18 +150,19 @@ body {
 /* ==========================================================================
    Themed dialog (js/ui.js) - replaces the phone's grey alert/confirm/prompt.
    ========================================================================== */
+/* Always centred on the screen, on phones too (it used to be a bottom sheet). */
 .sk-dialog {
     position: fixed;
     inset: 0;
     z-index: 30000;
     display: flex;
-    align-items: flex-end;
+    align-items: center;
     justify-content: center;
-    padding: 0 12px calc(12px + env(safe-area-inset-bottom));
+    padding: calc(16px + env(safe-area-inset-top)) 16px calc(16px + env(safe-area-inset-bottom));
 }
 
 @media (min-width: 601px) {
-    .sk-dialog { align-items: center; padding: 24px; }
+    .sk-dialog { padding: 24px; }
 }
 
 .sk-dialog-backdrop {

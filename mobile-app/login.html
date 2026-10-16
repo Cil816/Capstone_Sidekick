@@ -6,14 +6,16 @@
     <title>Sidekick AI - Login</title>
     <link rel="stylesheet" href="css/common.css">
     <link rel="stylesheet" href="css/login.css">
+    <link rel="stylesheet" href="css/register.css">
     <link rel="stylesheet" href="css/otp.css">
     <link rel="stylesheet" href="css/legal.css">
     <link rel="stylesheet" href="css/theme.css">
+    <link rel="stylesheet" href="css/travel-map.css">
     <link rel="stylesheet" href="css/a11y.css">
 </head>
-<body>
+<body data-map-stop="login">
     <div class="app-container">
-        <div class="screen">
+        <div class="screen register-screen">
             <div class="header">
                 <a href="index.html" class="back-btn" aria-label="Back to welcome screen">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -22,11 +24,11 @@
                 </a>
             </div>
             
-            <div class="content">
+            <div class="content" data-map-slide>
                 <h1 class="screen-title">Welcome back</h1>
                 <p class="screen-subtitle">Login to continue your journey</p>
                 
-                <form class="form" id="login-form">
+                <form class="form" id="login-form" data-map-step="login">
                     <div class="form-group">
                         <label for="login-email">Email</label>
                         <input type="email" id="login-email" placeholder="your@email.com" required>
@@ -43,7 +45,7 @@
                 </form>
 
                 <section class="form reset-flow" id="reset-flow" hidden>
-                    <div class="reset-step" id="reset-step-email">
+                    <div class="reset-step" id="reset-step-email" data-map-step="reset-email">
                         <div class="form-group">
                             <label for="reset-email">Email</label>
                             <input type="email" id="reset-email" placeholder="your@email.com" autocomplete="email">
@@ -51,7 +53,7 @@
                         <button type="button" class="btn btn-primary btn-full" id="reset-send-code">Send code</button>
                     </div>
 
-                    <div class="reset-step" id="reset-step-code" hidden>
+                    <div class="reset-step" id="reset-step-code" data-map-step="reset-code" hidden>
                         <p class="reset-text">Enter the 6-digit code sent to <strong id="reset-code-email"></strong>.</p>
                         <div class="form-group">
                             <label for="reset-otp">Reset code</label>
@@ -64,7 +66,7 @@
                         </div>
                     </div>
 
-                    <div class="reset-step" id="reset-step-password" hidden>
+                    <div class="reset-step" id="reset-step-password" data-map-step="reset-password" hidden>
                         <div class="form-group">
                             <label for="reset-password">Enter new password</label>
                             <input type="password" id="reset-password" placeholder="At least 8 characters" autocomplete="new-password">
@@ -101,5 +103,6 @@
     <script src="js/otp-input.js"></script>
     <script src="js/login.js"></script>
     <script src="js/forgot-password.js"></script>
+    <script src="js/travel-map.js"></script>
 </body>
 </html>

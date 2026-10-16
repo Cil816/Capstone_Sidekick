@@ -1,4 +1,15 @@
 /* Onboarding Screen Specific Styles */
+
+/* The moving travel map behind this screen comes from css/travel-map.css. */
+
+/* Footer bar lets the map show through softly. */
+.onboarding-screen .onboarding-footer {
+    background: rgba(255, 255, 255, 0.9);
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+    border-top-color: rgba(156, 207, 218, 0.5);
+}
+
 .flex-spacer {
     flex: 1;
 }
@@ -32,42 +43,87 @@
 }
 
 .onboarding-content h1 {
-    font-size: 24px;
-    font-weight: 500;
-    color: #2C3E50;
+    font-family: "Manrope", "Avenir Next", sans-serif;
+    font-size: 26px;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    line-height: 1.25;
+    color: #163457;
     margin-bottom: 8px;
 }
 
 .onboarding-content p {
     font-size: 16px;
-    color: #6B7280;
+    color: #56708a;
     margin-bottom: 24px;
 }
 
+/* Options sit in a two-column grid of large, equal-sized buttons. */
 .chip-container {
-    display: flex;
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 12px;
 }
 
+/* Unselected: white card with a teal outline and dark text, so each option
+   stands out clearly from the light page background (text 12.9:1). */
 .chip {
-    padding: 12px 16px;
-    border-radius: 12px;
-    background: #F5F7FA;
-    color: #374151;
-    border: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-height: 58px;
+    padding: 12px 14px;
+    border-radius: 16px;
+    background: #fff;
+    color: #163457;
+    border: 1.5px solid #9ccfda;
+    box-shadow: 0 3px 10px rgba(22, 52, 87, 0.07);
     cursor: pointer;
-    font-size: 14px;
-    transition: all 0.2s;
+    font: inherit;
+    font-size: 16px;
+    font-weight: 600;
+    line-height: 1.3;
+    text-align: center;
+    transition: background-color 0.18s ease, border-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease, transform 0.12s ease;
 }
 
 .chip:hover {
-    background: #E5E7EB;
+    background: #effafb;
+    border-color: #1f7a8c;
 }
 
+.chip:active:not(:disabled) {
+    transform: scale(0.97);
+}
+
+/* Selected: solid teal with white text and a check mark (white on teal 5.0:1). */
 .chip.selected {
-    background: #6B8CAE;
-    color: white;
+    background: #1f7a8c;
+    border-color: #1f7a8c;
+    color: #fff;
+    box-shadow: 0 6px 16px rgba(31, 122, 140, 0.28);
+}
+
+.chip.selected:hover {
+    background: #1b6e84;
+    border-color: #1b6e84;
+}
+
+/* Check mark as a small badge in the corner, so it never pushes the text. */
+.chip {
+    position: relative;
+}
+
+.chip.selected:not(.dest-chip)::before {
+    content: "✓";
+    position: absolute;
+    top: 6px;
+    right: 8px;
+    color: #fff;
+    font-size: 13px;
+    font-weight: 800;
+    line-height: 1;
 }
 
 .budget-container {
@@ -110,6 +166,15 @@
     box-shadow: 0 -6px 18px rgba(44,62,80,0.04);
     border-top: 1px solid #E5E7EB;
     z-index: 1000;
+}
+
+/* Continue before a choice is made: a calm grey-teal with readable dark text
+   (4.7:1) instead of faded white-on-teal, which was hard to read. */
+.onboarding-footer .btn-primary:disabled {
+    opacity: 1;
+    background: #d4e3e8 !important;
+    color: #4a6577 !important;
+    box-shadow: none;
 }
 
 @media (min-width: 600px) {
@@ -217,21 +282,41 @@
     font-weight: 500;
 }
 
+/* Chosen destinations: one full-width row each, name on the left and the
+   remove mark on the right, so long names stay readable. */
+#dest-selected {
+    grid-template-columns: 1fr;
+    gap: 10px;
+}
+
 .dest-chip {
-    display: inline-flex;
+    display: flex;
     align-items: center;
-    gap: 8px;
+    justify-content: space-between;
+    gap: 12px;
+    min-height: 52px;
+    padding: 12px 16px 12px 18px;
+    text-align: left;
 }
 
 .dest-chip-remove {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.2);
     font-size: 18px;
     line-height: 1;
 }
 
 .dest-subheading {
-    font-size: 16px;
-    font-weight: 500;
-    color: #2C3E50;
+    font-family: "Manrope", "Avenir Next", sans-serif;
+    font-size: 18px;
+    font-weight: 800;
+    color: #163457;
     margin: 24px 0 12px;
 }
 

@@ -7,6 +7,12 @@
     box-sizing: border-box;
 }
 
+/* The reset above removes the automatic margin that browsers use to centre
+   pop-up dialogs, which pinned them to the top-left corner. Restore it. */
+dialog {
+    margin: auto;
+}
+
 /* Base page sizing: prevent horizontal scroll and ensure full-height */
 /* Ensure page fills viewport and no horizontal scroll */
 html, body {
