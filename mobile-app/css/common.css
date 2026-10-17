@@ -13,6 +13,11 @@ dialog {
     margin: auto;
 }
 
+/* Text boxes keep the size the design gives them; users cannot drag-resize them. */
+textarea {
+    resize: none;
+}
+
 /* Base page sizing: prevent horizontal scroll and ensure full-height */
 /* Ensure page fills viewport and no horizontal scroll */
 html, body {

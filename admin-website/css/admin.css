@@ -2203,3 +2203,8 @@ html {
 #user-table-body td.empty-state,
 #report-table-body td.empty-state,
 #itinerary-table-body td.empty-state { min-width: 0; }
+
+/* Text boxes keep their designed size; users cannot drag-resize them. */
+textarea {
+    resize: none;
+}

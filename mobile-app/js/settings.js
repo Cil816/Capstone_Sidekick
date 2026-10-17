@@ -35,14 +35,25 @@ document.addEventListener('DOMContentLoaded', () => {
   const testBtn = document.getElementById('test-notification-btn');
   const testStatusEl = document.getElementById('test-notification-status');
   if (testBtn) {
+    const testLabel = testBtn.textContent;
     testBtn.addEventListener('click', async () => {
+      if (testBtn.disabled) return;
       testBtn.disabled = true;
       let result;
       try {
         result = await window.SidekickCore.sendTestNotification(session.email);
       } catch (error) {
         result = { ok: false, message: error?.message || 'The test notification could not be sent.' };
-      } finally {
+      }
+      if (result?.ok) {
+        // Brief pause between tests: Android drops notifications an app posts in
+        // rapid bursts, so very fast repeated taps could otherwise go missing.
+        testBtn.textContent = 'Test sent';
+        window.setTimeout(() => {
+          testBtn.textContent = testLabel;
+          testBtn.disabled = false;
+        }, 2000);
+      } else {
         testBtn.disabled = false;
       }
       if (testStatusEl) {

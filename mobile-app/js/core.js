@@ -1462,7 +1462,34 @@ if (document.readyState === "loading") {
     'quiet|vibrate': { id: 'sidekick_alerts_vibrate', name: 'Reminders: vibration only', vibration: true, sound: 'sidekick_silent.wav' },
     'quiet|still': { id: 'sidekick_alerts_silent', name: 'Reminders: silent', vibration: false, sound: 'sidekick_silent.wav' },
   };
-  const TEST_NOTIFICATION_ID = 2147480001;
+  // Test notifications rotate through their own IDs (above every reminder ID, which
+  // stays at or below 2147483000). Reusing one ID made repeated taps silent: the
+  // plugin alerts only once per ID, so a new test just replaced the one still in
+  // the tray without sound, and each tap also pushed the pending one back.
+  const TEST_NOTIFICATION_ID_BASE = 2147483100;
+  const TEST_NOTIFICATION_ID_COUNT = 40;
+  const TEST_SEQUENCE_KEY = 'sidekick.testNotificationSeq';
+
+  function nextTestNotificationId() {
+    let seq = 0;
+    try { seq = (Number(localStorage.getItem(TEST_SEQUENCE_KEY)) || 0) + 1; } catch (e) { seq = Date.now(); }
+    seq %= TEST_NOTIFICATION_ID_COUNT;
+    try { localStorage.setItem(TEST_SEQUENCE_KEY, String(seq)); } catch (e) {}
+    return TEST_NOTIFICATION_ID_BASE + seq;
+  }
+
+  // True when the phone has switched off this reminder channel in its settings
+  // (Android keeps the channel but drops its notifications silently).
+  async function isChannelBlocked(channelId) {
+    try {
+      if (typeof LocalNotifications.listChannels !== 'function') return false;
+      const result = await LocalNotifications.listChannels();
+      const channel = (result?.channels || []).find((item) => item.id === channelId);
+      return Boolean(channel) && Number(channel.importance) === 0;
+    } catch (e) {
+      return false;
+    }
+  }
   const reminderTimeoutHandles = new Map();
 
   function reminderChannelFor(prefs) {
@@ -1625,9 +1652,14 @@ if (document.readyState === "loading") {
     const prefs = getNotificationPrefs(email);
     const owner = normalizeEmail(email);
 
-    // Cancel everything already scheduled for this account, including reminders that
-    // were deleted since (their IDs are no longer in the list), then schedule afresh.
-    const cancelIds = new Set(list.map((r) => reminderNotificationId(email, r.id)));
+    // Cancel what is still waiting to fire for this account, including reminders that
+    // were deleted since (they show up as pending), then schedule afresh. Reminders
+    // whose time has passed are left alone: cancelling them also removed notifications
+    // the user had already received from the phone's notification tray.
+    const now = Date.now();
+    const cancelIds = new Set(list
+      .filter((r) => Number(r.dueAt || 0) > now)
+      .map((r) => reminderNotificationId(email, r.id)));
     try {
       const pending = await LocalNotifications.getPending();
       (pending?.notifications || []).forEach((notification) => {
@@ -1644,7 +1676,6 @@ if (document.readyState === "loading") {
     if (!prefs.enabled) return;
 
     const channel = reminderChannelFor(prefs);
-    const now = Date.now();
     const notifications = list
       .filter((r) => !r.firedAt && !r.suppressed && Number(r.dueAt || 0) > now)
       .map((r) => ({
@@ -1691,10 +1722,13 @@ if (document.readyState === "loading") {
       return { ok: false, message: 'Notifications are blocked. Allow them for Sidekick in your phone’s Settings → Apps → Sidekick → Notifications.' };
     }
     const channel = reminderChannelFor(prefs);
+    if (await isChannelBlocked(channel.id)) {
+      return { ok: false, message: `Sidekick’s “${channel.name}” notifications are turned off on this phone. Turn them on in Settings → Apps → Sidekick → Notifications.` };
+    }
     try {
       await LocalNotifications.schedule({
         notifications: [{
-          id: TEST_NOTIFICATION_ID,
+          id: nextTestNotificationId(),
           title: 'Sidekick test notification',
           body: 'Reminders will look and sound like this.',
           channelId: channel.id,

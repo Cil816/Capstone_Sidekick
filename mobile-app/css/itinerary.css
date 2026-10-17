@@ -651,3 +651,12 @@
 #show-builder.is-open:hover {
     background: #1b6e84;
 }
+
+/* Activity notes box: fixed size, no resize handle; longer notes scroll inside. */
+.itinerary-edit-field textarea {
+    height: 84px;
+    min-height: 84px;
+    max-height: 84px;
+    overflow-y: auto;
+    resize: none;
+}
