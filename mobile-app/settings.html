@@ -9,6 +9,8 @@
     <link rel="stylesheet" href="css/theme.css">
     <link rel="stylesheet" href="css/tab-motion.css">
     <link rel="stylesheet" href="css/a11y.css">
+    <link rel="stylesheet" href="css/dark.css">
+    <script src="js/theme-init.js"></script>
 </head>
 <body data-tab="profile">
   <div class="app-container">
@@ -53,6 +55,19 @@
           </label>
           <button id="test-notification-btn" class="btn btn-outline btn-full settings-action" type="button">Send a test notification</button>
           <p id="test-notification-status" class="settings-test-status" role="status" aria-live="polite" hidden></p>
+        </section>
+
+        <section class="settings-card">
+          <div class="settings-card-head">
+            <h2>Appearance</h2>
+          </div>
+          <label class="setting-row">
+            <div>
+              <span class="setting-title">Dark mode</span>
+              <small>Easier on the eyes at night. Saved on this phone.</small>
+            </div>
+            <input type="checkbox" id="pref-dark-mode" class="toggle-input" />
+          </label>
         </section>
 
         <section class="settings-card">

@@ -68,6 +68,15 @@ document.addEventListener('DOMContentLoaded', () => {
     if (el) el.addEventListener('change', savePreferences);
   });
 
+  // Dark mode (js/theme-init.js applies and remembers it on every screen).
+  const darkModeEl = document.getElementById('pref-dark-mode');
+  if (darkModeEl && window.SidekickTheme) {
+    darkModeEl.checked = window.SidekickTheme.get() === 'dark';
+    darkModeEl.addEventListener('change', () => {
+      window.SidekickTheme.set(darkModeEl.checked ? 'dark' : 'light');
+    });
+  }
+
   const syncBtn = document.getElementById('sync-reminders-btn');
   if (syncBtn) {
     syncBtn.addEventListener('click', () => {

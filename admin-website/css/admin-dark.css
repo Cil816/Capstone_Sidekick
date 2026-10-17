@@ -1,0 +1,164 @@
+/* ==========================================================================
+   Sidekick Admin - dark mode (loaded last on every page). Applies when
+   <html data-theme="dark"> is set by js/theme.js. Light mode is unchanged.
+   ========================================================================== */
+
+html[data-theme="dark"] {
+  --ax-ink: #e2edf5;
+  --ax-muted: #9db3c5;
+  --ax-line: #263a4c;
+  --ax-soft: #172a3b;
+  --ax-bg: #0c1722;
+  --ax-card: #122130;
+  --ax-primary: #4fb4cf;
+  --ax-primary-dark: #2f9ab6;
+  --ax-shadow: 0 6px 22px rgba(0, 0, 0, .35);
+  --admin-accent: #172a3b;
+  --admin-bg: #0c1722;
+  --admin-border: #263a4c;
+  --admin-text: #e2edf5;
+  color-scheme: dark;
+}
+
+html[data-theme="dark"] body {
+  background: radial-gradient(circle at 100% 0%, rgba(79, 180, 207, .10), transparent 32%), var(--ax-bg);
+  color: var(--ax-ink);
+}
+html[data-theme="dark"] body::before { opacity: .05; }
+
+/* Sidebar: a deeper navy so it stays distinct from the page. */
+html[data-theme="dark"] .admin-sidebar { background: linear-gradient(180deg, #08131d 0%, #0c1c2a 55%, #0f2534 100%); }
+
+/* Surfaces */
+html[data-theme="dark"] .admin-card,
+html[data-theme="dark"] .ax-kpi,
+html[data-theme="dark"] .ax-review,
+html[data-theme="dark"] .ax-drawer-panel,
+html[data-theme="dark"] .ax-dialog-panel,
+html[data-theme="dark"] .admin-table-wrap,
+html[data-theme="dark"] .login-card,
+html[data-theme="dark"] .range-picker,
+html[data-theme="dark"] .ax-tab:not([aria-selected="true"]) {
+  background: var(--ax-card);
+  border-color: var(--ax-line);
+  color: var(--ax-ink);
+}
+html[data-theme="dark"] .ax-drawer-head { background: rgba(18, 33, 48, .96); border-color: var(--ax-line); }
+html[data-theme="dark"] .stat-card.is-untracked,
+html[data-theme="dark"] .chart-card-untracked,
+html[data-theme="dark"] .report-tile,
+html[data-theme="dark"] .empty-state { background: #0f1d2b; border-color: var(--ax-line); color: var(--ax-muted); }
+html[data-theme="dark"] .login-page { background: radial-gradient(ellipse at 50% 0, rgba(79, 180, 207, .12), transparent 48%), var(--ax-bg); }
+
+/* Text that used fixed dark colours */
+html[data-theme="dark"] .admin-page-title,
+html[data-theme="dark"] .stat-value,
+html[data-theme="dark"] .admin-panel-header h2,
+html[data-theme="dark"] .admin-detail-section h3,
+html[data-theme="dark"] .login-header h1,
+html[data-theme="dark"] .section-heading,
+html[data-theme="dark"] .chart-card-header h3,
+html[data-theme="dark"] .chart-total strong,
+html[data-theme="dark"] .insight-card h3,
+html[data-theme="dark"] .cell-primary,
+html[data-theme="dark"] .report-tile-value,
+html[data-theme="dark"] .hbar-label,
+html[data-theme="dark"] .hbar-value,
+html[data-theme="dark"] .picks-panel h3,
+html[data-theme="dark"] .user-picks-block h4 { color: var(--ax-ink); }
+html[data-theme="dark"] .stat-label,
+html[data-theme="dark"] .stat-grid .stat-label,
+html[data-theme="dark"] .admin-pagination,
+html[data-theme="dark"] .field label,
+html[data-theme="dark"] .admin-filters label,
+html[data-theme="dark"] .login-card .field label,
+html[data-theme="dark"] .admin-legal-notice,
+html[data-theme="dark"] .untracked-state p,
+html[data-theme="dark"] .ranked-count,
+html[data-theme="dark"] .not-tracked,
+html[data-theme="dark"] .subsection-heading,
+html[data-theme="dark"] .range-option,
+html[data-theme="dark"] .report-tabs [role="tab"],
+html[data-theme="dark"] .ax-dialog-panel p { color: var(--ax-muted); }
+html[data-theme="dark"] .admin-link,
+html[data-theme="dark"] .report-tabs [role="tab"]:hover,
+html[data-theme="dark"] .report-tabs [role="tab"][aria-selected="true"] { color: #7fd3e6; }
+html[data-theme="dark"] .admin-main a { color: #7fd3e6; }
+
+/* Tables */
+html[data-theme="dark"] .admin-table th { background: #0f1d2b; color: var(--ax-muted); border-color: var(--ax-line); }
+html[data-theme="dark"] .admin-table td,
+html[data-theme="dark"] .ax-table td { border-color: var(--ax-line); color: var(--ax-ink); }
+html[data-theme="dark"] .admin-table tbody tr:hover,
+html[data-theme="dark"] .ax-table tbody tr:hover,
+html[data-theme="dark"] .hbar-row:hover,
+html[data-theme="dark"] .hbar-row:focus-visible { background: #172a3b; }
+html[data-theme="dark"] .admin-table tbody tr.is-selected { background: #19344a; }
+
+/* Inputs and buttons */
+html[data-theme="dark"] .field input,
+html[data-theme="dark"] .field select,
+html[data-theme="dark"] .field textarea,
+html[data-theme="dark"] .admin-filters input,
+html[data-theme="dark"] .admin-filters select,
+html[data-theme="dark"] .ax-search input,
+html[data-theme="dark"] .ax-select,
+html[data-theme="dark"] .ax-dialog-panel input,
+html[data-theme="dark"] .ax-setting-field input,
+html[data-theme="dark"] .ax-setting-field textarea {
+  background: #0f1d2b;
+  border-color: #2f475b;
+  color: var(--ax-ink);
+}
+html[data-theme="dark"] ::placeholder { color: #6f879b; }
+html[data-theme="dark"] .admin-main .admin-button-secondary,
+html[data-theme="dark"] .ax-dialog-panel .admin-button-secondary { background: #172a3b; border-color: #2f475b; color: var(--ax-ink); }
+html[data-theme="dark"] .admin-main .admin-button-secondary:hover:not(:disabled) { background: #1d3448; }
+html[data-theme="dark"] .admin-button-danger { background: #3a1a20; border-color: rgba(240, 120, 135, .35); color: #ffb3bd; }
+html[data-theme="dark"] .admin-button-danger:hover:not(:disabled) { background: #4a2028; }
+html[data-theme="dark"] .range-option:hover { background: #172a3b; }
+html[data-theme="dark"] .range-option[aria-pressed="true"] { background: #19344a; color: #7fd3e6; }
+html[data-theme="dark"] .ax-close { background: #172a3b; color: var(--ax-ink); }
+html[data-theme="dark"] .ax-close:hover { background: #1d3448; }
+
+/* Small badges, bars and icons */
+html[data-theme="dark"] .badge.neutral,
+html[data-theme="dark"] .ax-pill { background: #1b3043; color: #b9cddc; }
+html[data-theme="dark"] .ax-pill.ok { background: rgba(34, 160, 107, .18); color: #7ddcaa; }
+html[data-theme="dark"] .ax-pill.off { background: rgba(194, 65, 79, .2); color: #ffa3ae; }
+html[data-theme="dark"] .stat-icon { background: #172a3b; color: #7fd3e6; }
+html[data-theme="dark"] .ranked-bar,
+html[data-theme="dark"] .ax-rank-bar,
+html[data-theme="dark"] .ax-dist-bar,
+html[data-theme="dark"] .ax-budget-bar { background: #1b3043; }
+html[data-theme="dark"] .ax-feed li,
+html[data-theme="dark"] .ax-drawer .admin-detail-section,
+html[data-theme="dark"] .ax-setting-row,
+html[data-theme="dark"] .ax-setting-field { border-color: var(--ax-line); }
+html[data-theme="dark"] .ax-feed-icon.k-signup { background: rgba(34, 160, 107, .18); color: #7ddcaa; }
+html[data-theme="dark"] .ax-feed-icon.k-trip { background: rgba(239, 138, 105, .18); color: #f5ad8f; }
+html[data-theme="dark"] .ax-feed-icon.k-chat { background: rgba(120, 135, 230, .2); color: #aeb8f5; }
+html[data-theme="dark"] .ax-stars,
+html[data-theme="dark"] .ax-star { color: #36506a; }
+html[data-theme="dark"] .ax-switch > span[aria-hidden] { background: #3a5266; }
+html[data-theme="dark"] .ax-switch input:checked + span[aria-hidden] { background: #2f9ab6; }
+
+/* Chart tabs: the selected tab is light with dark text in dark mode. */
+html[data-theme="dark"] .ax-tab[aria-selected="true"] { background: #7fd3e6; border-color: #7fd3e6; color: #0c1722; }
+html[data-theme="dark"] .ax-tab[aria-selected="true"] strong { color: #0c1722; }
+
+/* Line chart lines */
+html[data-theme="dark"] .chart-grid-line { stroke: #22364a; }
+html[data-theme="dark"] .chart-axis-line { stroke: #34506a; }
+html[data-theme="dark"] .chart-axis-label { fill: var(--ax-muted); }
+html[data-theme="dark"] .chart-hover-line { stroke: #4d6a82; }
+html[data-theme="dark"] .chart-hover-dot { fill: var(--ax-card); }
+html[data-theme="dark"] .chart-tooltip { background: #e2edf5; color: #0c1722; }
+html[data-theme="dark"] .chart-tooltip span { color: #2c4256; }
+
+/* Status banner */
+html[data-theme="dark"] .admin-status-banner.is-info { background: #10283a; color: #9fd6ee; border-color: rgba(127, 211, 230, .25); }
+html[data-theme="dark"] .admin-status-banner.is-error { background: #3a1a20; color: #ffb3bd; border-color: rgba(240, 120, 135, .3); }
+
+/* Charts drawn with SVG text */
+html[data-theme="dark"] .admin-main svg text { fill: var(--ax-muted); }

@@ -37,9 +37,9 @@
     if (!node) return;
     node.textContent = message;
     node.classList.add('visible');
-    node.style.background = kind === 'error' ? '#fff0f0' : '#edf6ff';
-    node.style.color = kind === 'error' ? '#9f1239' : '#165e8a';
-    node.style.borderColor = kind === 'error' ? 'rgba(159,18,57,0.15)' : 'rgba(21, 94, 138, 0.15)';
+    // Colours come from the stylesheet (is-error / is-info), so dark mode can restyle them.
+    node.classList.toggle('is-error', kind === 'error');
+    node.classList.toggle('is-info', kind !== 'error');
   }
 
   function getReadableError(error) {
@@ -1500,7 +1500,7 @@
         { title: 'Email codes', ok: p?.email?.configured, value: p?.email?.configured ? 'Ready' : 'Not set up',
           note: p?.email?.configured ? 'Sign-up and password-reset codes can be sent.' : 'Add the SMTP settings so users can verify their email.' },
         { title: 'Maintenance mode', ok: !p?.maintenanceMode, warn: Boolean(p?.maintenanceMode), value: p?.maintenanceMode ? 'On' : 'Off',
-          note: p?.maintenanceMode ? 'The app is paused for users. Turn MAINTENANCE_MODE off to reopen it.' : 'The app is open to users.' },
+          note: p?.maintenanceMode ? 'The app is paused for users. Turn it off in Settings to reopen it.' : 'The app is open to users.' },
         { title: 'Server', ok: true, value: p?.mode === 'production' ? 'Production' : 'Development',
           note: `Running for ${uptimeText(p?.uptimeSeconds)}. Checked ${new Date(p?.healthCheckTime || Date.now()).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}.`, warn: p?.mode !== 'production' },
       ];
@@ -1535,6 +1535,222 @@
       }
     }
     if (statusResult.status === 'rejected') setStatus(getReadableError(statusResult.reason), 'error');
+  }
+
+  // ---- Settings: maintenance, API access, budget, archive --------------------------
+  function usd(value, digits = 2) {
+    const amount = Number(value) || 0;
+    return `$${amount.toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits })}`;
+  }
+
+  function budgetMeterHtml(costUsd, budgetUsd, paused) {
+    if (!(budgetUsd > 0)) {
+      return `<p class="ax-budget-text"><strong>${usd(costUsd)}</strong> estimated so far this month. No budget is set.</p>`;
+    }
+    const percent = Math.min(100, Math.round((costUsd / budgetUsd) * 100));
+    const level = paused || percent >= 100 ? 'over' : percent >= 80 ? 'near' : 'ok';
+    return `
+      <p class="ax-budget-text"><strong>${usd(costUsd)}</strong> of ${usd(budgetUsd)} used this month (${percent}%)${paused ? ' — AI and maps are paused until next month or a higher budget.' : level === 'near' ? ' — getting close to the budget.' : '.'}</p>
+      <div class="ax-budget-bar ${level}" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${percent}" aria-label="Monthly budget used"><span style="width:${percent}%"></span></div>`;
+  }
+
+  let settingsData = null;
+
+  function renderSettings(data) {
+    settingsData = data;
+    const s = data?.settings || {};
+    const setChecked = (id, value) => { const el = document.getElementById(id); if (el) el.checked = Boolean(value); };
+    setChecked('setting-maintenance', s.maintenanceMode || data?.maintenanceFromEnv);
+    setChecked('setting-ai', s.aiEnabled);
+    setChecked('setting-maps', s.mapsEnabled);
+    setChecked('setting-autopause', s.autoPauseOnBudget);
+    const maintenanceToggle = document.getElementById('setting-maintenance');
+    if (maintenanceToggle) maintenanceToggle.disabled = Boolean(data?.maintenanceFromEnv) || !data?.available;
+    ['setting-ai', 'setting-maps', 'setting-autopause', 'setting-maintenance-message', 'setting-budget', 'setting-retention',
+      'save-maintenance-message', 'save-budget', 'save-retention'].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) el.disabled = !data?.available;
+    });
+    const message = document.getElementById('setting-maintenance-message');
+    if (message && document.activeElement !== message) message.value = s.maintenanceMessage || '';
+    const budget = document.getElementById('setting-budget');
+    if (budget && document.activeElement !== budget) budget.value = String(s.monthlyBudgetUsd ?? 0);
+    const retention = document.getElementById('setting-retention');
+    if (retention && document.activeElement !== retention) retention.value = String(s.archiveRetentionDays ?? 30);
+    const detail = document.getElementById('maintenance-detail');
+    if (detail) {
+      const changed = data?.lastChanged?.maintenance_mode;
+      detail.textContent = data?.maintenanceFromEnv
+        ? 'Turned on by the developer in the server settings (MAINTENANCE_MODE), so it can’t be turned off here.'
+        : (s.maintenanceMode ? 'On: users see your message.' : 'Off: the app is open to users.')
+          + (changed?.updatedAt ? ` Last changed by ${changed.updatedBy || 'an administrator'} ${relativeTime(changed.updatedAt)}.` : '');
+    }
+    const meter = document.getElementById('budget-meter');
+    if (meter) meter.innerHTML = budgetMeterHtml(data?.monthCostUsd, s.monthlyBudgetUsd, data?.budgetPaused);
+    const note = document.getElementById('settings-setup-note');
+    if (note) {
+      note.hidden = Boolean(data?.available);
+      note.textContent = data?.available ? '' : 'These settings can’t be saved until the database is updated. Run backend/migrations/006_settings_usage_archive.sql in SSMS, then reload this page.';
+    }
+  }
+
+  async function saveSettings(changes, successText) {
+    try {
+      const data = await request('/api/admin/app-settings', { method: 'PUT', body: JSON.stringify(changes) });
+      renderSettings(data);
+      setStatus(successText, 'info');
+      return true;
+    } catch (error) {
+      setStatus(getReadableError(error), 'error');
+      if (settingsData) renderSettings(settingsData); // put the switches back as they were
+      return false;
+    }
+  }
+
+  async function loadArchive() {
+    const list = document.getElementById('archive-list');
+    const counts = document.getElementById('archive-counts');
+    if (!list) return;
+    try {
+      const data = await request('/api/admin/archive');
+      const names = { users: 'accounts', trips: 'trips', trip_days: 'trip days', itinerary_activities: 'activities', reminders: 'reminders', app_reviews: 'app reviews', user_preferences: 'preference sets' };
+      if (!data.available) {
+        if (counts) counts.textContent = '';
+        list.innerHTML = '<li class="ax-empty" style="display:block">The archive isn’t set up yet. Run migration 006 to start keeping copies of deleted data.</li>';
+        return;
+      }
+      if (counts) {
+        counts.innerHTML = data.counts.length
+          ? data.counts.map((item) => `<span class="ax-pill">${escapeHtml(formatNumber(item.total))} ${escapeHtml(names[item.table] || item.table)}</span>`).join('')
+          : '';
+      }
+      list.innerHTML = data.recent.length
+        ? data.recent.map((item) => `<li>
+            <span class="ax-feed-icon ${item.deletedByType === 'admin' ? 'k-trip' : 'k-chat'}" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2m3 0-1 14H6L5 6"/></svg></span>
+            <span class="ax-feed-text"><b>${escapeHtml(names[item.table] || item.table)} #${escapeHtml(item.sourceId)}</b> — ${escapeHtml(item.reason || 'Deleted')}${item.deletedBy ? ` <span class="ax-muted">(${escapeHtml(item.deletedBy)})</span>` : ''}</span>
+            <time class="ax-feed-time" title="${escapeHtml(formatDate(item.deletedAt))}">${escapeHtml(relativeTime(item.deletedAt))}</time>
+          </li>`).join('')
+        : `<li class="ax-empty" style="display:block">Nothing has been deleted in the last ${escapeHtml(String(data.retentionDays))} days.</li>`;
+    } catch (error) {
+      list.innerHTML = `<li class="ax-empty" style="display:block">${escapeHtml(getReadableError(error))}</li>`;
+    }
+  }
+
+  async function loadSettings() {
+    try {
+      renderSettings(await request('/api/admin/app-settings'));
+    } catch (error) {
+      setStatus(getReadableError(error), 'error');
+    }
+    void loadArchive();
+  }
+
+  function initSettingsPage() {
+    const toggle = (id, key, onText, offText) => {
+      document.getElementById(id)?.addEventListener('change', (event) => {
+        const on = event.target.checked;
+        void saveSettings({ [key]: on }, on ? onText : offText);
+      });
+    };
+    document.getElementById('setting-maintenance')?.addEventListener('change', async (event) => {
+      const on = event.target.checked;
+      if (on && !window.confirm('Pause the app for all users now? They will see your maintenance message until you turn this off.')) {
+        event.target.checked = false;
+        return;
+      }
+      await saveSettings({ maintenanceMode: on }, on ? 'Maintenance mode is on. The app is paused for users.' : 'Maintenance mode is off. The app is open again.');
+    });
+    toggle('setting-ai', 'aiEnabled', 'AI features are on.', 'AI features are off. The app will not make Gemini calls.');
+    toggle('setting-maps', 'mapsEnabled', 'Maps and places are on.', 'Maps and places are off. The app will not make Google Maps calls.');
+    toggle('setting-autopause', 'autoPauseOnBudget', 'AI and maps will pause when the monthly budget is reached.', 'Automatic pausing is off.');
+    document.getElementById('save-maintenance-message')?.addEventListener('click', () => {
+      void saveSettings({ maintenanceMessage: document.getElementById('setting-maintenance-message')?.value || '' }, 'Maintenance message saved.');
+    });
+    document.getElementById('save-budget')?.addEventListener('click', () => {
+      const value = Number(document.getElementById('setting-budget')?.value);
+      if (!Number.isFinite(value) || value < 0) { setStatus('Enter a budget of 0 or more US dollars.', 'error'); return; }
+      void saveSettings({ monthlyBudgetUsd: value }, value > 0 ? `Monthly budget set to ${usd(value)}.` : 'Monthly budget removed.');
+    });
+    document.getElementById('save-retention')?.addEventListener('click', async () => {
+      const value = Number(document.getElementById('setting-retention')?.value);
+      if (!Number.isInteger(value) || value < 1 || value > 3650) { setStatus('Enter a whole number of days from 1 to 3650.', 'error'); return; }
+      if (await saveSettings({ archiveRetentionDays: value }, `Deleted data will be kept for ${value} day${value === 1 ? '' : 's'}.`)) void loadArchive();
+    });
+    void loadSettings();
+  }
+
+  // ---- API usage ------------------------------------------------------------------------
+  let usageRangeDays = Number(readStoredRange('sidekick.admin.usageRange', [7, 30, 90], 30));
+
+  function renderUsageChart(daily) {
+    const target = document.getElementById('usage-chart');
+    if (!target) return;
+    const max = Math.max(...daily.map((day) => day.costUsd), 0);
+    if (!max) {
+      target.innerHTML = '<p class="ax-empty" style="display:block">No paid API calls in this period.</p>';
+      return;
+    }
+    target.innerHTML = `<div class="ax-usage-bars">${daily.map((day) => {
+      const height = Math.max(2, Math.round((day.costUsd / max) * 100));
+      const label = `${formatChartDate(day.date)}: ${usd(day.costUsd, 3)} from ${formatNumber(day.calls)} call${day.calls === 1 ? '' : 's'}`;
+      return `<span class="ax-usage-bar" style="height:${height}%" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}"></span>`;
+    }).join('')}</div>
+      <div class="ax-usage-axis"><span>${escapeHtml(formatChartDate(daily[0].date))}</span><span>${escapeHtml(formatChartDate(daily[daily.length - 1].date))}</span></div>`;
+  }
+
+  async function loadUsage() {
+    const body = document.getElementById('usage-table-body');
+    const summary = document.getElementById('usage-summary');
+    document.querySelectorAll('[data-usage-range]').forEach((button) => {
+      button.setAttribute('aria-pressed', String(Number(button.dataset.usageRange) === usageRangeDays));
+    });
+    try {
+      const data = await request(`/api/admin/api-usage?days=${usageRangeDays}`);
+      const groups = { ai: 'AI', maps: 'Maps', email: 'Email' };
+      const featureState = (on) => (on ? '<span class="ax-pill ok">On</span>' : '<span class="ax-pill off">Off</span>');
+      if (summary) {
+        summary.innerHTML = `
+          <article class="admin-card ax-usage-tile"><h3>Last ${data.days} days</h3><strong>${usd(data.totalCostUsd)}</strong><p>Estimated cost</p></article>
+          <article class="admin-card ax-usage-tile"><h3>This month</h3>${budgetMeterHtml(data.month.costUsd, data.month.budgetUsd, data.month.paused)}</article>
+          <article class="admin-card ax-usage-tile"><h3>API access</h3><p class="ax-usage-access">AI ${featureState(data.features.ai && !data.month.paused)} Maps ${featureState(data.features.maps && !data.month.paused)}</p><p><a href="admin-controls.html">Change in Settings</a></p></article>`;
+      }
+      const note = document.getElementById('usage-chart-note');
+      if (note) {
+        note.textContent = data.storage === 'database'
+          ? 'In US dollars, by Philippine date.'
+          : `Counting since the server started (${formatDate(data.trackingSince)}). Run migration 006 to keep usage history.`;
+      }
+      renderUsageChart(data.daily);
+      if (body) {
+        const rows = data.apis.filter((api) => api.calls || api.blocked);
+        body.innerHTML = rows.length
+          ? rows.sort((a, b) => b.costUsd - a.costUsd).map((api) => `<tr>
+              <td><b>${escapeHtml(api.label)}</b> <span class="ax-muted">${escapeHtml(groups[api.group] || '')}</span></td>
+              <td>${escapeHtml(formatNumber(api.calls))}</td>
+              <td>${api.blocked ? escapeHtml(formatNumber(api.blocked)) : '—'}</td>
+              <td>${api.group === 'ai' ? `${escapeHtml(formatNumber(api.inputTokens))} / ${escapeHtml(formatNumber(api.outputTokens))}` : '—'}</td>
+              <td><b>${usd(api.costUsd, 3)}</b></td>
+            </tr>`).join('')
+          : '<tr><td colspan="5" class="empty-state">No paid API calls in this period.</td></tr>';
+      }
+    } catch (error) {
+      setStatus(getReadableError(error), 'error');
+      if (body) body.innerHTML = `<tr><td colspan="5" class="empty-state">${escapeHtml(getReadableError(error))}</td></tr>`;
+    }
+  }
+
+  function initUsagePage() {
+    document.querySelectorAll('[data-usage-range]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const days = Number(button.dataset.usageRange);
+        if (days === usageRangeDays) return;
+        usageRangeDays = days;
+        storeRange('sidekick.admin.usageRange', days);
+        void loadUsage();
+      });
+    });
+    document.getElementById('usage-refresh')?.addEventListener('click', () => loadUsage());
+    void loadUsage();
   }
 
   // ---- Reports: audience, what users plan, most engaged users -------------------
@@ -1761,7 +1977,10 @@
       document.getElementById('system-refresh')?.addEventListener('click', () => loadIntegrations());
     }
     if (currentPage === 'settings') {
-      loadSettings();
+      initSettingsPage();
+    }
+    if (currentPage === 'usage') {
+      initUsagePage();
     }
 
     if (currentPage === 'dashboard' || currentPage === 'users' || currentPage === 'itineraries') {

@@ -327,10 +327,40 @@ function showMaintenanceBanner(message) {
     || "Sidekick is under maintenance right now. Please try again later.";
 }
 
+// AI and Maps can be turned off from the admin website (to control API costs). The
+// last known state is kept for this session so screens can skip those features
+// (for example, not loading Google Maps) and show a short notice.
+const FEATURES_KEY = "sidekick.features";
+
+function isFeatureOn(name) {
+  try {
+    const features = JSON.parse(sessionStorage.getItem(FEATURES_KEY) || "{}");
+    return features[name] !== false;
+  } catch (error) {
+    return true;
+  }
+}
+
+function showFeatureNotice(features) {
+  const aiOff = features?.ai === false;
+  const mapsOff = features?.maps === false;
+  if (!aiOff && !mapsOff) return;
+  const message = aiOff && mapsOff
+    ? "AI and map features are paused right now. Your saved trips and reminders still work."
+    : aiOff
+      ? "AI features (Sidekick chat and AI itineraries) are paused right now. Your saved trips still work."
+      : "Maps and place search are paused right now. Your saved trips and reminders still work.";
+  showMaintenanceBanner(message);
+}
+
 async function checkMaintenanceStatus() {
   try {
     const status = await apiRequest("/api/maintenance-status");
+    if (status?.features) {
+      try { sessionStorage.setItem(FEATURES_KEY, JSON.stringify(status.features)); } catch (error) {}
+    }
     if (status?.maintenance) showMaintenanceBanner(status.message);
+    else showFeatureNotice(status?.features);
   } catch (error) {
     // Older backend or offline: nothing to show.
   }
@@ -1208,6 +1238,7 @@ window.SidekickCore = {
   buildAssistantReply,
   getInitialAssistantMessage,
   isPerfLiteMode,
+  isFeatureOn,
   checkTripBudget,
   describeUnrealisticBudget,
   tripBudgetKey,

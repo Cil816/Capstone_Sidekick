@@ -53,6 +53,11 @@ function ensureGoogleMapsLoaded() {
       reject(new Error("No API"));
       return;
     }
+    // Maps turned off by the administrator: don't load (or pay for) the map.
+    if (window.SidekickCore?.isFeatureOn?.("maps") === false) {
+      reject(new Error("Maps are paused right now."));
+      return;
+    }
     const script = document.createElement("script");
     window.gm_authFailure = () => {
       const map = document.getElementById("destination-map");

@@ -180,6 +180,8 @@ if (isProduction) {
     '/reviews': 'admin-reviews.html',
     '/activity': 'admin-activity.html',
     '/system': 'admin-integrations.html',
+    '/api-usage': 'admin-usage.html',
+    '/settings': 'admin-controls.html',
   };
   const ADMIN_PAGE_ROUTES = Object.fromEntries(Object.entries(ADMIN_PAGES).map(([route, file]) => [file, route]));
   ADMIN_PAGE_ROUTES['index.html'] = '/';
@@ -230,29 +232,375 @@ if (isProduction) {
   app.use('/admin', express.static(adminWebsiteDir));
 }
 
+// ---- Admin settings ---------------------------------------------------------------
+// Settings changed from the admin website, stored in dbo.app_settings (migration
+// 006). Every server reads them every 10 seconds, so a change reaches all servers
+// behind the load balancer quickly. Until the table exists, the defaults below and
+// backend/.env apply.
+const SETTING_DEFAULTS = {
+  maintenance_mode: 'false',
+  maintenance_message: '',
+  ai_enabled: 'true',
+  maps_enabled: 'true',
+  monthly_budget_usd: '0', // 0 = no budget set
+  auto_pause_on_budget: 'false',
+  archive_retention_days: '30',
+};
+const settingsState = { values: { ...SETTING_DEFAULTS }, meta: {}, available: false, loadedAt: 0, loading: null };
+
+async function refreshSettings({ force = false } = {}) {
+  if (!force && Date.now() - settingsState.loadedAt < 10000) return settingsState;
+  if (settingsState.loading) return settingsState.loading;
+  settingsState.loading = (async () => {
+    try {
+      const pool = await getPool();
+      const exists = await pool.request().query("SELECT CASE WHEN OBJECT_ID(N'dbo.app_settings', N'U') IS NULL THEN 0 ELSE 1 END AS ok");
+      settingsState.available = Boolean(exists.recordset[0]?.ok);
+      const values = { ...SETTING_DEFAULTS };
+      const meta = {};
+      if (settingsState.available) {
+        const rows = await pool.request().query('SELECT setting_key, setting_value, updated_at, updated_by FROM dbo.app_settings');
+        for (const row of rows.recordset) {
+          if (!(row.setting_key in SETTING_DEFAULTS)) continue;
+          values[row.setting_key] = String(row.setting_value ?? '');
+          meta[row.setting_key] = { updatedAt: row.updated_at, updatedBy: row.updated_by || null };
+        }
+      }
+      settingsState.values = values;
+      settingsState.meta = meta;
+    } catch (error) {
+      // Keep the last known settings if the database is briefly unavailable.
+    } finally {
+      settingsState.loadedAt = Date.now();
+      settingsState.loading = null;
+    }
+    return settingsState;
+  })();
+  return settingsState.loading;
+}
+
+function settingOn(key) {
+  return String(settingsState.values[key] ?? SETTING_DEFAULTS[key]).trim().toLowerCase() === 'true';
+}
+
+function settingNumber(key) {
+  const value = Number(settingsState.values[key] ?? SETTING_DEFAULTS[key]);
+  return Number.isFinite(value) ? value : Number(SETTING_DEFAULTS[key]);
+}
+
+// ---- API usage and credit control -----------------------------------------------------
+// Every call to a paid API goes through fetch, so fetch is wrapped once here: each
+// call is counted (with Gemini token counts) and given an estimated cost, and calls
+// are refused when the administrator has turned that feature off or the monthly
+// budget is used up with automatic pausing on. Cached results never reach fetch, so
+// only real, billable calls are counted.
+// Costs are ESTIMATES from published list prices (USD); free monthly allowances are
+// not subtracted. Check Google Cloud Billing for exact charges.
+const API_RATES = {
+  gemini: { label: 'Gemini AI', group: 'ai', perCall: 0, perInputToken: 0.30 / 1e6, perOutputToken: 2.50 / 1e6 },
+  gemini_search: { label: 'Gemini with Google Search', group: 'ai', perCall: 0.035, perInputToken: 0.30 / 1e6, perOutputToken: 2.50 / 1e6 },
+  places_search: { label: 'Places: text search', group: 'maps', perCall: 0.035 },
+  places_nearby: { label: 'Places: nearby search', group: 'maps', perCall: 0.035 },
+  places_autocomplete: { label: 'Places: autocomplete', group: 'maps', perCall: 0.00283 },
+  places_details: { label: 'Places: place details', group: 'maps', perCall: 0.025 },
+  places_photo: { label: 'Places: photos', group: 'maps', perCall: 0.007 },
+  routes: { label: 'Routes: directions', group: 'maps', perCall: 0.005 },
+  email_check: { label: 'Email address checks', group: 'email', perCall: 0.008 },
+};
+const usagePending = new Map(); // "date|api" -> counts not yet saved to the database
+const usageState = { tableAvailable: false, monthCostUsd: 0, monthKey: '', trackingSince: new Date().toISOString() };
+
+// Usage is grouped by Philippine date (UTC+8), the administrator's day.
+function usageDateKey(time = Date.now()) {
+  return new Date(time + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
+function classifyApiRequest(input, init) {
+  let url;
+  try { url = new URL(input instanceof URL ? input.href : typeof input === 'string' ? input : input?.url); } catch (error) { return null; }
+  const host = url.hostname;
+  const route = url.pathname;
+  if (host === 'generativelanguage.googleapis.com') {
+    const body = typeof init?.body === 'string' ? init.body : '';
+    return /"google_?[sS]earch"\s*:/.test(body) ? 'gemini_search' : 'gemini';
+  }
+  if (host === 'places.googleapis.com') {
+    if (route.endsWith(':searchText')) return 'places_search';
+    if (route.endsWith(':searchNearby')) return 'places_nearby';
+    if (route.endsWith(':autocomplete')) return 'places_autocomplete';
+    if (route.endsWith('/media')) return 'places_photo';
+    return 'places_details';
+  }
+  if (host === 'routes.googleapis.com') return 'routes';
+  if (host.endsWith('zerobounce.net') || host.endsWith('reoon.com')) return 'email_check';
+  return null;
+}
+
+function recordApiUsage(apiKey, { blocked = false, inputTokens = 0, outputTokens = 0 } = {}) {
+  const rate = API_RATES[apiKey];
+  if (!rate) return;
+  const key = `${usageDateKey()}|${apiKey}`;
+  const entry = usagePending.get(key) || { calls: 0, blocked: 0, inputTokens: 0, outputTokens: 0, costUsd: 0 };
+  if (blocked) {
+    entry.blocked += 1;
+  } else {
+    const inTokens = Math.max(0, Number(inputTokens) || 0);
+    const outTokens = Math.max(0, Number(outputTokens) || 0);
+    const cost = rate.perCall + inTokens * (rate.perInputToken || 0) + outTokens * (rate.perOutputToken || 0);
+    entry.calls += 1;
+    entry.inputTokens += inTokens;
+    entry.outputTokens += outTokens;
+    entry.costUsd += cost;
+    if (usageState.monthKey === usageDateKey().slice(0, 7)) usageState.monthCostUsd += cost;
+  }
+  usagePending.set(key, entry);
+}
+
+// Why a call to this group of APIs is refused right now, or '' when it is allowed.
+function apiBlockReason(group) {
+  if (group === 'ai' && !settingOn('ai_enabled')) {
+    return 'AI features are turned off by the administrator right now. Please try again later.';
+  }
+  if (group === 'maps' && !settingOn('maps_enabled')) {
+    return 'Maps and place search are turned off by the administrator right now. Please try again later.';
+  }
+  if ((group === 'ai' || group === 'maps') && isBudgetPaused()) {
+    return 'Sidekick has reached its monthly limit for AI and map features. Please try again later.';
+  }
+  return '';
+}
+
+function isBudgetPaused() {
+  const budget = settingNumber('monthly_budget_usd');
+  return settingOn('auto_pause_on_budget') && budget > 0 && usageState.monthCostUsd >= budget;
+}
+
+const nativeFetch = globalThis.fetch.bind(globalThis);
+globalThis.fetch = async function trackedFetch(input, init) {
+  const apiKey = classifyApiRequest(input, init);
+  if (!apiKey) return nativeFetch(input, init);
+  const reason = apiBlockReason(API_RATES[apiKey].group);
+  if (reason) {
+    recordApiUsage(apiKey, { blocked: true });
+    throw Object.assign(new Error(reason), { statusCode: 503, featureDisabled: true });
+  }
+  const response = await nativeFetch(input, init);
+  if (response.ok) {
+    if (API_RATES[apiKey].group === 'ai') {
+      // Token counts come from the response; read a copy so the caller's body is untouched.
+      response.clone().json()
+        .then((data) => {
+          const usage = data?.usageMetadata || {};
+          recordApiUsage(apiKey, {
+            inputTokens: usage.promptTokenCount,
+            outputTokens: (Number(usage.candidatesTokenCount) || 0) + (Number(usage.thoughtsTokenCount) || 0),
+          });
+        })
+        .catch(() => recordApiUsage(apiKey));
+    } else {
+      recordApiUsage(apiKey);
+    }
+  }
+  return response;
+};
+
+// Saves counted usage to dbo.api_usage_daily (when it exists) and refreshes this
+// month's total, which the budget check uses.
+let usageFlushInProgress = false;
+async function flushApiUsage() {
+  if (usageFlushInProgress) return;
+  usageFlushInProgress = true;
+  try {
+    const pool = await getPool();
+    const exists = await pool.request().query("SELECT CASE WHEN OBJECT_ID(N'dbo.api_usage_daily', N'U') IS NULL THEN 0 ELSE 1 END AS ok");
+    usageState.tableAvailable = Boolean(exists.recordset[0]?.ok);
+    const monthKey = usageDateKey().slice(0, 7);
+    if (usageState.tableAvailable) {
+      for (const [key, entry] of Array.from(usagePending.entries())) {
+        const [date, api] = key.split('|');
+        await pool.request()
+          .input('date', sql.Date, date)
+          .input('api', sql.VarChar(40), api)
+          .input('calls', sql.Int, entry.calls)
+          .input('blocked', sql.Int, entry.blocked)
+          .input('inputTokens', sql.BigInt, entry.inputTokens)
+          .input('outputTokens', sql.BigInt, entry.outputTokens)
+          .input('cost', sql.Decimal(14, 6), entry.costUsd)
+          .query(`
+            MERGE dbo.api_usage_daily WITH (HOLDLOCK) AS target
+            USING (SELECT @date AS usage_date, @api AS api_key) AS source
+              ON target.usage_date = source.usage_date AND target.api_key = source.api_key
+            WHEN MATCHED THEN UPDATE SET
+              call_count = target.call_count + @calls,
+              blocked_count = target.blocked_count + @blocked,
+              input_tokens = target.input_tokens + @inputTokens,
+              output_tokens = target.output_tokens + @outputTokens,
+              est_cost_usd = target.est_cost_usd + @cost
+            WHEN NOT MATCHED THEN INSERT (usage_date, api_key, call_count, blocked_count, input_tokens, output_tokens, est_cost_usd)
+              VALUES (@date, @api, @calls, @blocked, @inputTokens, @outputTokens, @cost);
+          `);
+        // Remove only what was saved; calls counted meanwhile stay for the next flush.
+        const current = usagePending.get(key);
+        if (current === entry) usagePending.delete(key);
+        else if (current) {
+          current.calls -= entry.calls; current.blocked -= entry.blocked;
+          current.inputTokens -= entry.inputTokens; current.outputTokens -= entry.outputTokens;
+          current.costUsd -= entry.costUsd;
+        }
+      }
+      const month = await pool.request()
+        .input('monthStart', sql.Date, `${monthKey}-01`)
+        .query('SELECT COALESCE(SUM(est_cost_usd), 0) AS cost FROM dbo.api_usage_daily WHERE usage_date >= @monthStart');
+      let unsaved = 0;
+      for (const [key, entry] of usagePending) if (key.startsWith(monthKey)) unsaved += entry.costUsd;
+      usageState.monthCostUsd = Number(month.recordset[0]?.cost || 0) + unsaved;
+    } else {
+      let cost = 0;
+      for (const [key, entry] of usagePending) if (key.startsWith(monthKey)) cost += entry.costUsd;
+      usageState.monthCostUsd = cost;
+    }
+    usageState.monthKey = monthKey;
+  } catch (error) {
+    // Usage stays in memory and is saved on the next flush.
+  } finally {
+    usageFlushInProgress = false;
+  }
+}
+
+// ---- Archive of deleted records -------------------------------------------------------
+// Before a user or an administrator deletes something, a full copy of each row is
+// written to dbo.deleted_records in the same database transaction (so a copy exists
+// exactly when the delete succeeds). Password hashes are removed from the copy.
+// Copies are kept for the archive_retention_days setting, then purged. Without the
+// table (migration 006 not run yet), deletions work exactly as before.
+const archiveState = { available: false, checkedAt: 0 };
+
+async function isArchiveAvailable() {
+  if (Date.now() - archiveState.checkedAt < 60000) return archiveState.available;
+  try {
+    const pool = await getPool();
+    const exists = await pool.request().query("SELECT CASE WHEN OBJECT_ID(N'dbo.deleted_records', N'U') IS NULL THEN 0 ELSE 1 END AS ok");
+    archiveState.available = Boolean(exists.recordset[0]?.ok);
+  } catch (error) {
+    archiveState.available = false;
+  }
+  archiveState.checkedAt = Date.now();
+  return archiveState.available;
+}
+
+// Adds the parameters every archive statement reads.
+function withArchiveInfo(request, { byType, by = null, reason }) {
+  return request
+    .input('archiveByType', sql.VarChar(16), byType)
+    .input('archiveBy', sql.NVarChar(255), by ? String(by).slice(0, 255) : null)
+    .input('archiveReason', sql.NVarChar(255), String(reason || '').slice(0, 255));
+}
+
+// Copies the rows of one table (alias x) that the joins/filter select.
+function archiveRowsSql(table, idColumn, fromAndWhere, userIdExpr, { omitPasswordHash = false } = {}) {
+  const doc = `(SELECT y.* FROM dbo.${table} y WHERE y.${idColumn} = x.${idColumn} FOR JSON PATH, WITHOUT_ARRAY_WRAPPER, INCLUDE_NULL_VALUES)`;
+  return `
+    INSERT INTO dbo.deleted_records (source_table, source_id, user_id, deleted_by_type, deleted_by, reason, record_json)
+    SELECT '${table}', CAST(x.${idColumn} AS nvarchar(128)), ${userIdExpr}, @archiveByType, @archiveBy, @archiveReason,
+           ${omitPasswordHash ? `JSON_MODIFY(${doc}, '$.password_hash', NULL)` : doc}
+    FROM dbo.${table} x ${fromAndWhere};`;
+}
+
+// Trips matching tripCondition(alias) with their days, activities and reminders.
+function archiveTripsSql(tripCondition, { reminders = false } = {}) {
+  return [
+    reminders ? archiveRowsSql('reminders', 'reminder_id', `
+      WHERE x.trip_id IN (SELECT t.trip_id FROM dbo.trips t WHERE ${tripCondition('t')})
+         OR x.activity_id IN (
+           SELECT a.activity_id FROM dbo.itinerary_activities a
+           JOIN dbo.trip_days d ON d.trip_day_id = a.trip_day_id
+           JOIN dbo.trips t ON t.trip_id = d.trip_id
+           WHERE ${tripCondition('t')})`, 'x.user_id') : '',
+    archiveRowsSql('itinerary_activities', 'activity_id', `
+      JOIN dbo.trip_days d ON d.trip_day_id = x.trip_day_id
+      JOIN dbo.trips t ON t.trip_id = d.trip_id
+      WHERE ${tripCondition('t')}`, 't.user_id'),
+    archiveRowsSql('trip_days', 'trip_day_id', `
+      JOIN dbo.trips t ON t.trip_id = x.trip_id
+      WHERE ${tripCondition('t')}`, 't.user_id'),
+    archiveRowsSql('trips', 'trip_id', `WHERE ${tripCondition('x')}`, 'x.user_id'),
+  ].join('\n');
+}
+
+// Everything that belongs to the account @userId, including the account itself.
+function archiveUserSql({ reminders = false, reviews = false } = {}) {
+  return [
+    reminders ? archiveRowsSql('reminders', 'reminder_id', 'WHERE x.user_id = @userId', 'x.user_id') : '',
+    archiveTripsSql((alias) => `${alias}.user_id = @userId`),
+    `
+    IF EXISTS (SELECT 1 FROM dbo.user_travel_styles WHERE user_id = @userId)
+       OR EXISTS (SELECT 1 FROM dbo.user_interests WHERE user_id = @userId)
+       OR EXISTS (SELECT 1 FROM dbo.user_preferred_places WHERE user_id = @userId)
+      INSERT INTO dbo.deleted_records (source_table, source_id, user_id, deleted_by_type, deleted_by, reason, record_json)
+      SELECT 'user_preferences', CAST(@userId AS nvarchar(128)), @userId, @archiveByType, @archiveBy, @archiveReason,
+        (SELECT
+           (SELECT s.style_name AS name FROM dbo.user_travel_styles u JOIN dbo.travel_styles s ON s.style_id = u.style_id WHERE u.user_id = @userId FOR JSON PATH) AS travelStyles,
+           (SELECT i.interest_name AS name FROM dbo.user_interests u JOIN dbo.interests i ON i.interest_id = u.interest_id WHERE u.user_id = @userId FOR JSON PATH) AS interests,
+           (SELECT p.place_name AS name FROM dbo.user_preferred_places u JOIN dbo.preferred_places p ON p.place_id = u.place_id WHERE u.user_id = @userId FOR JSON PATH) AS preferredPlaces
+         FOR JSON PATH, WITHOUT_ARRAY_WRAPPER);`,
+    reviews ? archiveRowsSql('app_reviews', 'review_id', 'WHERE x.user_id = @userId', 'x.user_id') : '',
+    archiveRowsSql('users', 'user_id', 'WHERE x.user_id = @userId', 'x.user_id', { omitPasswordHash: true }),
+  ].join('\n');
+}
+
+// Removes archived copies older than the retention setting.
+async function purgeOldArchive() {
+  try {
+    if (!(await isArchiveAvailable())) return;
+    const days = Math.min(3650, Math.max(1, Math.round(settingNumber('archive_retention_days'))));
+    const pool = await getPool();
+    await pool.request().input('days', sql.Int, days)
+      .query('DELETE FROM dbo.deleted_records WHERE deleted_at < DATEADD(day, -@days, SYSUTCDATETIME())');
+  } catch (error) {
+    console.error('Archive cleanup failed:', error.message);
+  }
+}
+
 // ---- Maintenance mode -----------------------------------------------------------
-// MAINTENANCE_MODE=true in backend/.env pauses the app's API with a friendly
-// message (restart the backend after changing it). App pages still load, saved
-// data is untouched, and the admin website (/api/admin/*) keeps working.
-function isMaintenanceMode() {
+// The app's API pauses with a friendly message while maintenance mode is on: turned
+// on from the admin website (Settings), or with MAINTENANCE_MODE=true in backend/.env
+// (the developer's override, which the website cannot turn off). App pages still
+// load, saved data is untouched, and the admin website (/api/admin/*) keeps working.
+function isMaintenanceModeFromEnv() {
   return String(process.env.MAINTENANCE_MODE || '').trim().toLowerCase() === 'true';
 }
 
+function isMaintenanceMode() {
+  return isMaintenanceModeFromEnv() || settingOn('maintenance_mode');
+}
+
 function getMaintenanceMessage() {
-  return String(process.env.MAINTENANCE_MESSAGE || '').trim().slice(0, 300)
+  return String(settingsState.values.maintenance_message || '').trim().slice(0, 300)
+    || String(process.env.MAINTENANCE_MESSAGE || '').trim().slice(0, 300)
     || 'Sidekick is under maintenance right now. Your saved trips are safe. Please try again later.';
 }
 
 app.use('/api', (req, res, next) => {
+  void refreshSettings(); // non-blocking; keeps the settings at most ~10 s old
   if (!isMaintenanceMode()) return next();
   if (req.path === '/maintenance-status' || req.path === '/admin' || req.path.startsWith('/admin/')) return next();
   res.set('Retry-After', '3600');
   return sendJson(res, 503, { error: getMaintenanceMessage(), maintenance: true });
 });
 
-app.get('/api/maintenance-status', (req, res) => {
+app.get('/api/maintenance-status', async (req, res) => {
+  await refreshSettings();
   const maintenance = isMaintenanceMode();
-  return sendJson(res, 200, { maintenance, message: maintenance ? getMaintenanceMessage() : '' });
+  const budgetPaused = isBudgetPaused();
+  return sendJson(res, 200, {
+    maintenance,
+    message: maintenance ? getMaintenanceMessage() : '',
+    // Lets the app skip features the administrator has turned off.
+    features: {
+      ai: settingOn('ai_enabled') && !budgetPaused,
+      maps: settingOn('maps_enabled') && !budgetPaused,
+    },
+  });
 });
 
 app.get('/', (req, res) => {
@@ -1304,6 +1652,11 @@ async function executeSidekickTool(name, args, email) {
       const optionalTables = await new sql.Request(transaction).query(`
         SELECT CASE WHEN OBJECT_ID(N'dbo.reminders', N'U') IS NULL THEN 0 ELSE 1 END AS reminders_available
       `);
+      if (await isArchiveAvailable()) {
+        await withArchiveInfo(new sql.Request(transaction).input('tripId', sql.Int, tripId), {
+          byType: 'user', by: user.email, reason: 'Trip deleted from the Sidekick chat',
+        }).query(archiveTripsSql((alias) => `${alias}.trip_id = @tripId`, { reminders: Boolean(optionalTables.recordset[0]?.reminders_available) }));
+      }
       if (optionalTables.recordset[0]?.reminders_available) {
         await new sql.Request(transaction)
           .input('tripId', sql.Int, tripId)
@@ -3157,8 +3510,14 @@ app.delete('/api/admin/users/:userId', requireAdminAuth, async (req, res) => {
       transactionStarted = false;
       return sendJson(res, 400, { error: 'The confirmation email does not match this account.' });
     }
-    const deleteRequest = new sql.Request(transaction).input('userId', sql.Int, userId);
+    const deleteRequest = withArchiveInfo(new sql.Request(transaction).input('userId', sql.Int, userId), {
+      byType: 'admin', by: req.admin?.username || 'administrator', reason: 'Account deleted by an administrator',
+    });
     const deleteStatements = [
+      ...(await isArchiveAvailable() ? [archiveUserSql({
+        reminders: Boolean(optionalTableState.reminders_available),
+        reviews: Boolean(optionalTableState.app_reviews_available),
+      })] : []),
       ...(optionalTableState.reminders_available ? ['DELETE FROM dbo.reminders WHERE user_id = @userId;'] : []),
       `
         DELETE FROM dbo.itinerary_activities
@@ -3797,6 +4156,194 @@ app.get('/api/admin/settings', requireAdminAuth, async (req, res) => {
   }
 });
 
+// ---- Admin: app controls (maintenance, API access, budget, archive) -------------------
+function settingsPayload() {
+  return {
+    available: settingsState.available,
+    maintenanceFromEnv: isMaintenanceModeFromEnv(),
+    settings: {
+      maintenanceMode: settingOn('maintenance_mode'),
+      maintenanceMessage: String(settingsState.values.maintenance_message || ''),
+      aiEnabled: settingOn('ai_enabled'),
+      mapsEnabled: settingOn('maps_enabled'),
+      monthlyBudgetUsd: settingNumber('monthly_budget_usd'),
+      autoPauseOnBudget: settingOn('auto_pause_on_budget'),
+      archiveRetentionDays: settingNumber('archive_retention_days'),
+    },
+    lastChanged: settingsState.meta,
+    budgetPaused: isBudgetPaused(),
+    monthCostUsd: Number(usageState.monthCostUsd.toFixed(4)),
+  };
+}
+
+app.get('/api/admin/app-settings', requireAdminAuth, async (req, res) => {
+  await refreshSettings({ force: true });
+  return sendJson(res, 200, settingsPayload());
+});
+
+app.put('/api/admin/app-settings', requireAdminAuth, async (req, res) => {
+  const body = req.body || {};
+  const updates = {};
+  const asBool = (value) => (value === true ? 'true' : value === false ? 'false' : null);
+  const fields = [
+    ['maintenanceMode', 'maintenance_mode', asBool],
+    ['aiEnabled', 'ai_enabled', asBool],
+    ['mapsEnabled', 'maps_enabled', asBool],
+    ['autoPauseOnBudget', 'auto_pause_on_budget', asBool],
+    ['maintenanceMessage', 'maintenance_message', (value) => (typeof value === 'string' ? value.trim().slice(0, 300) : null)],
+    ['monthlyBudgetUsd', 'monthly_budget_usd', (value) => {
+      const amount = Number(value);
+      return Number.isFinite(amount) && amount >= 0 && amount <= 1000000 ? String(Math.round(amount * 100) / 100) : null;
+    }],
+    ['archiveRetentionDays', 'archive_retention_days', (value) => {
+      const days = Number(value);
+      return Number.isInteger(days) && days >= 1 && days <= 3650 ? String(days) : null;
+    }],
+  ];
+  for (const [field, key, convert] of fields) {
+    if (!(field in body)) continue;
+    const value = convert(body[field]);
+    if (value === null) return sendJson(res, 400, { error: `The value for ${field} is not valid.` });
+    updates[key] = value;
+  }
+  if (!Object.keys(updates).length) return sendJson(res, 400, { error: 'No settings were changed.' });
+  try {
+    await refreshSettings({ force: true });
+    if (!settingsState.available) {
+      return sendJson(res, 409, { error: 'Settings can’t be saved yet. Run backend/migrations/006_settings_usage_archive.sql on the database first.' });
+    }
+    const pool = await getPool();
+    const admin = String(req.admin?.username || 'administrator').slice(0, 128);
+    for (const [key, value] of Object.entries(updates)) {
+      await pool.request()
+        .input('key', sql.VarChar(64), key)
+        .input('value', sql.NVarChar(1000), value)
+        .input('admin', sql.NVarChar(128), admin)
+        .query(`
+          MERGE dbo.app_settings WITH (HOLDLOCK) AS target
+          USING (SELECT @key AS setting_key) AS source ON target.setting_key = source.setting_key
+          WHEN MATCHED THEN UPDATE SET setting_value = @value, updated_at = SYSUTCDATETIME(), updated_by = @admin
+          WHEN NOT MATCHED THEN INSERT (setting_key, setting_value, updated_at, updated_by)
+            VALUES (@key, @value, SYSUTCDATETIME(), @admin);
+        `);
+    }
+    await refreshSettings({ force: true });
+    return sendJson(res, 200, settingsPayload());
+  } catch (error) {
+    console.error('Admin settings update failed:', error.message);
+    return sendJson(res, 500, { error: 'The settings could not be saved. Please try again.' });
+  }
+});
+
+app.get('/api/admin/api-usage', requireAdminAuth, async (req, res) => {
+  const days = Math.min(90, Math.max(1, Number.parseInt(req.query.days, 10) || 30));
+  try {
+    await flushApiUsage();
+    const end = usageDateKey();
+    const start = usageDateKey(Date.now() - (days - 1) * 24 * 60 * 60 * 1000);
+    const byDayApi = new Map();
+    const add = (date, api, entry) => {
+      if (date < start || date > end || !API_RATES[api]) return;
+      const key = `${date}|${api}`;
+      const current = byDayApi.get(key) || { calls: 0, blocked: 0, inputTokens: 0, outputTokens: 0, costUsd: 0 };
+      current.calls += Number(entry.calls) || 0;
+      current.blocked += Number(entry.blocked) || 0;
+      current.inputTokens += Number(entry.inputTokens) || 0;
+      current.outputTokens += Number(entry.outputTokens) || 0;
+      current.costUsd += Number(entry.costUsd) || 0;
+      byDayApi.set(key, current);
+    };
+    if (usageState.tableAvailable) {
+      const pool = await getPool();
+      const rows = await pool.request().input('start', sql.Date, start)
+        .query(`SELECT CONVERT(char(10), usage_date, 23) AS usage_date, api_key, call_count, blocked_count, input_tokens, output_tokens, est_cost_usd
+                FROM dbo.api_usage_daily WHERE usage_date >= @start`);
+      for (const row of rows.recordset) {
+        add(row.usage_date, row.api_key, {
+          calls: row.call_count, blocked: row.blocked_count, inputTokens: Number(row.input_tokens),
+          outputTokens: Number(row.output_tokens), costUsd: Number(row.est_cost_usd),
+        });
+      }
+    }
+    for (const [key, entry] of usagePending) {
+      const [date, api] = key.split('|');
+      add(date, api, entry);
+    }
+    const apis = Object.entries(API_RATES).map(([key, rate]) => {
+      const totals = { calls: 0, blocked: 0, inputTokens: 0, outputTokens: 0, costUsd: 0 };
+      for (const [entryKey, entry] of byDayApi) {
+        if (!entryKey.endsWith(`|${key}`)) continue;
+        for (const field of Object.keys(totals)) totals[field] += entry[field];
+      }
+      return { key, label: rate.label, group: rate.group, ...totals, costUsd: Number(totals.costUsd.toFixed(4)) };
+    });
+    const daily = [];
+    for (let i = days - 1; i >= 0; i -= 1) {
+      const date = usageDateKey(Date.now() - i * 24 * 60 * 60 * 1000);
+      let calls = 0;
+      let costUsd = 0;
+      for (const [entryKey, entry] of byDayApi) {
+        if (!entryKey.startsWith(`${date}|`)) continue;
+        calls += entry.calls;
+        costUsd += entry.costUsd;
+      }
+      daily.push({ date, calls, costUsd: Number(costUsd.toFixed(4)) });
+    }
+    return sendJson(res, 200, {
+      days,
+      storage: usageState.tableAvailable ? 'database' : 'memory',
+      trackingSince: usageState.tableAvailable ? null : usageState.trackingSince,
+      apis,
+      daily,
+      totalCostUsd: Number(apis.reduce((sum, item) => sum + item.costUsd, 0).toFixed(4)),
+      month: {
+        costUsd: Number(usageState.monthCostUsd.toFixed(4)),
+        budgetUsd: settingNumber('monthly_budget_usd'),
+        autoPause: settingOn('auto_pause_on_budget'),
+        paused: isBudgetPaused(),
+      },
+      features: { ai: settingOn('ai_enabled'), maps: settingOn('maps_enabled') },
+    });
+  } catch (error) {
+    console.error('API usage report failed:', error.message);
+    return sendJson(res, 500, { error: 'Unable to load API usage.' });
+  }
+});
+
+app.get('/api/admin/archive', requireAdminAuth, async (req, res) => {
+  try {
+    archiveState.checkedAt = 0;
+    if (!(await isArchiveAvailable())) {
+      return sendJson(res, 200, { available: false, retentionDays: settingNumber('archive_retention_days'), counts: [], recent: [] });
+    }
+    const pool = await getPool();
+    const [counts, recent] = await Promise.all([
+      pool.request().query('SELECT source_table, COUNT_BIG(*) AS total FROM dbo.deleted_records GROUP BY source_table ORDER BY total DESC'),
+      pool.request().query(`
+        SELECT TOP 25 archive_id, source_table, source_id, user_id, deleted_by_type, deleted_by, reason, deleted_at
+        FROM dbo.deleted_records ORDER BY deleted_at DESC, archive_id DESC`),
+    ]);
+    return sendJson(res, 200, {
+      available: true,
+      retentionDays: settingNumber('archive_retention_days'),
+      counts: counts.recordset.map((row) => ({ table: row.source_table, total: Number(row.total) })),
+      recent: recent.recordset.map((row) => ({
+        archiveId: Number(row.archive_id),
+        table: row.source_table,
+        sourceId: row.source_id,
+        userId: row.user_id,
+        deletedByType: row.deleted_by_type,
+        deletedBy: row.deleted_by,
+        reason: row.reason,
+        deletedAt: row.deleted_at,
+      })),
+    });
+  } catch (error) {
+    console.error('Archive summary failed:', error.message);
+    return sendJson(res, 500, { error: 'Unable to load the archive.' });
+  }
+});
+
 app.get('/health', async (req, res) => {
   try {
     const pool = await getPool();
@@ -4352,10 +4899,18 @@ app.post('/api/account/delete', requireAppAuth, async (req, res) => {
     `;
     const optionalTableState = optionalTables.recordset[0] || {};
 
+    const archiveAvailable = await isArchiveAvailable();
+    const accountEmail = archiveAvailable
+      ? (await pool.request().input('userId', sql.Int, userId).query('SELECT email FROM dbo.users WHERE user_id = @userId')).recordset[0]?.email
+      : null;
     transaction = new sql.Transaction(pool);
     await transaction.begin();
     transactionStarted = true;
     const deleteStatements = [
+      ...(archiveAvailable ? [archiveUserSql({
+        reminders: Boolean(optionalTableState.reminders_available),
+        reviews: Boolean(optionalTableState.app_reviews_available),
+      })] : []),
       ...(optionalTableState.reminders_available ? ['DELETE FROM dbo.reminders WHERE user_id = @userId;'] : []),
       `
         DELETE FROM dbo.itinerary_activities
@@ -4376,7 +4931,9 @@ app.post('/api/account/delete', requireAppAuth, async (req, res) => {
       ...(optionalTableState.otp_verifications_available ? ['DELETE FROM dbo.otp_verifications WHERE user_id = @userId;'] : []),
       'DELETE FROM dbo.users WHERE user_id = @userId;',
     ];
-    await new sql.Request(transaction).input('userId', sql.Int, userId).query(deleteStatements.join('\n'));
+    await withArchiveInfo(new sql.Request(transaction).input('userId', sql.Int, userId), {
+      byType: 'user', by: accountEmail, reason: 'Account deleted by its owner in the app',
+    }).query(deleteStatements.join('\n'));
     await transaction.commit();
     transactionStarted = false;
 
@@ -4460,6 +5017,9 @@ async function persistItineraryForUser(userId, itinerary, meta = {}, existingTri
   let remindersAvailable = false;
   try {
     const pool = await getPool();
+    // Activities and days removed while editing an existing itinerary are archived.
+    const archiveRemovals = Boolean(existingTripId) && await isArchiveAvailable();
+    const removalArchiveInfo = { byType: 'user', by: null, reason: 'Removed while editing the itinerary' };
     transaction = new sql.Transaction(pool);
     await transaction.begin();
     transactionStarted = true;
@@ -4607,6 +5167,15 @@ async function persistItineraryForUser(userId, itinerary, meta = {}, existingTri
         }
       }
       for (const oldActivity of oldDay?.activities.slice(activities.length) || []) {
+        if (archiveRemovals) {
+          await withArchiveInfo(new sql.Request(transaction).input('activityId', sql.Int, oldActivity.activity_id), removalArchiveInfo).query([
+            remindersAvailable ? archiveRowsSql('reminders', 'reminder_id', 'WHERE x.activity_id = @activityId', 'x.user_id') : '',
+            archiveRowsSql('itinerary_activities', 'activity_id', `
+              JOIN dbo.trip_days d ON d.trip_day_id = x.trip_day_id
+              JOIN dbo.trips t ON t.trip_id = d.trip_id
+              WHERE x.activity_id = @activityId`, 't.user_id'),
+          ].join('\n'));
+        }
         if (remindersAvailable) {
           await new sql.Request(transaction)
             .input('activityId', sql.Int, oldActivity.activity_id)
@@ -4620,6 +5189,19 @@ async function persistItineraryForUser(userId, itinerary, meta = {}, existingTri
     if (existingTripId) {
       for (const oldDay of existingDays.values()) {
         if (retainedDayIds.has(oldDay.tripDayId)) continue;
+        if (archiveRemovals) {
+          await withArchiveInfo(new sql.Request(transaction).input('tripDayId', sql.Int, oldDay.tripDayId), removalArchiveInfo).query([
+            remindersAvailable ? archiveRowsSql('reminders', 'reminder_id', `
+              WHERE x.activity_id IN (SELECT a.activity_id FROM dbo.itinerary_activities a WHERE a.trip_day_id = @tripDayId)`, 'x.user_id') : '',
+            archiveRowsSql('itinerary_activities', 'activity_id', `
+              JOIN dbo.trip_days d ON d.trip_day_id = x.trip_day_id
+              JOIN dbo.trips t ON t.trip_id = d.trip_id
+              WHERE x.trip_day_id = @tripDayId`, 't.user_id'),
+            archiveRowsSql('trip_days', 'trip_day_id', `
+              JOIN dbo.trips t ON t.trip_id = x.trip_id
+              WHERE x.trip_day_id = @tripDayId`, 't.user_id'),
+          ].join('\n'));
+        }
         for (const oldActivity of oldDay.activities) {
           if (remindersAvailable) {
             await new sql.Request(transaction)
@@ -4765,6 +5347,11 @@ app.delete('/api/app-itineraries/:tripId', requireAppAuth, async (req, res) => {
     const optionalTables = await new sql.Request(transaction).query(`
       SELECT CASE WHEN OBJECT_ID(N'dbo.reminders', N'U') IS NULL THEN 0 ELSE 1 END AS reminders_available
     `);
+    if (await isArchiveAvailable()) {
+      await withArchiveInfo(new sql.Request(transaction).input('tripId', sql.Int, tripId), {
+        byType: 'user', by: req.appUser.email || null, reason: 'Itinerary removed in the app',
+      }).query(archiveTripsSql((alias) => `${alias}.trip_id = @tripId`, { reminders: Boolean(optionalTables.recordset[0]?.reminders_available) }));
+    }
     if (optionalTables.recordset[0]?.reminders_available) {
       await new sql.Request(transaction)
         .input('tripId', sql.Int, tripId)
@@ -5949,7 +6536,13 @@ setInterval(() => {
 }, 60 * 60 * 1000).unref();
 setInterval(() => {
   void cleanExpiredItineraries().catch(() => {});
+  void purgeOldArchive();
 }, 5 * 60 * 1000).unref();
+// Admin settings and API usage: load at startup, then keep current.
+void refreshSettings({ force: true });
+void flushApiUsage();
+setInterval(() => { void refreshSettings(); }, 10 * 1000).unref();
+setInterval(() => { void flushApiUsage(); }, 30 * 1000).unref();
 
 // Production self-check: warn (in the server log) about missing security settings.
 if (isProduction) {

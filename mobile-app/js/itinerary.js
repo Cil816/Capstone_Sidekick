@@ -27,6 +27,11 @@ function loadGoogleMapsForItinerary() {
       existing.addEventListener("error", () => reject(new Error("Google Maps failed to load.")), { once: true });
       return;
     }
+    // Maps turned off by the administrator: don't load (or pay for) the map.
+    if (window.SidekickCore?.isFeatureOn?.("maps") === false) {
+      reject(new Error("Maps are paused right now."));
+      return;
+    }
     window.gm_authFailure = () => {
       const map = document.getElementById("itinerary-map");
       if (map) map.innerHTML = '<div class="itinerary-map-message">Google Maps could not authenticate this key. Check its website restrictions, billing, and Maps JavaScript API configuration.</div>';
