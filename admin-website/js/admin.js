@@ -1867,6 +1867,14 @@
     const currentPage = document.body.dataset.page;
     if (!ensureAdminSession()) return;
 
+    // On phones the page links are one sideways-scrolling row: start with the
+    // current page's link in view. (Only the row scrolls, never the page.)
+    const navRow = document.querySelector('.admin-sidebar nav');
+    const activeLink = navRow?.querySelector('.admin-nav-link.active');
+    if (navRow && activeLink && navRow.scrollWidth > navRow.clientWidth) {
+      navRow.scrollLeft = Math.max(0, activeLink.offsetLeft - navRow.offsetLeft - (navRow.clientWidth - activeLink.offsetWidth) / 2);
+    }
+
     // Live search: results update as the admin types (no "Find" button).
     const userSearchInput = document.getElementById('user-search');
     const userStatusFilter = document.getElementById('user-status-filter');
