@@ -228,6 +228,13 @@ if (isProduction) {
   ['css', 'js', 'assets'].forEach((folder) => {
     app.use(`/${folder}`, express.static(path.join(adminWebsiteDir, folder), { index: false }));
   });
+  // Service worker for the admin website's offline copy (admin-website/sw.js). It is
+  // served from the site root so it covers every admin page, and always re-checked.
+  app.get('/sw.js', (req, res) => {
+    res.set('Cache-Control', 'no-cache');
+    res.type('application/javascript');
+    res.sendFile(path.join(adminWebsiteDir, 'sw.js'));
+  });
 } else {
   app.use('/admin', express.static(adminWebsiteDir));
 }
@@ -365,10 +372,13 @@ function apiBlockReason(group) {
     return 'Maps and place search are turned off by the administrator right now. Please try again later.';
   }
   if ((group === 'ai' || group === 'maps') && isBudgetPaused()) {
-    return 'Sidekick has reached its monthly limit for AI and map features. Please try again later.';
+    return BUDGET_PAUSED_MESSAGE;
   }
   return '';
 }
+
+// Shown to travelers while the monthly API budget has paused AI and Maps.
+const BUDGET_PAUSED_MESSAGE = 'Sidekick isn’t available right now. Please try again later.';
 
 function isBudgetPaused() {
   const budget = settingNumber('monthly_budget_usd');
@@ -467,20 +477,33 @@ async function flushApiUsage() {
   }
 }
 
-// ---- Archive of deleted records -------------------------------------------------------
-// Before a user or an administrator deletes something, a full copy of each row is
-// written to dbo.deleted_records in the same database transaction (so a copy exists
-// exactly when the delete succeeds). Password hashes are removed from the copy.
-// Copies are kept for the archive_retention_days setting, then purged. Without the
-// table (migration 006 not run yet), deletions work exactly as before.
-const archiveState = { available: false, checkedAt: 0 };
+// ---- Archive of deleted data -------------------------------------------------------
+// Before an account or an itinerary is deleted, its important details are copied into
+// readable archive tables in the same database transaction (so a copy exists exactly
+// when the delete succeeds):
+//   dbo.deleted_users                  the account, its preferences and app rating
+//   dbo.archived_itineraries           each trip (deleted, expired, or stops removed
+//   dbo.archived_itinerary_activities  while editing) and its stops
+// Passwords, chats and reminders are not copied. Copies are kept for the
+// archive_retention_days setting, then purged. Without the tables (migration 007 not
+// run yet), deletions work exactly as before.
+const archiveState = { available: false, lastActive: false, reviews: false, checkedAt: 0 };
 
 async function isArchiveAvailable() {
   if (Date.now() - archiveState.checkedAt < 60000) return archiveState.available;
   try {
     const pool = await getPool();
-    const exists = await pool.request().query("SELECT CASE WHEN OBJECT_ID(N'dbo.deleted_records', N'U') IS NULL THEN 0 ELSE 1 END AS ok");
-    archiveState.available = Boolean(exists.recordset[0]?.ok);
+    const result = await pool.request().query(`
+      SELECT
+        CASE WHEN OBJECT_ID(N'dbo.deleted_users', N'U') IS NOT NULL
+              AND OBJECT_ID(N'dbo.archived_itineraries', N'U') IS NOT NULL
+              AND OBJECT_ID(N'dbo.archived_itinerary_activities', N'U') IS NOT NULL THEN 1 ELSE 0 END AS ok,
+        CASE WHEN COL_LENGTH(N'dbo.users', N'last_active_at') IS NULL THEN 0 ELSE 1 END AS last_active,
+        CASE WHEN OBJECT_ID(N'dbo.app_reviews', N'U') IS NULL THEN 0 ELSE 1 END AS reviews`);
+    const row = result.recordset[0] || {};
+    archiveState.available = Boolean(row.ok);
+    archiveState.lastActive = Boolean(row.last_active);
+    archiveState.reviews = Boolean(row.reviews);
   } catch (error) {
     archiveState.available = false;
   }
@@ -488,7 +511,7 @@ async function isArchiveAvailable() {
   return archiveState.available;
 }
 
-// Adds the parameters every archive statement reads.
+// Adds the parameters every archive statement reads. byType: 'user', 'admin' or 'system'.
 function withArchiveInfo(request, { byType, by = null, reason }) {
   return request
     .input('archiveByType', sql.VarChar(16), byType)
@@ -496,66 +519,108 @@ function withArchiveInfo(request, { byType, by = null, reason }) {
     .input('archiveReason', sql.NVarChar(255), String(reason || '').slice(0, 255));
 }
 
-// Copies the rows of one table (alias x) that the joins/filter select.
-function archiveRowsSql(table, idColumn, fromAndWhere, userIdExpr, { omitPasswordHash = false } = {}) {
-  const doc = `(SELECT y.* FROM dbo.${table} y WHERE y.${idColumn} = x.${idColumn} FOR JSON PATH, WITHOUT_ARRAY_WRAPPER, INCLUDE_NULL_VALUES)`;
+// Each archive statement declares its own table variable, so several can run in one batch.
+let archiveStatementCount = 0;
+
+// Trips matching tripCondition(alias): one archived_itineraries row each, plus their stops.
+function archiveTripsSql(tripCondition) {
+  archiveStatementCount = (archiveStatementCount + 1) % 1000000;
+  const ids = `@archivedTrips${archiveStatementCount}`;
   return `
-    INSERT INTO dbo.deleted_records (source_table, source_id, user_id, deleted_by_type, deleted_by, reason, record_json)
-    SELECT '${table}', CAST(x.${idColumn} AS nvarchar(128)), ${userIdExpr}, @archiveByType, @archiveBy, @archiveReason,
-           ${omitPasswordHash ? `JSON_MODIFY(${doc}, '$.password_hash', NULL)` : doc}
-    FROM dbo.${table} x ${fromAndWhere};`;
+    DECLARE ${ids} TABLE (archive_id bigint NOT NULL, trip_id int NOT NULL);
+    INSERT INTO dbo.archived_itineraries
+      (trip_id, user_id, owner_name, owner_email, trip_title, destination, start_date, end_date, budget,
+       trip_status, day_count, activity_count, trip_created_at, scope, deleted_by_type, deleted_by, reason)
+    OUTPUT INSERTED.archive_id, INSERTED.trip_id INTO ${ids} (archive_id, trip_id)
+    SELECT t.trip_id, t.user_id, u.name, u.email, t.trip_title, t.destination, t.start_date,
+           COALESCE(t.end_date, (SELECT MAX(d.day_date) FROM dbo.trip_days d WHERE d.trip_id = t.trip_id)),
+           t.budget, t.status,
+           (SELECT COUNT(*) FROM dbo.trip_days d WHERE d.trip_id = t.trip_id),
+           (SELECT COUNT(*) FROM dbo.trip_days d
+              JOIN dbo.itinerary_activities a ON a.trip_day_id = d.trip_day_id
+              WHERE d.trip_id = t.trip_id),
+           t.created_at, 'whole_trip', @archiveByType, @archiveBy, @archiveReason
+    FROM dbo.trips t
+    LEFT JOIN dbo.users u ON u.user_id = t.user_id
+    WHERE ${tripCondition('t')};
+    INSERT INTO dbo.archived_itinerary_activities
+      (archive_id, activity_id, day_number, day_date, day_title, title, location, activity_type,
+       start_time, end_time, estimated_cost)
+    SELECT x.archive_id, a.activity_id, d.day_number, d.day_date, d.title, a.title, a.location,
+           a.activity_type, a.start_time, a.end_time, a.estimated_cost
+    FROM ${ids} x
+    JOIN dbo.trip_days d ON d.trip_id = x.trip_id
+    JOIN dbo.itinerary_activities a ON a.trip_day_id = d.trip_day_id;`;
 }
 
-// Trips matching tripCondition(alias) with their days, activities and reminders.
-function archiveTripsSql(tripCondition, { reminders = false } = {}) {
-  return [
-    reminders ? archiveRowsSql('reminders', 'reminder_id', `
-      WHERE x.trip_id IN (SELECT t.trip_id FROM dbo.trips t WHERE ${tripCondition('t')})
-         OR x.activity_id IN (
-           SELECT a.activity_id FROM dbo.itinerary_activities a
-           JOIN dbo.trip_days d ON d.trip_day_id = a.trip_day_id
-           JOIN dbo.trips t ON t.trip_id = d.trip_id
-           WHERE ${tripCondition('t')})`, 'x.user_id') : '',
-    archiveRowsSql('itinerary_activities', 'activity_id', `
-      JOIN dbo.trip_days d ON d.trip_day_id = x.trip_day_id
-      JOIN dbo.trips t ON t.trip_id = d.trip_id
-      WHERE ${tripCondition('t')}`, 't.user_id'),
-    archiveRowsSql('trip_days', 'trip_day_id', `
-      JOIN dbo.trips t ON t.trip_id = x.trip_id
-      WHERE ${tripCondition('t')}`, 't.user_id'),
-    archiveRowsSql('trips', 'trip_id', `WHERE ${tripCondition('x')}`, 'x.user_id'),
-  ].join('\n');
+// Stops (and days) removed from the trip @tripId while editing it: one archived_itineraries
+// row with scope 'removed_stops', plus the removed stops. activityIds come from the database.
+function archiveRemovedStopsSql(activityIds, removedDayCount) {
+  const ids = [...new Set(activityIds.map(Number))].filter((id) => Number.isSafeInteger(id) && id > 0);
+  const days = Math.max(0, Math.floor(Number(removedDayCount) || 0));
+  if (!ids.length && !days) return '';
+  archiveStatementCount = (archiveStatementCount + 1) % 1000000;
+  const row = `@archivedEdit${archiveStatementCount}`;
+  return `
+    DECLARE ${row} TABLE (archive_id bigint NOT NULL);
+    INSERT INTO dbo.archived_itineraries
+      (trip_id, user_id, owner_name, owner_email, trip_title, destination, start_date, end_date, budget,
+       trip_status, day_count, activity_count, trip_created_at, scope, deleted_by_type, deleted_by, reason)
+    OUTPUT INSERTED.archive_id INTO ${row} (archive_id)
+    SELECT t.trip_id, t.user_id, u.name, u.email, t.trip_title, t.destination, t.start_date, t.end_date,
+           t.budget, t.status, ${days}, ${ids.length}, t.created_at, 'removed_stops',
+           @archiveByType, COALESCE(@archiveBy, u.email), @archiveReason
+    FROM dbo.trips t
+    LEFT JOIN dbo.users u ON u.user_id = t.user_id
+    WHERE t.trip_id = @tripId;
+    ${ids.length ? `
+    INSERT INTO dbo.archived_itinerary_activities
+      (archive_id, activity_id, day_number, day_date, day_title, title, location, activity_type,
+       start_time, end_time, estimated_cost)
+    SELECT r.archive_id, a.activity_id, d.day_number, d.day_date, d.title, a.title, a.location,
+           a.activity_type, a.start_time, a.end_time, a.estimated_cost
+    FROM ${row} r
+    CROSS JOIN dbo.itinerary_activities a
+    JOIN dbo.trip_days d ON d.trip_day_id = a.trip_day_id
+    WHERE d.trip_id = @tripId AND a.activity_id IN (${ids.join(', ')});` : ''}`;
 }
 
-// Everything that belongs to the account @userId, including the account itself.
-function archiveUserSql({ reminders = false, reviews = false } = {}) {
+// The account @userId: its trips (with stops) and one deleted_users row. Call
+// isArchiveAvailable() first; it also detects the optional columns used here.
+function archiveUserSql() {
+  const list = (query) => `STUFF((${query} FOR XML PATH(''), TYPE).value('.', 'nvarchar(max)'), 1, 2, '')`;
+  const review = (column) => (archiveState.reviews
+    ? `(SELECT TOP 1 r.${column} FROM dbo.app_reviews r WHERE r.user_id = u.user_id)`
+    : 'NULL');
   return [
-    reminders ? archiveRowsSql('reminders', 'reminder_id', 'WHERE x.user_id = @userId', 'x.user_id') : '',
     archiveTripsSql((alias) => `${alias}.user_id = @userId`),
     `
-    IF EXISTS (SELECT 1 FROM dbo.user_travel_styles WHERE user_id = @userId)
-       OR EXISTS (SELECT 1 FROM dbo.user_interests WHERE user_id = @userId)
-       OR EXISTS (SELECT 1 FROM dbo.user_preferred_places WHERE user_id = @userId)
-      INSERT INTO dbo.deleted_records (source_table, source_id, user_id, deleted_by_type, deleted_by, reason, record_json)
-      SELECT 'user_preferences', CAST(@userId AS nvarchar(128)), @userId, @archiveByType, @archiveBy, @archiveReason,
-        (SELECT
-           (SELECT s.style_name AS name FROM dbo.user_travel_styles u JOIN dbo.travel_styles s ON s.style_id = u.style_id WHERE u.user_id = @userId FOR JSON PATH) AS travelStyles,
-           (SELECT i.interest_name AS name FROM dbo.user_interests u JOIN dbo.interests i ON i.interest_id = u.interest_id WHERE u.user_id = @userId FOR JSON PATH) AS interests,
-           (SELECT p.place_name AS name FROM dbo.user_preferred_places u JOIN dbo.preferred_places p ON p.place_id = u.place_id WHERE u.user_id = @userId FOR JSON PATH) AS preferredPlaces
-         FOR JSON PATH, WITHOUT_ARRAY_WRAPPER);`,
-    reviews ? archiveRowsSql('app_reviews', 'review_id', 'WHERE x.user_id = @userId', 'x.user_id') : '',
-    archiveRowsSql('users', 'user_id', 'WHERE x.user_id = @userId', 'x.user_id', { omitPasswordHash: true }),
+    INSERT INTO dbo.deleted_users
+      (user_id, name, email, is_verified, joined_at, last_active_at, terms_accepted_at,
+       travel_styles, interests, preferred_places, app_rating, app_review, trip_count,
+       deleted_by_type, deleted_by, reason)
+    SELECT u.user_id, u.name, u.email, u.is_verified, u.created_at,
+           ${archiveState.lastActive ? 'u.last_active_at' : 'NULL'}, u.terms_accepted_at,
+           LEFT(${list(`SELECT ', ' + s.style_name FROM dbo.user_travel_styles x JOIN dbo.travel_styles s ON s.style_id = x.style_id WHERE x.user_id = u.user_id ORDER BY s.style_name`)}, 1000),
+           LEFT(${list(`SELECT ', ' + i.interest_name FROM dbo.user_interests x JOIN dbo.interests i ON i.interest_id = x.interest_id WHERE x.user_id = u.user_id ORDER BY i.interest_name`)}, 1000),
+           LEFT(${list(`SELECT ', ' + p.place_name FROM dbo.user_preferred_places x JOIN dbo.preferred_places p ON p.place_id = x.place_id WHERE x.user_id = u.user_id ORDER BY p.place_name`)}, 2000),
+           ${review('rating')}, ${review('review_text')},
+           (SELECT COUNT(*) FROM dbo.trips t WHERE t.user_id = u.user_id),
+           @archiveByType, @archiveBy, @archiveReason
+    FROM dbo.users u
+    WHERE u.user_id = @userId;`,
   ].join('\n');
 }
 
-// Removes archived copies older than the retention setting.
+// Removes archived copies older than the retention setting (stops go with their trip).
 async function purgeOldArchive() {
   try {
     if (!(await isArchiveAvailable())) return;
     const days = Math.min(3650, Math.max(1, Math.round(settingNumber('archive_retention_days'))));
     const pool = await getPool();
-    await pool.request().input('days', sql.Int, days)
-      .query('DELETE FROM dbo.deleted_records WHERE deleted_at < DATEADD(day, -@days, SYSUTCDATETIME())');
+    await pool.request().input('days', sql.Int, days).query(`
+      DELETE FROM dbo.archived_itineraries WHERE deleted_at < DATEADD(day, -@days, SYSUTCDATETIME());
+      DELETE FROM dbo.deleted_users WHERE deleted_at < DATEADD(day, -@days, SYSUTCDATETIME());`);
   } catch (error) {
     console.error('Archive cleanup failed:', error.message);
   }
@@ -595,6 +660,9 @@ app.get('/api/maintenance-status', async (req, res) => {
   return sendJson(res, 200, {
     maintenance,
     message: maintenance ? getMaintenanceMessage() : '',
+    // True while the monthly budget has paused AI and Maps (the app then shows
+    // "Sidekick isn’t available right now").
+    paused: !maintenance && budgetPaused,
     // Lets the app skip features the administrator has turned off.
     features: {
       ai: settingOn('ai_enabled') && !budgetPaused,
@@ -854,7 +922,7 @@ async function requireAdminAuth(req, res, next) {
   const configured = getAdminCredentials();
   if (!configured.username || !configured.password) {
     return sendJson(res, 503, {
-      error: 'Admin authentication is not configured. Set ADMIN_USERNAME and ADMIN_PASSWORD in backend/.env before enabling the admin portal.',
+      error: 'Admin sign-in isn’t set up on the server yet. Contact the system administrator.',
     });
   }
 
@@ -901,6 +969,39 @@ function haversineKm(a, b) {
   const dLng = toRad(b.lng) - toRad(a.lng);
   const h = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) ** 2;
   return 6371 * 2 * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+// ---- Scope: the province of Batangas -------------------------------------------------
+// Sidekick plans trips in Batangas only. Google searches are limited to a box around the
+// province, and a place counts as in Batangas when its address says so; an address that
+// names a neighbouring province is out; anything else falls back to the box.
+const BATANGAS_BOUNDS = { low: { latitude: 13.45, longitude: 120.45 }, high: { latitude: 14.30, longitude: 121.55 } };
+const NEIGHBOURING_PROVINCES = /\b(cavite|laguna|quezon province|quezon,|mindoro|marinduque|romblon|metro manila|manila|rizal|bulacan|pampanga|bataan)\b/i;
+const OUT_OF_SCOPE_MESSAGE = 'Sidekick plans trips in the province of Batangas only. Choose a place in Batangas, like Nasugbu, Anilao, Taal, Lipa or Laiya.';
+
+function insideBatangasBox(lat, lng) {
+  const la = Number(lat);
+  const ln = Number(lng);
+  return lat !== null && lng !== null && Number.isFinite(la) && Number.isFinite(ln)
+    && la >= BATANGAS_BOUNDS.low.latitude && la <= BATANGAS_BOUNDS.high.latitude
+    && ln >= BATANGAS_BOUNDS.low.longitude && ln <= BATANGAS_BOUNDS.high.longitude;
+}
+
+// text: an address or a place suggestion's text; lat/lng when known.
+function isInBatangas({ text = '', lat = null, lng = null } = {}) {
+  const value = String(text || '');
+  if (/\bbatangas\b/i.test(value)) return true;
+  if (NEIGHBOURING_PROVINCES.test(value)) return false;
+  return lat === null || lat === undefined ? true : insideBatangasBox(lat, lng);
+}
+
+// A raw Google place (formattedAddress, location).
+function rawPlaceInBatangas(place) {
+  return isInBatangas({
+    text: place?.formattedAddress || place?.formatted_address || '',
+    lat: place?.location?.latitude ?? null,
+    lng: place?.location?.longitude ?? null,
+  });
 }
 
 function mapPlace(place) {
@@ -1008,7 +1109,21 @@ function parseLocation(value) {
   return { latitude, longitude };
 }
 
-async function callGooglePlacesApi(path, payload) {
+// Every search is limited to Batangas (see BATANGAS_BOUNDS): text searches only look
+// inside the province's box, and results outside the province are dropped. Pass
+// { anyRegion: true } only to find out where a place is (destination check).
+async function callGooglePlacesApi(path, requestPayload) {
+  const { anyRegion = false, ...payload } = requestPayload || {};
+  if (!anyRegion && path === 'places:searchText') {
+    delete payload.locationBias; // can't be combined with a restriction
+    payload.locationRestriction = { rectangle: BATANGAS_BOUNDS };
+  }
+  const data = await callGooglePlacesApiRaw(path, payload);
+  if (anyRegion || !Array.isArray(data?.places)) return data;
+  return { ...data, places: data.places.filter(rawPlaceInBatangas) };
+}
+
+async function callGooglePlacesApiRaw(path, payload) {
   const apiKey = getMapsApiKey();
   if (!apiKey) throw new Error('Google Maps is not configured on the backend. Add GOOGLE_MAPS_API_KEY to backend/.env.');
   const cacheKey = JSON.stringify([path, payload]);
@@ -1038,7 +1153,8 @@ async function callGooglePlacesApi(path, payload) {
         if (entry.expiresAt <= now || placesSearchCache.size >= 450) placesSearchCache.delete(key);
       }
     }
-    placesSearchCache.set(cacheKey, { value: data, expiresAt: Date.now() + 6 * 60 * 60 * 1000 });
+    // Kept for 24 hours and shared by every user: ratings and details rarely change within a day.
+    placesSearchCache.set(cacheKey, { value: data, expiresAt: Date.now() + 24 * 60 * 60 * 1000 });
     return data;
   })();
   placesSearchInFlight.set(cacheKey, request);
@@ -1083,24 +1199,23 @@ async function callGoogleRoutesApi(payload) {
 }
 
 function getKnownDestinationCatalog() {
+  // Sidekick covers the province of Batangas only.
   return [
-    'Banaue Rice Terraces',
-    'Batangas',
-    'Boracay',
-    'Cebu',
-    'Coron',
-    'El Nido',
-    'Intramuros',
-    'Makati',
-    'Palawan',
-    'Rizal Park',
-    'Sagada',
-    'Siargao',
-    'Tagaytay',
+    'Nasugbu',
+    'Anilao, Mabini',
+    'Taal Heritage Town',
     'Taal Volcano',
-    'Bohol',
-    'Davao',
-    'Ilocos Norte',
+    'Lipa City',
+    'Batangas City',
+    'Laiya, San Juan',
+    'Calatagan',
+    'Tingloy (Masasa Beach)',
+    'Lobo',
+    'Fortune Island, Nasugbu',
+    'Mount Batulao, Nasugbu',
+    'Mount Maculot, Cuenca',
+    'Lian',
+    'Tanauan',
   ];
 }
 
@@ -1655,7 +1770,7 @@ async function executeSidekickTool(name, args, email) {
       if (await isArchiveAvailable()) {
         await withArchiveInfo(new sql.Request(transaction).input('tripId', sql.Int, tripId), {
           byType: 'user', by: user.email, reason: 'Trip deleted from the Sidekick chat',
-        }).query(archiveTripsSql((alias) => `${alias}.trip_id = @tripId`, { reminders: Boolean(optionalTables.recordset[0]?.reminders_available) }));
+        }).query(archiveTripsSql((alias) => `${alias}.trip_id = @tripId`));
       }
       if (optionalTables.recordset[0]?.reminders_available) {
         await new sql.Request(transaction)
@@ -1882,7 +1997,7 @@ async function generateAgentReply({ email, message, selectedDestination, history
     `Current preferences: ${JSON.stringify(currentProfile)}`,
     `Conversation history: ${(history || []).slice(-3).map((item) => `${item.role}: ${String(item.content || '').slice(0, 500)}`).join(' | ') || 'none'}`,
   ].join('\n');
-  const systemInstruction = 'You are Sidekick, a friendly Philippine travel companion. Write so anyone can understand on a phone screen: simple, everyday words, short sentences, no jargon. Start with the direct answer. Keep most replies to 2-4 short sentences; when listing options or steps, use at most 5 bullets of one short line each, with the place name in **bold** at the start. Only give longer answers when the user asks for a plan, comparison, or detailed explanation. Do not greet again in the middle of a conversation, avoid canned phrases such as "How can I help?", and do not repeat what the user said. Ask at most one short question, only when you truly need it. When the user asks about tourist spots, places to visit, or what a place is like, call searchPlaces with a precise query that includes the area (for example "Kawasan Falls, Badian, Cebu") so the app can show real photos, and mention those places by their exact names. For itinerary requests, include specific places and times, and route durations only when verified. Do not invent prices, opening hours, or route times; say plainly when they are unavailable. Never output headings for short replies, raw JSON, Markdown fences, or decorative symbols. Use Sidekick tools for current user data and mutations. Never claim a mutation succeeded unless its tool succeeds. Ask for confirmation before destructive deletion. Do not reveal credentials or internal tool details. When the user asks about their own details, answer only the item they asked for (for example, only the name for "what is my name"); never add their email or other personal details they did not ask for.';
+  const systemInstruction = 'You are Sidekick, a friendly travel companion for Batangas, Philippines. Sidekick covers the province of Batangas, Philippines only: recommend, search for and plan only places in Batangas. If the user asks about a place outside Batangas, say in one short sentence that Sidekick currently covers Batangas only, and suggest similar spots in Batangas instead. Write so anyone can understand on a phone screen: simple, everyday words, short sentences, no jargon. Start with the direct answer. Keep most replies to 2-4 short sentences; when listing options or steps, use at most 5 bullets of one short line each, with the place name in **bold** at the start. Only give longer answers when the user asks for a plan, comparison, or detailed explanation. Do not greet again in the middle of a conversation, avoid canned phrases such as "How can I help?", and do not repeat what the user said. Ask at most one short question, only when you truly need it. When the user asks about tourist spots, places to visit, or what a place is like, call searchPlaces with a precise query that includes the area (for example "Fortune Island, Nasugbu, Batangas") so the app can show real photos, and mention those places by their exact names. For itinerary requests, include specific places and times, and route durations only when verified. Do not invent prices, opening hours, or route times; say plainly when they are unavailable. Never output headings for short replies, raw JSON, Markdown fences, or decorative symbols. Use Sidekick tools for current user data and mutations. Never claim a mutation succeeded unless its tool succeeds. Ask for confirmation before destructive deletion. Do not reveal credentials or internal tool details. When the user asks about their own details, answer only the item they asked for (for example, only the name for "what is my name"); never add their email or other personal details they did not ask for.';
   const reviewSystemInstruction = `${systemInstruction} When asked what visitors think or to assess a place from reviews, use only supplied Google rating and review excerpts, summarize praise or criticism only when supported, distinguish the aggregate rating from the sample of up to five excerpts, and clearly say when review details are unavailable. Paraphrase reviews rather than quoting them, and include the supplied Google Maps listing link when available.`;
   const contents = [{ role: 'user', parts: [{ text: `${contextText}\n\nUser request:\n${message}` }] }];
   const uiActions = [];
@@ -1966,7 +2081,7 @@ async function generateItineraryFromAi({ email, message, selectedDestination, pr
   const selectedDestinationName = selectedDestination?.name || selectedDestination?.destination || userProfile.preferredPlaces?.[0] || 'Batangas';
   const destinationList = Array.from(new Set([selectedDestinationName, ...(userProfile.preferredPlaces || []), ...destinationCatalog])).slice(0, 12);
   const contextText = [
-    'You are the Sidekick travel assistant for the Philippine travel app.',
+    'You are the Sidekick travel assistant for Batangas, Philippines. Sidekick covers the province of Batangas, Philippines only: recommend, search for and plan only places in Batangas. If the user asks about a place outside Batangas, say in one short sentence that Sidekick currently covers Batangas only, and suggest similar spots in Batangas instead.',
     'Use only practical, budget-aware, itinerary planning knowledge for local destinations and activities.',
     `User interests: ${userProfile.interests?.join(', ') || 'not provided'}`,
     `Travel style: ${userProfile.travelTypes?.join(', ') || 'not provided'}`,
@@ -1977,7 +2092,7 @@ async function generateItineraryFromAi({ email, message, selectedDestination, pr
     `Trip request: ${message}`,
   ].join('\n');
 
-  const systemInstruction = `You are Sidekick AI, a Philippine travel planner. Return valid JSON only. Format: {"destination":"...","days":[{"day":1,"activities":[{"name":"...","type":"attraction|food|transport|activity","description":"...","location":"...","estimatedCost":500}]}]} . Keep costs in PHP. Use Philippine destinations and keep the plan realistic. Use the user's interests and budget when known. Do not include markdown fences. If destination is missing, infer from the user's profile or selected destination. Keep activities practical and varied.`;
+  const systemInstruction = `You are Sidekick AI, a travel planner for Batangas, Philippines. Sidekick covers the province of Batangas, Philippines only: recommend, search for and plan only places in Batangas. If the user asks about a place outside Batangas, say in one short sentence that Sidekick currently covers Batangas only, and suggest similar spots in Batangas instead. Return valid JSON only. Format: {"destination":"...","days":[{"day":1,"activities":[{"name":"...","type":"attraction|food|transport|activity","description":"...","location":"...","estimatedCost":500}]}]} . Keep costs in PHP. Use only destinations in Batangas and keep the plan realistic. Use the user's interests and budget when known. Do not include markdown fences. If destination is missing, infer from the user's profile or selected destination. Keep activities practical and varied.`;
 
   const raw = await callGeminiApi({
     message,
@@ -2078,7 +2193,11 @@ async function calculateRoute({ origin, destination, travelMode = 'DRIVE' }) {
   if (!origin || !destination) throw inputError('Origin and destination are required to calculate a route.');
   const key = routeCacheKey(origin, destination, mode);
   const cached = routeCache.get(key);
-  if (cached && cached.expiresAt > Date.now()) return cached.value;
+  if (cached && cached.expiresAt > Date.now()) {
+    // "No route" answers are kept too, so the same pair isn't paid for again.
+    if (cached.noRoute) throw Object.assign(new Error(cached.noRoute), { statusCode: 422 });
+    return cached.value;
+  }
 
   let result;
   if (isDevelopmentMode) {
@@ -2115,10 +2234,11 @@ async function calculateRoute({ origin, destination, travelMode = 'DRIVE' }) {
       route = data.routes?.[0];
     }
     if (!route) {
-      throw Object.assign(
-        new Error('Google Maps could not find a driving or public-transit route between these locations. Try a different starting point or destination.'),
-        { statusCode: 422 },
-      );
+      // Usually an island or a spot reached by boat or on foot; that won't change soon.
+      const message = 'Google Maps could not find a driving or public-transit route between these locations. Try a different starting point or destination.';
+      if (routeCache.size >= 500) routeCache.delete(routeCache.keys().next().value);
+      routeCache.set(key, { noRoute: message, expiresAt: Date.now() + 24 * 60 * 60 * 1000 });
+      throw Object.assign(new Error(message), { statusCode: 422 });
     }
     const legs = Array.isArray(route.legs) ? route.legs : [];
     const distanceMeters = Number(route.distanceMeters ?? legs.reduce((sum, leg) => sum + Number(leg.distanceMeters || 0), 0));
@@ -2154,10 +2274,263 @@ async function calculateVerifiedRoute(from, to, travelMode = 'DRIVE') {
   return calculateRoute({ origin: from, destination: to, travelMode });
 }
 
+// ---- Itinerary planning: the traveler's chosen trip style ---------------------------------
+// Before building, the app asks when the traveler wants to explore, how busy each day
+// should be, and what to focus on. Each day is then filled with as many verified stops
+// as fit between the start and end of that time window, with real travel times, while
+// meal times and the night stay free (shown in the app as breaks, not as stops).
+const TRIP_WINDOWS = {
+  morning: {
+    label: 'Morning & daytime', start: 7 * 60, end: 17 * 60,
+    meals: [
+      { kind: 'breakfast', label: 'Breakfast', start: 6 * 60 + 15, minutes: 45, beforeStart: true },
+      { kind: 'lunch', label: 'Lunch break', start: 12 * 60, minutes: 60 },
+    ],
+  },
+  fullday: {
+    label: 'Full day', start: 8 * 60, end: 21 * 60,
+    meals: [
+      { kind: 'breakfast', label: 'Breakfast', start: 7 * 60 + 15, minutes: 45, beforeStart: true },
+      { kind: 'lunch', label: 'Lunch break', start: 12 * 60, minutes: 60 },
+      { kind: 'dinner', label: 'Dinner', start: 18 * 60 + 30, minutes: 60 },
+    ],
+  },
+  afternoon: {
+    label: 'Afternoon to night', start: 13 * 60, end: 23 * 60,
+    meals: [
+      { kind: 'lunch', label: 'Lunch', start: 12 * 60 + 15, minutes: 45, beforeStart: true },
+      { kind: 'dinner', label: 'Dinner', start: 18 * 60 + 30, minutes: 60 },
+    ],
+  },
+  night: {
+    label: 'Night out', start: 16 * 60, end: 24 * 60,
+    meals: [
+      { kind: 'dinner', label: 'Dinner', start: 19 * 60, minutes: 60 },
+    ],
+  },
+};
+const TRIP_PACES = {
+  packed: { label: 'Packed', bufferMinutes: 10, maxStops: 7, durationScale: 0.85 },
+  balanced: { label: 'Balanced', bufferMinutes: 20, maxStops: 5, durationScale: 1 },
+  relaxed: { label: 'Relaxed', bufferMinutes: 35, maxStops: 4, durationScale: 1.15 },
+};
+const BEST_TIME_ORDER = ['early-morning', 'morning', 'midday', 'afternoon', 'sunset', 'evening', 'night'];
+// Totals kept within what the app's cost research and editing screens accept.
+const MAX_REQUESTED_STOPS_PER_TRIP = 48;
+const MAX_SCHEDULED_STOPS_PER_TRIP = 40;
+const MAX_SCHEDULED_STOPS_PER_DAY = 8;
+
+function normalizeTripStyle(style) {
+  const timeOfDay = Object.hasOwn(TRIP_WINDOWS, style?.timeOfDay) ? style.timeOfDay : 'fullday';
+  const pace = Object.hasOwn(TRIP_PACES, style?.pace) ? style.pace : 'packed';
+  const focus = Array.from(new Set((Array.isArray(style?.focus) ? style.focus : [])
+    .map((item) => String(item || '').replace(/[^\p{L}\p{N} &'’-]/gu, '').trim().slice(0, 40))
+    .filter(Boolean))).slice(0, 12);
+  return { timeOfDay, pace, focus };
+}
+
+function formatMinuteOfDay(minutes) {
+  const total = Math.max(0, Math.round(minutes));
+  const hour24 = Math.floor(total / 60) % 24;
+  return `${hour24 % 12 || 12}:${String(total % 60).padStart(2, '0')} ${hour24 >= 12 ? 'PM' : 'AM'}`;
+}
+
+// Rough door-to-door time between two stops, used to decide which stops fit in a day
+// before real routes are requested (Philippine roads average about 22 km/h in town).
+function estimateTravelMinutes(from, to, travelMode = 'DRIVE') {
+  if (!from || !to) return 0;
+  const km = haversineKm(from, to);
+  if (!Number.isFinite(km)) return 30;
+  const speedKmh = travelMode === 'WALK' ? 4.5 : travelMode === 'BICYCLE' ? 12 : 22;
+  return Math.max(10, Math.round((km / speedKmh) * 60) + 8);
+}
+
+// Orders a day's stops by the best time of day to visit (sunrise spots first, night
+// spots last) and, within the same part of the day, by distance from the previous stop.
+function orderStopsForDay(entries) {
+  const rank = (entry) => {
+    const index = BEST_TIME_ORDER.indexOf(String(entry.activity?.bestTime || '').toLowerCase());
+    return index < 0 ? 2.5 : index; // unknown: between midday and afternoon
+  };
+  const groups = new Map();
+  entries.forEach((entry, index) => {
+    const key = rank(entry);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push({ entry, index });
+  });
+  const ordered = [];
+  for (const key of Array.from(groups.keys()).sort((a, b) => a - b)) {
+    const remaining = groups.get(key).sort((a, b) => a.index - b.index).map((item) => item.entry);
+    while (remaining.length) {
+      const last = ordered[ordered.length - 1]?.place;
+      let bestIndex = 0;
+      if (last) {
+        let bestDistance = Infinity;
+        remaining.forEach((entry, index) => {
+          const distance = haversineKm(last, entry.place);
+          if (distance < bestDistance) { bestDistance = distance; bestIndex = index; }
+        });
+      }
+      ordered.push(remaining.splice(bestIndex, 1)[0]);
+    }
+  }
+  return ordered;
+}
+
+// Earliest sensible time for each part of the day (an hour of leeway is allowed), so a
+// sunset viewpoint or a night market is never squeezed into the morning.
+const BEST_TIME_EARLIEST = {
+  'early-morning': 5 * 60, morning: 7 * 60, midday: 10 * 60 + 30, afternoon: 13 * 60,
+  sunset: 16 * 60 + 30, evening: 18 * 60, night: 19 * 60,
+};
+
+// Fits a day's ordered stops into the time window. Each step takes the first remaining
+// stop (in visiting order) that can start now: not before its part of the day, not
+// clashing with the next meal, and finishing before the day ends. When nothing fits
+// before a meal, the meal comes next; when the remaining stops belong later in the day,
+// the time until then is left free. Returns the kept stops (with start times) and the
+// breaks (meals, and resting at night) to show between them.
+// earliestStart (minutes after midnight) is set for a trip that starts later today: the
+// day then begins at that time, and meals that are already over are left out.
+function fitItineraryDay({ entries, window: baseWindow, pace, maxStops, travelMinutesFor, isLastDay, stayName, earliestStart = null }) {
+  const lateStart = Number.isFinite(earliestStart) && earliestStart > baseWindow.start;
+  const window = lateStart ? { ...baseWindow, start: Math.ceil(earliestStart / 5) * 5 } : baseWindow;
+  const meals = window.meals
+    // A meal whose usual time ended less than an hour ago is still offered (served right away).
+    .filter((meal) => !lateStart || (!meal.beforeStart && meal.start + meal.minutes + 60 > window.start))
+    .map((meal) => ({ ...meal, placed: false }))
+    .sort((a, b) => a.start - b.start);
+  const breaks = [];
+  const addMeal = (meal, startMinute) => {
+    breaks.push({ kind: meal.kind, label: meal.label, startMinute, endMinute: startMinute + meal.minutes });
+    meal.placed = true;
+    return startMinute + meal.minutes;
+  };
+  for (const meal of meals) if (meal.beforeStart) addMeal(meal, meal.start);
+
+  const roundUp = (minutes) => Math.ceil(minutes / 5) * 5;
+  const durationOf = (entry) => Math.max(30, Math.min(240, Math.round((Number(entry.activity?.durationMinutes) || 90) * pace.durationScale / 5) * 5));
+  const earliestOf = (entry) => {
+    const time = BEST_TIME_EARLIEST[String(entry.activity?.bestTime || '').toLowerCase()];
+    return Number.isFinite(time) ? time - 60 : -Infinity;
+  };
+  const remaining = entries.slice();
+  const kept = [];
+  let clock = window.start;
+  let previous = null;
+  for (let guard = 0; remaining.length && kept.length < maxStops && guard < 300; guard += 1) {
+    const nextMeal = meals.find((meal) => !meal.placed && meal.start < window.end);
+    let chosen = null;
+    let waitUntil = Infinity;
+    for (let index = 0; index < remaining.length; index += 1) {
+      const entry = remaining[index];
+      const duration = durationOf(entry);
+      const travel = previous ? Math.max(0, Math.round(travelMinutesFor(previous, entry))) : 0;
+      const start = roundUp(clock + travel);
+      const earliest = earliestOf(entry);
+      if (start < earliest) { waitUntil = Math.min(waitUntil, earliest - travel); continue; }
+      if (nextMeal && (start >= nextMeal.start - 15 || start + duration > nextMeal.start + 45)) continue;
+      if (start + duration > window.end) continue;
+      chosen = { index, entry, start, duration, travel };
+      break;
+    }
+    if (chosen) {
+      remaining.splice(chosen.index, 1);
+      kept.push({ ...chosen.entry, startMinute: chosen.start, durationMinutes: chosen.duration, travelMinutes: chosen.travel });
+      clock = chosen.start + chosen.duration + pace.bufferMinutes;
+      previous = chosen.entry;
+      continue;
+    }
+    // Nothing can start now: eat if a meal comes before any later stop...
+    if (nextMeal && (waitUntil === Infinity || waitUntil >= nextMeal.start - 30)) {
+      clock = addMeal(nextMeal, roundUp(Math.max(clock, nextMeal.start - 30)));
+      continue;
+    }
+    // ...or keep the time free until a later stop's part of the day...
+    if (waitUntil !== Infinity && waitUntil > clock) {
+      clock = roundUp(waitUntil);
+      continue;
+    }
+    break; // ...or nothing else fits today.
+  }
+  // A short day (a late start today) still gets one stop: the shortest suggestion,
+  // trimmed to the time that is left.
+  // If a meal took the little time there was, the stop comes first and the meal after it.
+  if (!kept.length && entries.length) {
+    const shortest = entries.slice().sort((a, b) => durationOf(a) - durationOf(b))[0];
+    const start = roundUp(window.start);
+    const duration = Math.min(durationOf(shortest), Math.floor((window.end - start) / 5) * 5);
+    if (duration >= 30) {
+      kept.push({ ...shortest, startMinute: start, durationMinutes: duration, travelMinutes: 0 });
+      let after = start + duration + 10;
+      for (const item of breaks.filter((entry) => entry.startMinute < start + duration && entry.endMinute > start).sort((a, b) => a.startMinute - b.startMinute)) {
+        const length = item.endMinute - item.startMinute;
+        item.startMinute = roundUp(after);
+        item.endMinute = item.startMinute + length;
+        after = item.endMinute;
+      }
+    }
+  }
+  const lastEnd = kept.length ? kept[kept.length - 1].startMinute + kept[kept.length - 1].durationMinutes : window.start;
+  for (const meal of meals) {
+    if (meal.placed || meal.start >= window.end + 60) continue;
+    addMeal(meal, Math.max(meal.start, lastEnd + 15));
+  }
+  if (!isLastDay) {
+    const lastBreakEnd = breaks.reduce((latest, item) => Math.max(latest, item.endMinute), 0);
+    const restStart = Math.min(Math.max(lastEnd, lastBreakEnd) + 15, 24 * 60);
+    breaks.push({
+      kind: 'rest',
+      label: stayName ? `Back to ${stayName} to rest` : 'Back to your stay to rest',
+      startMinute: restStart,
+      endMinute: null,
+    });
+  }
+  breaks.sort((a, b) => a.startMinute - b.startMinute);
+  return {
+    kept,
+    breaks: breaks.map((item) => ({
+      ...item,
+      timeLabel: item.endMinute === null
+        ? `From ${formatMinuteOfDay(item.startMinute)}`
+        : `${formatMinuteOfDay(item.startMinute)} – ${formatMinuteOfDay(item.endMinute)}`,
+    })),
+  };
+}
+
+// A trip's destination must be in Batangas. Looked up once per place, then remembered.
+const destinationScopeCache = new Map();
+async function assertDestinationInBatangas(destination, placeId = '') {
+  if (isDevelopmentMode) return;
+  const name = String(destination || '').trim();
+  if (/\bbatangas\b/i.test(name)) return;
+  const id = /^[A-Za-z0-9_-]{4,200}$/.test(String(placeId || '')) ? String(placeId) : '';
+  const key = `${id}|${name.toLowerCase()}`;
+  let inside = destinationScopeCache.get(key);
+  if (inside === undefined) {
+    let place = null;
+    if (id && getMapsApiKey()) {
+      const response = await fetch(`https://places.googleapis.com/v1/places/${encodeURIComponent(id)}`, {
+        headers: { 'X-Goog-Api-Key': getMapsApiKey(), 'X-Goog-FieldMask': 'formattedAddress,location' },
+      }).catch(() => null);
+      if (response?.ok) place = await response.json().catch(() => null);
+    }
+    if (!place && name) {
+      const data = await callGooglePlacesApi('places:searchText', { textQuery: `${name}, Philippines`, maxResultCount: 1, anyRegion: true });
+      place = data?.places?.[0] || null;
+    }
+    inside = place ? rawPlaceInBatangas(place) : false;
+    if (destinationScopeCache.size >= 500) destinationScopeCache.clear();
+    destinationScopeCache.set(key, inside);
+  }
+  if (!inside) throw Object.assign(new Error(OUT_OF_SCOPE_MESSAGE), { statusCode: 400 });
+}
+
 async function generateVerifiedItineraryFromAi({ email, message, selectedDestination, profile, origin, includeBudgetResearch = false }) {
   const userProfile = profile || (email ? await getUserProfileContext(email) : {});
   const destination = selectedDestination?.name || selectedDestination?.destination || userProfile.preferredPlaces?.[0];
   if (!destination) throw new Error('Please provide a destination before generating an itinerary.');
+  await assertDestinationInBatangas(destination, selectedDestination?.placeId);
   const startDate = profile?.startDate || new Date().toISOString().slice(0, 10);
   if (!dateOnly(startDate)) throw new Error('A valid trip start date is required.');
   const durationDays = profile?.endDate
@@ -2165,15 +2538,15 @@ async function generateVerifiedItineraryFromAi({ email, message, selectedDestina
     : Math.max(1, Math.min(14, Number(profile?.durationDays || profile?.dayCount || String(message || '').match(/\b(\d{1,2})\s*day/i)?.[1] || 3)));
   const endDate = profile?.endDate || new Date(Date.parse(`${startDate}T00:00:00Z`) + (durationDays - 1) * 86400000).toISOString().slice(0, 10);
   if (durationDays < 1 || durationDays > 14) throw new Error('Itineraries can cover between 1 and 14 days.');
-  const maxActivitiesPerDay = Math.max(2, Math.min(3, Math.floor(32 / durationDays)));
   const requestedMode = String(profile?.transportation || '').toUpperCase();
   const travelMode = ['DRIVE', 'TRANSIT', 'WALK', 'BICYCLE'].includes(requestedMode) ? requestedMode : 'DRIVE';
   const parsedBudgetAmount = Number(String(profile?.budgetAmountPhp ?? '').replace(/[₱,\s]/g, ''));
   const budgetAmountPhp = Number.isSafeInteger(parsedBudgetAmount) && parsedBudgetAmount > 0 && parsedBudgetAmount <= 100000000
     ? parsedBudgetAmount
     : null;
-  const activityBudgetTargetPhp = budgetAmountPhp ? Math.floor(budgetAmountPhp * 0.25) : null;
-  const dailyActivityBudgetTargetPhp = activityBudgetTargetPhp ? Math.floor(activityBudgetTargetPhp / durationDays) : null;
+  if (budgetAmountPhp && budgetAmountPhp > MAX_BUDGET_PER_DAY_PHP * durationDays) {
+    throw new Error(`This budget is far more than a ${durationDays}-day trip could use. Enter a budget of up to ₱${(MAX_BUDGET_PER_DAY_PHP * durationDays).toLocaleString()}.`);
+  }
   const stay = profile?.stay && String(profile.stay.name || '').trim() ? {
     name: String(profile.stay.name).trim().slice(0, 160),
     address: String(profile.stay.address || '').trim().slice(0, 240),
@@ -2184,50 +2557,108 @@ async function generateVerifiedItineraryFromAi({ email, message, selectedDestina
     nightlyHighPhp: Number.isFinite(Number(profile.stay.nightlyHighPhp)) ? Number(profile.stay.nightlyHighPhp) : null,
   } : null;
 
+  // Trip style chosen in the app (defaults: full days, packed).
+  const tripStyle = normalizeTripStyle(profile?.tripStyle);
+  const tripWindow = TRIP_WINDOWS[tripStyle.timeOfDay];
+  const tripPace = TRIP_PACES[tripStyle.pace];
+  const mealMinutesInWindow = tripWindow.meals.filter((meal) => !meal.beforeStart).reduce((sum, meal) => sum + meal.minutes, 0);
+  const openMinutesPerDay = tripWindow.end - tripWindow.start - mealMinutesInWindow;
+  // Stops that fit a day at about 75 minutes each plus travel and a breather.
+  const fittingStops = Math.max(2, Math.floor(openMinutesPerDay / (75 + 25 + tripPace.bufferMinutes)));
+  const maxStopsPerDay = Math.max(2, Math.min(tripPace.maxStops, fittingStops, MAX_SCHEDULED_STOPS_PER_DAY, Math.floor(MAX_SCHEDULED_STOPS_PER_TRIP / durationDays)));
+  // Two backup suggestions per day fill any time a shorter or closer stop leaves free.
+  const maxActivitiesPerDay = Math.max(maxStopsPerDay, Math.min(maxStopsPerDay + 2, Math.floor(MAX_REQUESTED_STOPS_PER_TRIP / durationDays)));
+
+  // Share of the budget for entrance fees and tours: what is left after the stay
+  // (the chosen hotel, or about 40% of the budget), three meals a day and a 10%
+  // reserve for transport and surprises. Kept between 15% and 60% of the budget.
+  const nights = Math.max(0, durationDays - 1);
+  const lodgingEstimatePhp = budgetAmountPhp
+    ? (stay?.nightlyLowPhp ? stay.nightlyLowPhp * nights : Math.round(budgetAmountPhp * 0.4 * (nights ? 1 : 0)))
+    : 0;
+  const mealsEstimatePhp = durationDays * 3 * 200;
+  const activityBudgetTargetPhp = budgetAmountPhp
+    ? Math.round(Math.min(budgetAmountPhp * 0.6, Math.max(budgetAmountPhp * 0.15, budgetAmountPhp - lodgingEstimatePhp - mealsEstimatePhp - budgetAmountPhp * 0.1)))
+    : null;
+  const dailyActivityBudgetTargetPhp = activityBudgetTargetPhp ? Math.floor(activityBudgetTargetPhp / durationDays) : null;
+  // A trip that starts today, later in the day: the app sends the earliest time day 1
+  // can start (about half an hour from now, in the traveler's own time). Day 1 then
+  // starts at that time instead of the morning.
+  const requestedFirstStart = Number(profile?.firstDayStartMinute);
+  const firstDayStartMinute = Number.isInteger(requestedFirstStart) && requestedFirstStart > tripWindow.start && requestedFirstStart < 24 * 60
+    ? requestedFirstStart
+    : null;
+  if (firstDayStartMinute !== null && firstDayStartMinute > tripWindow.end - 60) {
+    throw new Error(`It’s too late today for a “${tripWindow.label}” plan, which ends at ${formatMinuteOfDay(tripWindow.end)}. Start your trip tomorrow${tripStyle.timeOfDay === 'night' ? '' : ' or choose a later time of day'}.`);
+  }
+  const scheduleDay = (entries, dayIndex, travelMinutesFor) => fitItineraryDay({
+    entries,
+    window: tripWindow,
+    pace: tripPace,
+    maxStops: maxStopsPerDay,
+    travelMinutesFor,
+    isLastDay: dayIndex === durationDays - 1,
+    stayName: stay?.name || '',
+    earliestStart: dayIndex === 0 ? firstDayStartMinute : null,
+  });
+  const tripStyleMeta = {
+    ...tripStyle,
+    windowLabel: tripWindow.label,
+    paceLabel: tripPace.label,
+    dayStart: formatMinuteOfDay(tripWindow.start),
+    dayEnd: formatMinuteOfDay(tripWindow.end),
+    ...(firstDayStartMinute !== null ? { firstDayStart: formatMinuteOfDay(firstDayStartMinute) } : {}),
+  };
+
   if (isDevelopmentMode) {
-    const request = String(message || '').toLowerCase();
-    const activityQueriesByDay = [
-      ['Tokyo National Museum museum', 'Shibuya Sky photography'],
-      ['Toyota Automobile Museum cars', 'Tsukiji Outer Market restaurant'],
-      ['Asakusa Senso-ji attraction', 'teamLab Borderless photography'],
-      ['Tokyo Ramen Street restaurant', 'Odaiba Seaside Park attraction'],
-    ];
-    const activitiesByDay = Array.from({ length: durationDays }, (_, dayIndex) => {
-      const count = String(profile?.pace || '').toLowerCase() === 'relaxed' || request.includes('relaxed') ? 2 : 3;
-      const dayQueries = activityQueriesByDay[dayIndex % activityQueriesByDay.length];
-      return dayQueries.slice(0, count).map((query, activityIndex) => {
-        const place = developmentPlace(query, dayIndex + activityIndex);
-        const dueAt = Date.parse(`${startDate}T09:00:00Z`) + dayIndex * 86400000 + activityIndex * 3600000;
+    // Sample places (no Google calls), scheduled exactly like a real itinerary.
+    const sampleTimes = ['morning', 'morning', 'midday', 'afternoon', 'afternoon', 'sunset', 'evening', 'night', 'night', 'afternoon'];
+    const itinerary = Array.from({ length: durationDays }, (_, dayIndex) => {
+      const entries = Array.from({ length: maxActivitiesPerDay }, (_, slot) => {
+        const index = (dayIndex * 3 + slot) % developmentPlaceCatalog.length;
+        const place = developmentPlace(developmentPlaceCatalog[index].name, index);
+        return { place, activity: { durationMinutes: 60 + (slot % 3) * 30, bestTime: sampleTimes[slot % sampleTimes.length], notes: `Development sample matching ${place.category}.` } };
+      });
+      const { kept, breaks } = scheduleDay(orderStopsForDay(entries), dayIndex,
+        (from, to) => developmentRoute(from.place, to.place, travelMode).durationMinutes);
+      const activities = kept.map((entry, activityIndex) => {
+        const route = activityIndex ? developmentRoute(kept[activityIndex - 1].place, entry.place, travelMode) : null;
+        const dueAt = Date.parse(`${startDate}T00:00:00Z`) + dayIndex * 86400000 + entry.startMinute * 60000;
         return {
           id: `mock-${dayIndex + 1}-${activityIndex + 1}`,
-          timeLabel: ['Morning', 'Afternoon', 'Evening'][activityIndex] || 'Flexible',
-          title: place.name,
-          location: place.address,
-          locationAddress: place.address,
-          placeId: place.placeId,
-          locationCoords: { lat: place.lat, lng: place.lng },
+          timeLabel: formatMinuteOfDay(entry.startMinute),
+          durationMinutes: entry.durationMinutes,
+          title: entry.place.name,
+          location: entry.place.address,
+          locationAddress: entry.place.address,
+          category: entry.place.category,
+          placeId: entry.place.placeId,
+          locationCoords: { lat: entry.place.lat, lng: entry.place.lng },
           photoResource: null,
-          note: `Development itinerary activity matching ${place.category} and your preferences.`,
+          note: entry.activity.notes,
           transportMode: 'MOCK_ROUTE',
-          travelMinutes: activityIndex ? developmentRoute(developmentPlace(dayQueries[activityIndex - 1]), place).durationMinutes : 0,
-          travelDistanceKm: activityIndex ? developmentRoute(developmentPlace(dayQueries[activityIndex - 1]), place).distanceMeters / 1000 : 0,
-          estimatedActivityCostPhp: place.estimatedCostPhp,
+          travelMinutes: route ? route.durationMinutes : 0,
+          travelDistanceKm: route ? route.distanceMeters / 1000 : 0,
+          estimatedActivityCostPhp: entry.place.estimatedCostPhp,
           estimatedTransportCostPhp: activityIndex ? 180 : 0,
-          estimatedTotalCostPhp: place.estimatedCostPhp + (activityIndex ? 180 : 0),
+          estimatedTotalCostPhp: entry.place.estimatedCostPhp + (activityIndex ? 180 : 0),
           dueAt,
           iso: new Date(dueAt).toISOString(),
         };
       });
+      const dayTotal = activities.reduce((sum, activity) => sum + activity.estimatedTotalCostPhp, 0);
+      return {
+        dayNumber: dayIndex + 1,
+        dateLabel: labelDate(new Date(Date.parse(`${startDate}T00:00:00Z`) + dayIndex * 86400000).toISOString()),
+        estimatedDayCostPhp: dayTotal,
+        estimatedDayCostLowPhp: dayTotal,
+        estimatedDayCostHighPhp: dayTotal,
+        activities,
+        breaks,
+      };
     });
     return {
-      itinerary: activitiesByDay.map((activities, index) => ({
-        dayNumber: index + 1,
-        dateLabel: labelDate(new Date(Date.parse(`${startDate}T00:00:00Z`) + index * 86400000).toISOString()),
-        estimatedDayCostPhp: activities.reduce((sum, activity) => sum + activity.estimatedTotalCostPhp, 0),
-        estimatedDayCostLowPhp: activities.reduce((sum, activity) => sum + activity.estimatedTotalCostPhp, 0),
-        estimatedDayCostHighPhp: activities.reduce((sum, activity) => sum + activity.estimatedTotalCostPhp, 0),
-        activities,
-      })),
+      itinerary,
       meta: {
         destination,
         startDate,
@@ -2236,7 +2667,11 @@ async function generateVerifiedItineraryFromAi({ email, message, selectedDestina
         source: 'development-mock',
         generatedAt: new Date().toISOString(),
         budget: profile?.budget || userProfile.budget || 'Mid-Range',
+        budgetAmountPhp,
+        activityBudgetTargetPhp,
+        dailyActivityBudgetTargetPhp,
         currency: 'PHP',
+        tripStyle: tripStyleMeta,
         preferences: {
           interests: userProfile.interests || [],
           travelTypes: userProfile.travelTypes || [],
@@ -2248,16 +2683,21 @@ async function generateVerifiedItineraryFromAi({ email, message, selectedDestina
   }
 
   const planningContext = [
-    'You are preparing a preliminary travel itinerary plan.',
+    'You are preparing a preliminary travel itinerary plan for a trip in Batangas, Philippines. Use only places in Batangas.',
     `Destination: ${destination}`,
     `Interests: ${(userProfile.interests || []).join(', ') || 'not provided'}`,
     `Travel style: ${(userProfile.travelTypes || []).join(', ') || 'not provided'}`,
     `Whole-trip budget: ${budgetAmountPhp ? `PHP ${budgetAmountPhp.toLocaleString()} total, including travel to/from, lodging, meals, local transport, activities, and a contingency` : userProfile.budget || 'not provided'}`,
     ...(activityBudgetTargetPhp ? [
-      `Activity ticket/admission planning allowance: about PHP ${activityBudgetTargetPhp.toLocaleString()} total, roughly PHP ${dailyActivityBudgetTargetPhp.toLocaleString()} per day. This is an initial allocation of about 25% of the whole-trip budget, not a quote. Preserve the rest for transport, lodging, meals, and contingency; lower the activity allowance if destination travel or lodging is unusually costly.`,
+      `Entrance fees and tours allowance: about PHP ${activityBudgetTargetPhp.toLocaleString()} total, roughly PHP ${dailyActivityBudgetTargetPhp.toLocaleString()} per day. This is what remains after ${stay?.nightlyLowPhp ? 'the chosen hotel' : 'lodging'}, three meals a day and a 10% reserve for transport and surprises. It is a target, not a quote.`,
     ] : []),
     `Dates: ${startDate} through ${endDate}, inclusive (${durationDays} days).`,
-    `Pace: ${profile?.pace || 'not provided'}`,
+    `Daily schedule (${tripWindow.label}): sightseeing from ${formatMinuteOfDay(tripWindow.start)} to ${formatMinuteOfDay(tripWindow.end)}. Meal breaks are kept free: ${tripWindow.meals.map((meal) => `${meal.label.toLowerCase()} around ${formatMinuteOfDay(meal.start)}`).join(', ')}. Nights are for rest.`,
+    ...(firstDayStartMinute !== null ? [
+      `Day 1 is today and starts late: plan day 1 only from ${formatMinuteOfDay(firstDayStartMinute)} to ${formatMinuteOfDay(tripWindow.end)}, with fewer stops that suit that time of day (no morning places on day 1).`,
+    ] : []),
+    `Pace: ${tripPace.label} (${tripStyle.pace === 'packed' ? 'fill each day with as many good stops as fit' : tripStyle.pace === 'balanced' ? 'a full day with some breathing room' : 'fewer stops with longer, unhurried visits'}).`,
+    `Trip focus chosen for this trip: ${tripStyle.focus.join(', ') || 'no specific focus (use the interests above)'}.`,
     `Must-see: ${(profile?.mustSee || []).join(', ') || 'none'}`,
     `Avoid: ${(profile?.avoid || []).join(', ') || 'none'}`,
     ...(stay ? [`Lodging: the traveler is staying at ${stay.name}${stay.address ? ` (${stay.address})` : ''}. Prefer stops that are practical to reach from there.`] : []),
@@ -2266,10 +2706,10 @@ async function generateVerifiedItineraryFromAi({ email, message, selectedDestina
   const preliminaryText = await callGeminiApi({
     message,
     contextText: planningContext,
-    systemInstruction: `Return JSON only: {"destination":"...","durationDays":${durationDays},"days":[{"day":1,"theme":"...","activities":[{"searchQuery":"exact name of one real place","category":"attraction|museum|park|beach|landmark|activity|shopping","durationMinutes":90,"notes":"..."}]}]}. Return exactly ${durationDays} days from ${startDate} through ${endDate}, with 2-${maxActivitiesPerDay} activities per day. Every searchQuery must be the exact, official name of one specific, real, currently operating tourist spot in or near the selected destination (never a generic category such as "beach" or "museum"), because it is looked up on Google Maps and the top match is used. Do not include restaurants, cafes, or hotels; the traveler picks meals and lodging separately. Order each day's activities so consecutive stops are close to each other. Keep activities within the selected destination area and match the user's interests.`
-      + ` Treat the stated budget as the ceiling for the whole trip, not just admission tickets. When the user provided a numeric budget, use the activity allowance as a target across the days: favor worthwhile free or low-cost places, then include the best paid experiences that fit. Use the allowance deliberately without forcing the user to spend it all; leave the rest for transport, lodging, meals, and contingency. Avoid repeating places. Never invent place IDs, addresses, ratings, opening hours, ticket prices, transportation fares, or travel times. Leave unverified prices unavailable.`,
+    systemInstruction: `Return JSON only: {"destination":"...","durationDays":${durationDays},"days":[{"day":1,"theme":"...","activities":[{"searchQuery":"exact name of one real place","category":"attraction|museum|park|beach|landmark|activity|shopping|tour|nightlife|market","bestTime":"early-morning|morning|midday|afternoon|sunset|evening|night","durationMinutes":90,"notes":"..."}]}]}. Return exactly ${durationDays} days from ${startDate} through ${endDate}, with exactly ${maxActivitiesPerDay} activities per day: enough to fill the daily schedule, listed in visiting order; the last ones are backups used only if time allows. Every searchQuery must be the exact, official name of one specific, real, currently operating tourist spot, tour or experience in or near the selected destination (never a generic category such as "beach" or "museum"), because it is looked up on Google Maps and the top match is used. Do not include restaurants, cafes, or hotels; meal breaks are already reserved and the traveler picks meals and lodging separately (night markets and food streets are fine as evening stops). Give each stop a realistic durationMinutes (30-240) and the bestTime to be there, and fit stops to the daily schedule: sunrise spots and hikes early, museums and indoor places at midday heat, viewpoints and beaches at sunset, and night markets, light shows, night views or nightlife in the evening. Keep each day's stops close together, grouped by area, within the selected destination. Match the trip focus first, then the traveler's interests, and still include the destination's must-see highlights.`
+      + ` Treat the stated budget as the ceiling for the whole trip, not just admission tickets. Use the entrance fees and tours allowance well: when it is generous, include the destination's best paid experiences (island hopping, guided tours, adventure activities, top attractions) rather than only free places; when it is tight, favor excellent free or low-cost places but still fill every day. Avoid repeating places. Never invent place IDs, addresses, ratings, opening hours, ticket prices, transportation fares, or travel times. Leave unverified prices unavailable.`,
     responseMimeType: 'application/json',
-    maxOutputTokens: 3000,
+    maxOutputTokens: Math.min(9000, 1200 + durationDays * maxActivitiesPerDay * 140),
     thinkingLevel: 'low',
   });
   const preliminary = extractJsonObject(preliminaryText);
@@ -2357,33 +2797,16 @@ async function generateVerifiedItineraryFromAi({ email, message, selectedDestina
   // Choose each stop without a second AI call. The planning call already named a
   // specific real place per slot, so Google's top verified match for that exact
   // name is used, skipping duplicates and results of the wrong kind (for example a
-  // hotel returned for an attraction search). Stops are then ordered by distance.
+  // hotel returned for an attraction search). Each day's stops are then put in
+  // visiting order: by the best time of day for each, then by distance.
   const isLodging = (place) => (place.types || []).some((type) => /(^|_)(lodging|hotel|motel|hostel|guest_house|bed_and_breakfast)$/.test(String(type)));
   const isFood = (place) => (place.types || []).some((type) => /restaurant|cafe|food|bakery|meal_/.test(String(type)));
   const fitsSlot = (place, category) => {
     const wanted = String(category || '').toLowerCase();
     if (/hotel/.test(wanted)) return true;
-    if (/restaurant|cafe|food/.test(wanted)) return !isLodging(place);
+    // Night markets and food streets are real stops; single restaurants are not.
+    if (/restaurant|cafe|food|market|nightlife/.test(wanted)) return !isLodging(place);
     return !isLodging(place) && !isFood(place);
-  };
-  const orderByProximity = (entries) => {
-    if (entries.length < 3) return entries;
-    const remaining = entries.slice(1);
-    const ordered = [entries[0]];
-    while (remaining.length) {
-      const last = ordered[ordered.length - 1].place;
-      let bestIndex = 0;
-      let bestDistance = Infinity;
-      remaining.forEach((entry, index) => {
-        const distance = haversineKm(last, entry.place);
-        if (distance < bestDistance) {
-          bestDistance = distance;
-          bestIndex = index;
-        }
-      });
-      ordered.push(remaining.splice(bestIndex, 1)[0]);
-    }
-    return ordered;
   };
   const verifiedById = new Map(verifiedPlaces.map((place) => [place.placeId, place]));
   const requestedByKey = new Map(requestedActivities.map((activity) => [activity.sourceKey, activity]));
@@ -2397,14 +2820,19 @@ async function generateVerifiedItineraryFromAi({ email, message, selectedDestina
       if (!place || !verifiedById.has(place.placeId)) continue;
       usedPlaces.add(place.placeId);
       selected.push({
-        activity: { durationMinutes: requested.durationMinutes, category: set.category || requested.category || '', notes: requested.notes || '' },
+        activity: {
+          durationMinutes: requested.durationMinutes,
+          bestTime: String(requested.bestTime || ''),
+          category: set.category || requested.category || '',
+          notes: requested.notes || '',
+        },
         // Keep the full verified record (photo, etc.) together with the priced candidate fields.
         place: { ...verifiedById.get(place.placeId), ...place },
         sourceKey: set.sourceKey,
       });
     }
     if (!selected.length) throw new Error(`Google Places could not verify activities for day ${dayIndex + 1}.`);
-    return orderByProximity(selected);
+    return orderStopsForDay(selected);
   });
 
   if (candidatePriceResearch && activityBudgetTargetPhp) {
@@ -2445,38 +2873,12 @@ async function generateVerifiedItineraryFromAi({ email, message, selectedDestina
     rebalanceWithinLimit(selectedDays.flat(), activityBudgetTargetPhp);
   }
 
-  let selectedBudgetResearch = null;
-  if (candidatePriceResearch) {
-    const selectedActivities = selectedDays.flat();
-    const liveActivityCosts = selectedActivities.map(({ place }) => {
-      const cost = candidatePriceByPlaceId.get(String(place.placeId));
-      return cost || { placeId: place.placeId, lowPhp: null, highPhp: null, sourceUrls: [] };
-    });
-    const pricedBands = liveActivityCosts.filter((cost) => Number.isFinite(cost.lowPhp) && Number.isFinite(cost.highPhp));
-    {
-      const total = pricedBands.length ? addPriceBands(pricedBands) : null;
-      const sourceMap = new Map(liveActivityCosts.flatMap((cost) => cost.sources || []).map((source) => [source.url, source]));
-      selectedBudgetResearch = {
-        liveActivityCosts,
-        liveTripBudget: {
-          status: pricedBands.length && pricedBands.length === selectedActivities.length ? 'complete-estimate' : 'partial-estimate',
-          currency: 'PHP',
-          startDate,
-          endDate,
-          searchedAt: candidatePriceResearch.tripBudget.searchedAt,
-          searchSuggestionHtml: candidatePriceResearch.tripBudget.searchSuggestionHtml,
-          totalLowPhp: total?.lowPhp ?? null,
-          totalHighPhp: total?.highPhp ?? null,
-          pricedActivityCount: pricedBands.length,
-          totalActivityCount: selectedActivities.length,
-          missingActivityPriceCount: Math.max(0, selectedActivities.length - pricedBands.length),
-          sources: Array.from(sourceMap.values()).slice(0, 12),
-        },
-      };
-    }
-  }
+  // First pass: decide which stops fit each day using estimated travel times, so real
+  // routes are only requested for stops that are actually kept.
+  const estimatedTravel = (from, to) => estimateTravelMinutes(from.place, to.place, travelMode);
+  const plannedDays = selectedDays.map((entries, dayIndex) => scheduleDay(entries, dayIndex, estimatedTravel).kept);
 
-  const routePairs = selectedDays.flatMap((activities, dayIndex) => activities.slice(1).map((entry, index) => ({
+  const routePairs = plannedDays.flatMap((activities, dayIndex) => activities.slice(1).map((entry, index) => ({
     day: dayIndex + 1,
     from: activities[index].place,
     to: entry.place,
@@ -2486,26 +2888,55 @@ async function generateVerifiedItineraryFromAi({ email, message, selectedDestina
       const route = await calculateVerifiedRoute(pair.from, pair.to, travelMode);
       return { ...pair, route, unavailableReason: '' };
     } catch (error) {
-      return { ...pair, route: null, unavailableReason: 'Route time unavailable; schedule uses a 30-minute transfer buffer.' };
+      return { ...pair, route: null, unavailableReason: 'Route time unavailable; the schedule uses an estimated travel time.' };
     }
   }));
   const routeByEdge = new Map(routeResults.map((entry) => [`${entry.day}:${entry.from.placeId}:${entry.to.placeId}`, entry]));
-  const formatScheduleTime = (minutes) => {
-    const hour24 = Math.floor(minutes / 60) % 24;
-    const suffix = hour24 >= 12 ? 'PM' : 'AM';
-    return `${hour24 % 12 || 12}:${String(minutes % 60).padStart(2, '0')} ${suffix}`;
-  };
-  const itinerary = selectedDays.map((activities, dayIndex) => {
-    let scheduleMinute = 9 * 60;
-    const scheduledActivities = activities.map(({ activity, place }, activityIndex) => {
-      const previous = activityIndex ? activities[activityIndex - 1].place : null;
+
+  // Second pass: the final times with real travel times (a stop that no longer fits
+  // before the day ends is left out).
+  const finalDays = plannedDays.map((entries, dayIndex) => scheduleDay(entries, dayIndex, (from, to) => {
+    const route = routeByEdge.get(`${dayIndex + 1}:${from.place.placeId}:${to.place.placeId}`)?.route;
+    return Number.isFinite(route?.durationMinutes) ? route.durationMinutes : estimatedTravel(from, to);
+  }));
+
+  let selectedBudgetResearch = null;
+  if (candidatePriceResearch) {
+    const selectedActivities = finalDays.flatMap((day) => day.kept);
+    const liveActivityCosts = selectedActivities.map(({ place }) => {
+      const cost = candidatePriceByPlaceId.get(String(place.placeId));
+      return cost || { placeId: place.placeId, lowPhp: null, highPhp: null, sourceUrls: [] };
+    });
+    const pricedBands = liveActivityCosts.filter((cost) => Number.isFinite(cost.lowPhp) && Number.isFinite(cost.highPhp));
+    const total = pricedBands.length ? addPriceBands(pricedBands) : null;
+    const sourceMap = new Map(liveActivityCosts.flatMap((cost) => cost.sources || []).map((source) => [source.url, source]));
+    selectedBudgetResearch = {
+      liveActivityCosts,
+      liveTripBudget: {
+        status: pricedBands.length && pricedBands.length === selectedActivities.length ? 'complete-estimate' : 'partial-estimate',
+        currency: 'PHP',
+        startDate,
+        endDate,
+        searchedAt: candidatePriceResearch.tripBudget.searchedAt,
+        searchSuggestionHtml: candidatePriceResearch.tripBudget.searchSuggestionHtml,
+        totalLowPhp: total?.lowPhp ?? null,
+        totalHighPhp: total?.highPhp ?? null,
+        pricedActivityCount: pricedBands.length,
+        totalActivityCount: selectedActivities.length,
+        missingActivityPriceCount: Math.max(0, selectedActivities.length - pricedBands.length),
+        sources: Array.from(sourceMap.values()).slice(0, 12),
+      },
+    };
+  }
+
+  const itinerary = finalDays.map(({ kept, breaks }, dayIndex) => {
+    const scheduledActivities = kept.map(({ activity, place, startMinute, durationMinutes }, activityIndex) => {
+      const previous = activityIndex ? kept[activityIndex - 1].place : null;
       const routeEntry = previous ? routeByEdge.get(`${dayIndex + 1}:${previous.placeId}:${place.placeId}`) : null;
-      if (previous) scheduleMinute += (routeEntry?.route?.durationMinutes || 30) + 15;
-      const dueAt = Date.parse(`${startDate}T00:00:00Z`) + dayIndex * 86400000 + scheduleMinute * 60000;
-      const durationMinutes = Math.max(30, Math.min(240, Math.round(Number(activity.durationMinutes) || 90)));
-      const result = {
+      const dueAt = Date.parse(`${startDate}T00:00:00Z`) + dayIndex * 86400000 + startMinute * 60000;
+      return {
         id: `verified-${dayIndex + 1}-${activityIndex + 1}`,
-        timeLabel: formatScheduleTime(scheduleMinute),
+        timeLabel: formatMinuteOfDay(startMinute),
         durationMinutes,
         title: place.name,
         location: place.address,
@@ -2524,8 +2955,6 @@ async function generateVerifiedItineraryFromAi({ email, message, selectedDestina
         dueAt,
         iso: new Date(dueAt).toISOString(),
       };
-      scheduleMinute += durationMinutes;
-      return result;
     });
     return {
       dayNumber: dayIndex + 1,
@@ -2534,6 +2963,7 @@ async function generateVerifiedItineraryFromAi({ email, message, selectedDestina
       estimatedDayCostLowPhp: null,
       estimatedDayCostHighPhp: null,
       activities: scheduledActivities,
+      breaks,
     };
   });
 
@@ -2552,6 +2982,7 @@ async function generateVerifiedItineraryFromAi({ email, message, selectedDestina
       dailyActivityBudgetTargetPhp,
       ...(selectedBudgetResearch || {}),
       currency: 'PHP',
+      tripStyle: tripStyleMeta,
       verifiedPlaceCount: verifiedPlaces.length,
       ...(stay ? { stay } : {}),
       origin: origin ? {
@@ -2570,7 +3001,7 @@ async function generateChatReply({ email, message, selectedDestination, history,
   const userProfile = profile || (email ? await getUserProfileContext(email) : { travelTypes: [], interests: [], preferredPlaces: [] });
   const destinationName = selectedDestination?.name || selectedDestination?.destination || userProfile.preferredPlaces?.[0] || '';
   const contextText = [
-    'You are the Sidekick AI travel assistant for the Philippines.',
+    'You are the Sidekick AI travel assistant for Batangas, Philippines. Sidekick covers the province of Batangas, Philippines only: recommend, search for and plan only places in Batangas. If the user asks about a place outside Batangas, say in one short sentence that Sidekick currently covers Batangas only, and suggest similar spots in Batangas instead.',
     'Use the user profile and destination context when available and avoid asking for information the user already supplied.',
     `User travel style: ${userProfile.travelTypes?.join(', ') || 'not provided'}`,
     `User interests: ${userProfile.interests?.join(', ') || 'not provided'}`,
@@ -2579,7 +3010,7 @@ async function generateChatReply({ email, message, selectedDestination, history,
     `Conversation history: ${(history || []).slice(-6).map((item) => `${item.role}: ${item.content}`).join(' | ') || 'none'}`,
   ].join('\n');
 
-  const systemInstruction = `You are Sidekick AI, a helpful Philippine travel planner. Match the answer length to the request: simple questions can be brief, while travel planning, budgets, comparisons, and explanations should include enough specific detail to be useful. For itinerary information, use verified places, scheduled times, estimated visit durations, and route durations only when available. Do not invent prices or travel times; state clearly when information is unavailable. Keep the answer practical, friendly, and specific to Philippine destinations, food, beaches, attractions, and transportation. Do not reveal API keys or internal implementation details.`;
+  const systemInstruction = `You are Sidekick AI, a helpful travel planner for Batangas, Philippines. Sidekick covers the province of Batangas, Philippines only: recommend, search for and plan only places in Batangas. If the user asks about a place outside Batangas, say in one short sentence that Sidekick currently covers Batangas only, and suggest similar spots in Batangas instead. Match the answer length to the request: simple questions can be brief, while travel planning, budgets, comparisons, and explanations should include enough specific detail to be useful. For itinerary information, use verified places, scheduled times, estimated visit durations, and route durations only when available. Do not invent prices or travel times; state clearly when information is unavailable. Keep the answer practical, friendly, and specific to Batangas destinations, food, beaches, attractions, and transportation. Do not reveal API keys or internal implementation details.`;
 
   let reply = '';
   try {
@@ -2593,7 +3024,14 @@ async function generateChatReply({ email, message, selectedDestination, history,
     return { reply: sanitizePlanText(reply) };
   }
 
-  const generated = await generateVerifiedItineraryFromAi({ email, message, selectedDestination, profile: userProfile });
+  let generated;
+  try {
+    generated = await generateVerifiedItineraryFromAi({ email, message, selectedDestination, profile: userProfile });
+  } catch (error) {
+    // Outside Batangas: answer without building a trip.
+    if (error.statusCode === 400) return { reply: `${sanitizePlanText(reply)}\n\n${error.message}` };
+    throw error;
+  }
   return {
     reply: `${sanitizePlanText(reply)}\n\nI built a structured itinerary for ${generated.meta.destination || destinationName || 'your trip'}. Open the Itinerary tab to review it.`,
     itinerary: generated.itinerary,
@@ -2601,7 +3039,31 @@ async function generateChatReply({ email, message, selectedDestination, history,
   };
 }
 
+// Error text that looks technical (database, network, library or key names) instead of
+// being written for the person using the app or the admin website.
+const TECHNICAL_ERROR_PATTERN = /\b(?:typeerror|referenceerror|syntaxerror|rangeerror|undefined|is not a function|is not defined|cannot read|cannot set|unexpected token|json|failed to fetch|fetch failed|networkerror|econn\w*|etimedout|enotfound|eai_again|socket|sql|tedious|mssql|constraint|deadlock|invalid column|invalid object|stack|status code|http \d{3}|api key|api_key|backend|endpoint|not configured|quota|resource_exhausted|invalid_argument|permission_denied|unauthenticated|errno|exception|googleapis|generativelanguage)\b|\b[A-Z]{2,}_[A-Z_]{2,}\b|https?:\/\//i;
+
+function friendlyErrorText(status, text) {
+  const message = String(text || '').trim();
+  if (message && message.length <= 300 && !TECHNICAL_ERROR_PATTERN.test(message)) return message;
+  if (status === 503 || status === 502 || status === 504) return 'This feature is temporarily unavailable. Please try again in a moment.';
+  if (status >= 500) return 'Something went wrong on the server. Please try again.';
+  if (status === 404) return 'We couldn’t find what you were looking for.';
+  if (status === 401 || status === 403) return 'You don’t have access to this right now. Please sign in again.';
+  if (status === 429) return 'Too many requests. Please wait a moment and try again.';
+  return 'Something went wrong. Please try again.';
+}
+
 function sendJson(res, status, payload) {
+  // Error messages that look technical are replaced with a plain one; the original
+  // goes to the server log so it can still be fixed.
+  if (status >= 400 && payload && typeof payload === 'object' && typeof payload.error === 'string') {
+    const friendly = friendlyErrorText(status, payload.error);
+    if (friendly !== payload.error) {
+      console.error(`Error shown to the user as a plain message (HTTP ${status}):`, payload.error);
+      payload = { ...payload, error: friendly };
+    }
+  }
   // In production, unexpected server errors (500) never reveal internal details
   // such as SQL messages; the details go to the server log instead.
   if (isProduction && status === 500 && payload && typeof payload === 'object') {
@@ -3002,20 +3464,32 @@ app.post('/api/admin/login', async (req, res) => {
 
   if (!configured.username || !configured.password) {
     return sendJson(res, 503, {
-      error: 'Admin authentication is not configured. Set ADMIN_USERNAME and ADMIN_PASSWORD in backend/.env.',
+      error: 'Admin sign-in isn’t set up on the server yet. Contact the system administrator.',
     });
   }
 
-  // A short admin password is too easy to guess on a public website.
-  if (isProduction && configured.password.length < 12) {
+  // A password changed from the admin website replaces the one in backend/.env.
+  let profile;
+  try {
+    profile = await readAdminProfile();
+  } catch (error) {
+    console.error('Admin profile could not be read:', error.message);
+    return sendJson(res, 503, { error: 'Sidekick could not check your sign-in right now. Please try again.' });
+  }
+
+  // A short admin password is too easy to guess on a public website. (Passwords set
+  // from the website are always at least 12 characters.)
+  if (isProduction && !profile.passwordHash && configured.password.length < 12) {
     return sendJson(res, 503, {
-      error: 'Admin sign-in is turned off: ADMIN_PASSWORD must be at least 12 characters in production.',
+      error: 'Admin sign-in is turned off until a stronger administrator password is set on the server. Contact the system administrator.',
     });
   }
-
+  const passwordMatches = profile.passwordHash
+    ? await bcrypt.compare(password, profile.passwordHash)
+    : matchesAdminSecret(password, configured.password);
   if (!username || !password
     || !matchesAdminSecret(username, configured.username)
-    || !matchesAdminSecret(password, configured.password)) {
+    || !passwordMatches) {
     await recordAdminAudit(req, 'admin_login', 'failure');
     return sendJson(res, 401, { error: 'Invalid administrator credentials.' });
   }
@@ -3044,11 +3518,129 @@ app.post('/api/admin/logout', requireAdminAuth, async (req, res) => {
   return sendJson(res, 200, { ok: true, message: 'Admin session closed.' });
 });
 
-app.get('/api/admin/session', requireAdminAuth, (req, res) => {
+app.get('/api/admin/session', requireAdminAuth, async (req, res) => {
+  let displayName = '';
+  try { displayName = (await readAdminProfile()).displayName; } catch (error) { /* name is optional */ }
   return sendJson(res, 200, {
     ok: true,
-    user: { username: req.admin?.username || 'admin', role: req.admin?.role || 'super-admin' },
+    user: { username: req.admin?.username || 'admin', role: req.admin?.role || 'super-admin', displayName },
   });
+});
+
+// ---- Admin: own profile (display name and password) ----------------------------------
+// The sign-in username stays in backend/.env (ADMIN_USERNAME). From the Settings page
+// the administrator can set a display name and change the password. Both are kept in
+// dbo.app_settings (migration 006); the password only as a bcrypt hash, which then
+// replaces ADMIN_PASSWORD from backend/.env for signing in. Neither is ever sent back.
+const ADMIN_NAME_KEY = 'admin_display_name';
+const ADMIN_PASSWORD_KEY = 'admin_password_hash';
+
+async function readAdminProfile() {
+  const pool = await getPool();
+  const exists = await pool.request().query("SELECT CASE WHEN OBJECT_ID(N'dbo.app_settings', N'U') IS NULL THEN 0 ELSE 1 END AS ok");
+  if (!exists.recordset[0]?.ok) return { available: false, displayName: '', passwordHash: '', passwordChangedAt: null };
+  const rows = await pool.request()
+    .input('nameKey', sql.VarChar(64), ADMIN_NAME_KEY)
+    .input('passwordKey', sql.VarChar(64), ADMIN_PASSWORD_KEY)
+    .query('SELECT setting_key, setting_value, updated_at FROM dbo.app_settings WHERE setting_key IN (@nameKey, @passwordKey)');
+  const byKey = Object.fromEntries(rows.recordset.map((row) => [row.setting_key, row]));
+  const hash = String(byKey[ADMIN_PASSWORD_KEY]?.setting_value || '');
+  return {
+    available: true,
+    displayName: String(byKey[ADMIN_NAME_KEY]?.setting_value || '').trim(),
+    // Only a well-formed bcrypt hash counts; anything else leaves the .env password in use.
+    passwordHash: /^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/.test(hash) ? hash : '',
+    passwordChangedAt: byKey[ADMIN_PASSWORD_KEY]?.updated_at || null,
+  };
+}
+
+async function saveAdminProfileValue(key, value, admin) {
+  const pool = await getPool();
+  await pool.request()
+    .input('key', sql.VarChar(64), key)
+    .input('value', sql.NVarChar(1000), value)
+    .input('admin', sql.NVarChar(128), String(admin || 'administrator').slice(0, 128))
+    .query(`
+      MERGE dbo.app_settings WITH (HOLDLOCK) AS target
+      USING (SELECT @key AS setting_key) AS source ON target.setting_key = source.setting_key
+      WHEN MATCHED THEN UPDATE SET setting_value = @value, updated_at = SYSUTCDATETIME(), updated_by = @admin
+      WHEN NOT MATCHED THEN INSERT (setting_key, setting_value, updated_at, updated_by)
+        VALUES (@key, @value, SYSUTCDATETIME(), @admin);
+    `);
+}
+
+const PROFILE_UNAVAILABLE = 'Your profile can’t be changed until the database update for settings is installed. Contact the system administrator.';
+
+app.get('/api/admin/profile', requireAdminAuth, async (req, res) => {
+  try {
+    const profile = await readAdminProfile();
+    return sendJson(res, 200, {
+      available: profile.available,
+      username: req.admin?.username || getAdminCredentials().username,
+      displayName: profile.displayName,
+      passwordChangedAt: profile.passwordHash ? profile.passwordChangedAt : null,
+    });
+  } catch (error) {
+    console.error('Admin profile could not be loaded:', error.message);
+    return sendJson(res, 503, { error: 'Your profile couldn’t be loaded right now. Please try again.' });
+  }
+});
+
+app.put('/api/admin/profile', requireAdminAuth, async (req, res) => {
+  const displayName = String(req.body?.displayName ?? '').replace(/\s+/g, ' ').trim();
+  if (displayName.length > 60) return sendJson(res, 400, { error: 'Use a name of 60 characters or fewer.' });
+  if (/[<>]/.test(displayName)) return sendJson(res, 400, { error: 'Your name can’t contain < or >.' });
+  try {
+    const profile = await readAdminProfile();
+    if (!profile.available) return sendJson(res, 409, { error: PROFILE_UNAVAILABLE });
+    await saveAdminProfileValue(ADMIN_NAME_KEY, displayName, req.admin?.username);
+    await recordAdminAudit(req, 'admin_profile_update', 'success', req.admin?.username || null);
+    return sendJson(res, 200, { ok: true, displayName, message: displayName ? 'Your name was saved.' : 'Your name was removed.' });
+  } catch (error) {
+    console.error('Admin name could not be saved:', error.message);
+    return sendJson(res, 500, { error: 'Your name couldn’t be saved. Please try again.' });
+  }
+});
+
+app.post('/api/admin/profile/password', requireAdminAuth, async (req, res) => {
+  const currentPassword = String(req.body?.currentPassword || '').trim();
+  const newPassword = String(req.body?.newPassword || '').trim();
+  if (isRateLimited(`admin-password:${req.ip}`, 6, 15 * 60 * 1000)) {
+    return sendJson(res, 429, { error: 'Too many attempts. Please wait a few minutes and try again.' });
+  }
+  if (!currentPassword || !newPassword) return sendJson(res, 400, { error: 'Enter your current password and a new password.' });
+  if (newPassword.length < 12 || newPassword.length > 128) {
+    return sendJson(res, 400, { error: 'Use a new password of 12 to 128 characters.' });
+  }
+  if (!/[A-Za-z]/.test(newPassword) || !/\d/.test(newPassword)) {
+    return sendJson(res, 400, { error: 'Use at least one letter and one number in the new password.' });
+  }
+  try {
+    const profile = await readAdminProfile();
+    if (!profile.available) return sendJson(res, 409, { error: PROFILE_UNAVAILABLE });
+    const currentMatches = profile.passwordHash
+      ? await bcrypt.compare(currentPassword, profile.passwordHash)
+      : matchesAdminSecret(currentPassword, getAdminCredentials().password);
+    if (!currentMatches) {
+      await recordAdminAudit(req, 'admin_password_change', 'failure', req.admin?.username || null);
+      return sendJson(res, 400, { error: 'Your current password is incorrect.' });
+    }
+    if (newPassword === currentPassword) return sendJson(res, 400, { error: 'Choose a password different from your current one.' });
+    await saveAdminProfileValue(ADMIN_PASSWORD_KEY, await bcrypt.hash(newPassword, 12), req.admin?.username);
+    // Every other signed-in admin browser is signed out; this one stays signed in.
+    const currentToken = getAdminTokenFromRequest(req);
+    for (const token of Array.from(adminSessions.keys())) if (token !== currentToken) adminSessions.delete(token);
+    if (await hasSessionTables()) {
+      await new sql.Request()
+        .input('tokenHash', sql.Char(64), hashSessionToken(currentToken))
+        .query('DELETE FROM dbo.admin_api_sessions WHERE token_hash <> @tokenHash');
+    }
+    await recordAdminAudit(req, 'admin_password_change', 'success', req.admin?.username || null);
+    return sendJson(res, 200, { ok: true, message: 'Your password was changed. Use it the next time you sign in.' });
+  } catch (error) {
+    console.error('Admin password could not be changed:', error.message);
+    return sendJson(res, 500, { error: 'Your password couldn’t be changed. Please try again.' });
+  }
 });
 
 app.get('/api/admin/summary', requireAdminAuth, async (req, res) => {
@@ -3259,7 +3851,7 @@ app.get('/api/admin/app-reviews', requireAdminAuth, async (req, res) => {
   try {
     const pool = await getPool();
     if (!await hasAppReviewsTable(pool)) {
-      return sendJson(res, 503, { error: 'App reviews are not set up yet. Run backend/migrations/001_create_app_reviews.sql manually in SSMS.' });
+      return sendJson(res, 503, { error: 'App ratings aren’t available yet. Please try again later.' });
     }
 
     const [summary, rows, count, distribution] = await Promise.all([
@@ -3514,10 +4106,7 @@ app.delete('/api/admin/users/:userId', requireAdminAuth, async (req, res) => {
       byType: 'admin', by: req.admin?.username || 'administrator', reason: 'Account deleted by an administrator',
     });
     const deleteStatements = [
-      ...(await isArchiveAvailable() ? [archiveUserSql({
-        reminders: Boolean(optionalTableState.reminders_available),
-        reviews: Boolean(optionalTableState.app_reviews_available),
-      })] : []),
+      ...(await isArchiveAvailable() ? [archiveUserSql()] : []),
       ...(optionalTableState.reminders_available ? ['DELETE FROM dbo.reminders WHERE user_id = @userId;'] : []),
       `
         DELETE FROM dbo.itinerary_activities
@@ -3550,7 +4139,7 @@ app.delete('/api/admin/users/:userId', requireAdminAuth, async (req, res) => {
     }
     appPresence.delete(userId);
     await recordAdminAudit(req, `user_delete_${userId}`, 'success', req.admin?.username || null);
-    return sendJson(res, 200, { ok: true, message: 'The account and its linked Sidekick data were permanently deleted.' });
+    return sendJson(res, 200, { ok: true, message: 'The account and its linked Sidekick data were deleted. A copy is kept in the archive.' });
   } catch (error) {
     if (transactionStarted) {
       try {
@@ -3571,7 +4160,11 @@ async function cleanExpiredItineraries() {
   const batchSize = 50;
   try {
     const pool = await getPool();
-    const request = pool.request();
+    // Expired trips are archived (as deleted by "system") in the same transaction.
+    const archiveExpired = await isArchiveAvailable();
+    const request = withArchiveInfo(pool.request(), {
+      byType: 'system', reason: 'Expired: removed automatically 2 days after the trip ended',
+    });
     request.timeout = 8000;
     const result = await request.query(`
         SET NOCOUNT ON;
@@ -3592,6 +4185,7 @@ async function cleanExpiredItineraries() {
           SELECT @expiredCount = COUNT(*) FROM #expired_trips;
           IF @expiredCount > 0
           BEGIN
+            ${archiveExpired ? archiveTripsSql((alias) => `${alias}.trip_id IN (SELECT trip_id FROM #expired_trips)`) : ''}
             IF OBJECT_ID(N'dbo.reminders', N'U') IS NOT NULL
             BEGIN
               DECLARE @reminderPredicates nvarchar(max) = N'';
@@ -4210,7 +4804,7 @@ app.put('/api/admin/app-settings', requireAdminAuth, async (req, res) => {
   try {
     await refreshSettings({ force: true });
     if (!settingsState.available) {
-      return sendJson(res, 409, { error: 'Settings can’t be saved yet. Run backend/migrations/006_settings_usage_archive.sql on the database first.' });
+      return sendJson(res, 409, { error: 'Settings can’t be saved until the database update for settings is installed. Contact the system administrator.' });
     }
     const pool = await getPool();
     const admin = String(req.admin?.username || 'administrator').slice(0, 128);
@@ -4318,20 +4912,49 @@ app.get('/api/admin/archive', requireAdminAuth, async (req, res) => {
     }
     const pool = await getPool();
     const [counts, recent] = await Promise.all([
-      pool.request().query('SELECT source_table, COUNT_BIG(*) AS total FROM dbo.deleted_records GROUP BY source_table ORDER BY total DESC'),
       pool.request().query(`
-        SELECT TOP 25 archive_id, source_table, source_id, user_id, deleted_by_type, deleted_by, reason, deleted_at
-        FROM dbo.deleted_records ORDER BY deleted_at DESC, archive_id DESC`),
+        SELECT
+          (SELECT COUNT_BIG(*) FROM dbo.deleted_users) AS accounts,
+          (SELECT COUNT_BIG(*) FROM dbo.archived_itineraries WHERE scope = 'whole_trip' AND deleted_by_type <> 'system') AS trips,
+          (SELECT COUNT_BIG(*) FROM dbo.archived_itineraries WHERE scope = 'whole_trip' AND deleted_by_type = 'system') AS expired,
+          (SELECT COUNT_BIG(*) FROM dbo.archived_itineraries WHERE scope = 'removed_stops') AS edits,
+          (SELECT COUNT_BIG(*) FROM dbo.archived_itinerary_activities) AS stops`),
+      pool.request().query(`
+        SELECT TOP 25 kind, archive_id, title, detail, deleted_by_type, deleted_by, reason, deleted_at
+        FROM (
+          SELECT 'account' AS kind, archive_id, name AS title, email AS detail,
+                 deleted_by_type, deleted_by, reason, deleted_at
+          FROM dbo.deleted_users
+          UNION ALL
+          SELECT CASE WHEN scope = 'removed_stops' THEN 'stops'
+                      WHEN deleted_by_type = 'system' THEN 'expired' ELSE 'trip' END,
+                 archive_id, COALESCE(trip_title, destination),
+                 CONCAT(COALESCE(owner_name, owner_email, 'Unknown traveler'), ' · ',
+                        activity_count, CASE WHEN activity_count = 1 THEN ' stop' ELSE ' stops' END),
+                 deleted_by_type, deleted_by, reason, deleted_at
+          FROM dbo.archived_itineraries
+        ) x
+        ORDER BY deleted_at DESC, archive_id DESC`),
     ]);
+    const total = counts.recordset[0] || {};
     return sendJson(res, 200, {
       available: true,
       retentionDays: settingNumber('archive_retention_days'),
-      counts: counts.recordset.map((row) => ({ table: row.source_table, total: Number(row.total) })),
+      counts: [
+        ['accounts', 'deleted account', 'deleted accounts'],
+        ['trips', 'deleted itinerary', 'deleted itineraries'],
+        ['expired', 'expired itinerary', 'expired itineraries'],
+        ['edits', 'edit with removed stops', 'edits with removed stops'],
+        ['stops', 'archived stop', 'archived stops'],
+      ].map(([key, one, many]) => {
+        const count = Number(total[key] || 0);
+        return { key, label: count === 1 ? one : many, total: count };
+      }).filter((item) => item.total > 0),
       recent: recent.recordset.map((row) => ({
+        kind: row.kind,
         archiveId: Number(row.archive_id),
-        table: row.source_table,
-        sourceId: row.source_id,
-        userId: row.user_id,
+        title: row.title,
+        detail: row.detail,
         deletedByType: row.deleted_by_type,
         deletedBy: row.deleted_by,
         reason: row.reason,
@@ -4907,10 +5530,7 @@ app.post('/api/account/delete', requireAppAuth, async (req, res) => {
     await transaction.begin();
     transactionStarted = true;
     const deleteStatements = [
-      ...(archiveAvailable ? [archiveUserSql({
-        reminders: Boolean(optionalTableState.reminders_available),
-        reviews: Boolean(optionalTableState.app_reviews_available),
-      })] : []),
+      ...(archiveAvailable ? [archiveUserSql()] : []),
       ...(optionalTableState.reminders_available ? ['DELETE FROM dbo.reminders WHERE user_id = @userId;'] : []),
       `
         DELETE FROM dbo.itinerary_activities
@@ -5085,6 +5705,30 @@ async function persistItineraryForUser(userId, itinerary, meta = {}, existingTri
           existingDays.get(row.day_number).activities.push(row);
         }
       }
+      if (archiveRemovals) {
+        // Same matching as the save loop below: days by day number, stops by position.
+        const keptDayNumbers = new Set();
+        const removedActivityIds = [];
+        for (const [dayIndex, day] of itinerary.entries()) {
+          const dayNumber = Number(day.dayNumber) || dayIndex + 1;
+          const oldDay = existingDays.get(dayNumber);
+          if (!oldDay) continue;
+          keptDayNumbers.add(dayNumber);
+          const keptCount = (day.activities || []).filter((activity) => String(activity?.title || '').trim().slice(0, 200)).length;
+          oldDay.activities.slice(keptCount).forEach((activity) => removedActivityIds.push(activity.activity_id));
+        }
+        let removedDayCount = 0;
+        for (const [dayNumber, oldDay] of existingDays) {
+          if (keptDayNumbers.has(dayNumber)) continue;
+          removedDayCount += 1;
+          oldDay.activities.forEach((activity) => removedActivityIds.push(activity.activity_id));
+        }
+        const archiveSql = archiveRemovedStopsSql(removedActivityIds, removedDayCount);
+        if (archiveSql) {
+          await withArchiveInfo(new sql.Request(transaction).input('tripId', sql.Int, existingTripId), removalArchiveInfo)
+            .query(archiveSql);
+        }
+      }
     } else {
       const tripResult = await new sql.Request(transaction)
         .input('userId', sql.Int, userId)
@@ -5146,7 +5790,7 @@ async function persistItineraryForUser(userId, itinerary, meta = {}, existingTri
           .input('location', sql.NVarChar(500), String(activity.location || '').slice(0, 500) || null)
           .input('activityType', sql.NVarChar(100), String(activity.category || activity.activityType || '').slice(0, 100) || null)
           .input('startTime', sql.NVarChar(8), parseActivityTime(activity.startTime || activity.timeLabel))
-          .input('endTime', sql.NVarChar(8), null)
+          .input('endTime', sql.NVarChar(8), activity.endTime ? parseActivityTime(activity.endTime) : null)
           .input('estimatedCost', sql.Decimal(12, 2), Number.isFinite(cost) ? cost : null);
         if (oldActivity) {
           await activityRequest
@@ -5167,15 +5811,6 @@ async function persistItineraryForUser(userId, itinerary, meta = {}, existingTri
         }
       }
       for (const oldActivity of oldDay?.activities.slice(activities.length) || []) {
-        if (archiveRemovals) {
-          await withArchiveInfo(new sql.Request(transaction).input('activityId', sql.Int, oldActivity.activity_id), removalArchiveInfo).query([
-            remindersAvailable ? archiveRowsSql('reminders', 'reminder_id', 'WHERE x.activity_id = @activityId', 'x.user_id') : '',
-            archiveRowsSql('itinerary_activities', 'activity_id', `
-              JOIN dbo.trip_days d ON d.trip_day_id = x.trip_day_id
-              JOIN dbo.trips t ON t.trip_id = d.trip_id
-              WHERE x.activity_id = @activityId`, 't.user_id'),
-          ].join('\n'));
-        }
         if (remindersAvailable) {
           await new sql.Request(transaction)
             .input('activityId', sql.Int, oldActivity.activity_id)
@@ -5189,19 +5824,6 @@ async function persistItineraryForUser(userId, itinerary, meta = {}, existingTri
     if (existingTripId) {
       for (const oldDay of existingDays.values()) {
         if (retainedDayIds.has(oldDay.tripDayId)) continue;
-        if (archiveRemovals) {
-          await withArchiveInfo(new sql.Request(transaction).input('tripDayId', sql.Int, oldDay.tripDayId), removalArchiveInfo).query([
-            remindersAvailable ? archiveRowsSql('reminders', 'reminder_id', `
-              WHERE x.activity_id IN (SELECT a.activity_id FROM dbo.itinerary_activities a WHERE a.trip_day_id = @tripDayId)`, 'x.user_id') : '',
-            archiveRowsSql('itinerary_activities', 'activity_id', `
-              JOIN dbo.trip_days d ON d.trip_day_id = x.trip_day_id
-              JOIN dbo.trips t ON t.trip_id = d.trip_id
-              WHERE x.trip_day_id = @tripDayId`, 't.user_id'),
-            archiveRowsSql('trip_days', 'trip_day_id', `
-              JOIN dbo.trips t ON t.trip_id = x.trip_id
-              WHERE x.trip_day_id = @tripDayId`, 't.user_id'),
-          ].join('\n'));
-        }
         for (const oldActivity of oldDay.activities) {
           if (remindersAvailable) {
             await new sql.Request(transaction)
@@ -5283,6 +5905,124 @@ app.post('/api/app-itineraries/sync', requireAppAuth, async (req, res) => {
   }
 });
 
+// Past trips: the traveler's own finished itineraries, read from the archive copy made
+// when a trip expires (2 days after its last day). Each comes back exactly as it was
+// last saved (edits and added activities included), grouped by day. Trips the traveler
+// deleted and stops removed while editing are not past trips, so they are left out.
+// They are kept as long as the archive keeps them (the admin's retention setting).
+app.get('/api/app-itineraries/past', requireAppAuth, async (req, res) => {
+  try {
+    if (!(await isArchiveAvailable())) {
+      return sendJson(res, 200, { available: false, retentionDays: settingNumber('archive_retention_days'), trips: [] });
+    }
+    const pool = await getPool();
+    const result = await pool.request()
+      .input('userId', sql.Int, req.appUser.userId)
+      .query(`
+        SELECT TOP 30 archive_id, trip_id, trip_title, destination, start_date, end_date, budget, deleted_at
+        FROM dbo.archived_itineraries
+        WHERE user_id = @userId AND scope = 'whole_trip' AND deleted_by_type = 'system'
+        ORDER BY COALESCE(end_date, start_date) DESC, deleted_at DESC;
+        SELECT a.archive_id, a.day_number, a.day_date, a.day_title, a.title, a.location, a.activity_type,
+               CONVERT(varchar(5), a.start_time, 108) AS start_time, CONVERT(varchar(5), a.end_time, 108) AS end_time, a.archived_activity_id
+        FROM dbo.archived_itinerary_activities a
+        JOIN dbo.archived_itineraries t ON t.archive_id = a.archive_id
+        WHERE t.user_id = @userId AND t.scope = 'whole_trip' AND t.deleted_by_type = 'system'
+        ORDER BY a.archive_id, a.day_number, a.start_time, a.archived_activity_id;`);
+    const [trips, activities] = result.recordsets;
+    const retentionDays = Math.min(3650, Math.max(1, Math.round(settingNumber('archive_retention_days'))));
+    const dateText = (value) => (value ? new Date(value).toISOString().slice(0, 10) : null);
+    const byTrip = new Map();
+    for (const row of activities || []) {
+      if (!byTrip.has(row.archive_id)) byTrip.set(row.archive_id, new Map());
+      const days = byTrip.get(row.archive_id);
+      if (!days.has(row.day_number)) days.set(row.day_number, { dayNumber: row.day_number, date: dateText(row.day_date), title: row.day_title || '', activities: [] });
+      days.get(row.day_number).activities.push({
+        time: row.start_time || '',
+        endTime: row.end_time || '',
+        title: row.title || '',
+        location: row.location || '',
+        type: row.activity_type || '',
+      });
+    }
+    return sendJson(res, 200, {
+      available: true,
+      retentionDays,
+      trips: (trips || []).map((trip) => ({
+        id: Number(trip.archive_id),
+        tripId: trip.trip_id ? Number(trip.trip_id) : null,
+        title: trip.trip_title || '',
+        destination: trip.destination || '',
+        startDate: dateText(trip.start_date),
+        endDate: dateText(trip.end_date),
+        budget: trip.budget || '',
+        keptUntil: new Date(new Date(trip.deleted_at).getTime() + retentionDays * 86400000).toISOString(),
+        days: Array.from((byTrip.get(trip.archive_id) || new Map()).values()).sort((a, b) => a.dayNumber - b.dayNumber),
+      })),
+    });
+  } catch (error) {
+    console.error('Past trips could not be loaded:', error.message);
+    return sendJson(res, 500, { error: 'Your past trips couldn’t be loaded right now. Please try again.' });
+  }
+});
+
+// Removes one past trip from the traveler's Past trips. Its archive copy stays (now
+// marked as removed by the traveler) for the admin's retention period, then the usual
+// archive clean-up deletes it for good.
+app.delete('/api/app-itineraries/past/:archiveId', requireAppAuth, async (req, res) => {
+  const archiveId = Number(req.params.archiveId);
+  if (!Number.isSafeInteger(archiveId) || archiveId < 1) return sendJson(res, 400, { error: 'A valid past trip is required.' });
+  try {
+    if (!(await isArchiveAvailable())) return sendJson(res, 404, { error: 'That past trip wasn’t found.' });
+    const pool = await getPool();
+    const result = await pool.request()
+      .input('archiveId', sql.BigInt, archiveId)
+      .input('userId', sql.Int, req.appUser.userId)
+      .input('by', sql.NVarChar(255), String(req.appUser.email || '').slice(0, 255))
+      .query(`
+        UPDATE dbo.archived_itineraries
+        SET deleted_by_type = 'user',
+            deleted_by = @by,
+            reason = N'Finished trip removed from Past trips by the traveler'
+        WHERE archive_id = @archiveId AND user_id = @userId
+          AND scope = 'whole_trip' AND deleted_by_type = 'system';`);
+    if (!result.rowsAffected?.[0]) return sendJson(res, 404, { error: 'That past trip wasn’t found. It may already be removed.' });
+    return sendJson(res, 200, { ok: true, message: 'Trip removed from Past trips.' });
+  } catch (error) {
+    console.error('Past trip could not be removed:', error.message);
+    return sendJson(res, 500, { error: 'This trip couldn’t be removed right now. Please try again.' });
+  }
+});
+
+// Removes several past trips at once (Past trips → Edit → select). Same rules as above.
+app.post('/api/app-itineraries/past/remove', requireAppAuth, async (req, res) => {
+  const ids = Array.from(new Set((Array.isArray(req.body?.ids) ? req.body.ids : []).map(Number)))
+    .filter((id) => Number.isSafeInteger(id) && id > 0);
+  if (!ids.length) return sendJson(res, 400, { error: 'Choose at least one past trip to remove.' });
+  if (ids.length > 50) return sendJson(res, 400, { error: 'Remove up to 50 past trips at a time.' });
+  try {
+    if (!(await isArchiveAvailable())) return sendJson(res, 404, { error: 'Those past trips weren’t found.' });
+    const pool = await getPool();
+    // The IDs are checked whole numbers, so they can be listed in the statement directly.
+    const result = await pool.request()
+      .input('userId', sql.Int, req.appUser.userId)
+      .input('by', sql.NVarChar(255), String(req.appUser.email || '').slice(0, 255))
+      .query(`
+        UPDATE dbo.archived_itineraries
+        SET deleted_by_type = 'user',
+            deleted_by = @by,
+            reason = N'Finished trip removed from Past trips by the traveler'
+        WHERE archive_id IN (${ids.join(', ')}) AND user_id = @userId
+          AND scope = 'whole_trip' AND deleted_by_type = 'system';`);
+    const removed = Number(result.rowsAffected?.[0] || 0);
+    if (!removed) return sendJson(res, 404, { error: 'Those past trips weren’t found. They may already be removed.' });
+    return sendJson(res, 200, { ok: true, removed, message: `${removed} trip${removed === 1 ? '' : 's'} removed from Past trips.` });
+  } catch (error) {
+    console.error('Past trips could not be removed:', error.message);
+    return sendJson(res, 500, { error: 'These trips couldn’t be removed right now. Please try again.' });
+  }
+});
+
 app.get('/api/app-itineraries/retention', requireAppAuth, async (req, res) => {
   const rawTripId = req.query.tripId;
   const tripId = rawTripId === undefined ? null : Number(rawTripId);
@@ -5350,7 +6090,7 @@ app.delete('/api/app-itineraries/:tripId', requireAppAuth, async (req, res) => {
     if (await isArchiveAvailable()) {
       await withArchiveInfo(new sql.Request(transaction).input('tripId', sql.Int, tripId), {
         byType: 'user', by: req.appUser.email || null, reason: 'Itinerary removed in the app',
-      }).query(archiveTripsSql((alias) => `${alias}.trip_id = @tripId`, { reminders: Boolean(optionalTables.recordset[0]?.reminders_available) }));
+      }).query(archiveTripsSql((alias) => `${alias}.trip_id = @tripId`));
     }
     if (optionalTables.recordset[0]?.reminders_available) {
       await new sql.Request(transaction)
@@ -5784,13 +6524,13 @@ app.post('/api/maps/places', requireAppAuth, limitPerUser('maps-places', 600, HO
       if (safeSeeds.length) {
         for (const seed of safeSeeds) {
           jobs.push(searchText({
-            textQuery: `${query} in Philippines`,
+            textQuery: `${query} in Batangas, Philippines`,
             locationBias: { circle: { center: { latitude: Number(seed.lat), longitude: Number(seed.lng) }, radius: 50000 } },
             maxResultCount: 8,
           }));
         }
       } else {
-        jobs.push(searchText({ textQuery: `${query} in Philippines`, maxResultCount: 8 }));
+        jobs.push(searchText({ textQuery: `${query} in Batangas, Philippines`, maxResultCount: 8 }));
       }
     }
 
@@ -5832,6 +6572,10 @@ app.post('/api/maps/place-suggestions', requireAppAuth, limitPerUser('maps-sugge
     const apiKey = getMapsApiKey();
     if (!apiKey) throw new Error('Google Maps is not configured on the backend.');
     const touristTypeOrder = ['tourist_attraction', 'landmark', 'national_park', 'museum', 'park'];
+    // Adding an activity to a trip: any kind of place (beach, restaurant, resort, mall...).
+    // Every search only suggests places in Batangas.
+    const activityScope = req.body?.scope === 'activity';
+    const nearBias = { locationRestriction: { rectangle: BATANGAS_BOUNDS } };
     const requestSuggestions = async (includedPrimaryTypes) => {
       const response = await fetch('https://places.googleapis.com/v1/places:autocomplete', {
         method: 'POST',
@@ -5844,7 +6588,8 @@ app.post('/api/maps/place-suggestions', requireAppAuth, limitPerUser('maps-sugge
           input,
           ...(sessionToken ? { sessionToken } : {}),
           includedRegionCodes: ['PH'],
-          includedPrimaryTypes,
+          ...(includedPrimaryTypes ? { includedPrimaryTypes } : {}),
+          ...nearBias,
           languageCode: 'en',
           regionCode: 'PH',
           includeQueryPredictions: false,
@@ -5860,6 +6605,7 @@ app.post('/api/maps/place-suggestions', requireAppAuth, limitPerUser('maps-sugge
     const mapSuggestions = (data) => (data.suggestions || []).map((item, index) => {
       const prediction = item.placePrediction;
       if (!prediction?.placeId) return null;
+      if (!isInBatangas({ text: prediction.text?.text || prediction.structuredFormat?.secondaryText?.text || '' })) return null;
       const types = Array.isArray(prediction.types) ? prediction.types : [];
       const mainText = prediction.structuredFormat?.mainText?.text || prediction.text?.text || '';
       const secondaryText = prediction.structuredFormat?.secondaryText?.text || '';
@@ -5885,6 +6631,10 @@ app.post('/api/maps/place-suggestions', requireAppAuth, limitPerUser('maps-sugge
       const merged = [...mapSuggestions(cityData), ...mapSuggestions(attractionData)];
       suggestions = Array.from(new Map(merged.map((item) => [item.placeId, item])).values())
         .slice(0, 6).map(({ touristRank, originalRank, ...suggestion }) => suggestion);
+    } else if (activityScope) {
+      suggestions = mapSuggestions(await requestSuggestions(null))
+        .sort((a, b) => a.originalRank - b.originalRank)
+        .slice(0, 5).map(({ touristRank, originalRank, ...suggestion }) => suggestion);
     } else {
       suggestions = mapSuggestions(await requestSuggestions(touristTypeOrder))
         .slice(0, 5).map(({ touristRank, originalRank, ...suggestion }) => suggestion);
@@ -5923,7 +6673,9 @@ app.post('/api/maps/place-details', requireAppAuth, limitPerUser('maps-details',
       const reason = data?.error?.message || data?.error?.status;
       throw new Error(reason ? `Google place details failed: ${reason}` : 'Google place details are unavailable.');
     }
-    return sendJson(res, 200, { place: mapPlace(data) });
+    // inBatangas: whether the app may use this place for a trip (Batangas only).
+    const place = mapPlace(data);
+    return sendJson(res, 200, { place: { ...place, inBatangas: isInBatangas({ text: place.address, lat: place.lat, lng: place.lng }) } });
   } catch (error) {
     return sendJson(res, 503, { error: error.message || 'Google place details are unavailable.' });
   }
@@ -5943,6 +6695,37 @@ app.post('/api/maps/route', requireAppAuth, limitPerUser('maps-route', 1200, HOU
   }
 });
 
+// Google place photos are paid per request, so each one is kept as long as Google's own
+// response allows (its Cache-Control, currently 24 hours) and shared by every user: a
+// photo is fetched from Google at most once per server in that time. The memory used
+// is capped; the least recently shown photos are dropped first. Phones are told to keep
+// the photo for the same remaining time, so reloading a screen costs nothing.
+const PHOTO_CACHE_MAX_BYTES = 40 * 1024 * 1024;
+const PHOTO_CACHE_MAX_SECONDS = 24 * 60 * 60;
+const photoCache = new Map(); // resource name -> { body, type, expiresAt }
+const photoInFlight = new Map();
+let photoCacheBytes = 0;
+
+function photoCacheSeconds(cacheControl) {
+  const header = String(cacheControl || '').toLowerCase();
+  if (/no-store|no-cache|private/.test(header)) return 0;
+  const maxAge = Number(/max-age=(\d+)/.exec(header)?.[1]);
+  return Number.isFinite(maxAge) ? Math.min(maxAge, PHOTO_CACHE_MAX_SECONDS) : 3600;
+}
+
+function rememberPhoto(name, entry) {
+  if (entry.body.length > 2 * 1024 * 1024) return; // unusually large: not kept
+  const old = photoCache.get(name);
+  if (old) { photoCacheBytes -= old.body.length; photoCache.delete(name); }
+  photoCache.set(name, entry);
+  photoCacheBytes += entry.body.length;
+  for (const [key, value] of photoCache) {
+    if (photoCacheBytes <= PHOTO_CACHE_MAX_BYTES) break;
+    photoCache.delete(key);
+    photoCacheBytes -= value.body.length;
+  }
+}
+
 app.get('/api/maps/photo', async (req, res) => {
   if (isRateLimited(`maps-photo:${req.ip}`, 3000, HOUR_MS)) {
     return sendJson(res, 429, { error: 'Too many photo requests. Please try again later.' });
@@ -5951,15 +6734,41 @@ app.get('/api/maps/photo', async (req, res) => {
   if (!/^places\/[A-Za-z0-9_-]+\/photos\/[A-Za-z0-9_-]+$/.test(resourceName)) {
     return sendJson(res, 400, { error: 'Invalid Google photo resource.' });
   }
+  const send = (entry) => {
+    const secondsLeft = Math.max(60, Math.floor((entry.expiresAt - Date.now()) / 1000));
+    res.set('Content-Type', entry.type);
+    res.set('Cache-Control', entry.expiresAt > Date.now() ? `public, max-age=${secondsLeft}` : 'public, max-age=3600');
+    return res.send(entry.body);
+  };
+
+  const cached = photoCache.get(resourceName);
+  if (cached && cached.expiresAt > Date.now()) {
+    photoCache.delete(resourceName); // most recently used goes to the end
+    photoCache.set(resourceName, cached);
+    return send(cached);
+  }
+  if (cached) { photoCache.delete(resourceName); photoCacheBytes -= cached.body.length; }
 
   try {
-    const apiKey = getMapsApiKey();
-    if (!apiKey) throw new Error('Google Maps is not configured on the backend.');
-    const response = await fetch(`https://places.googleapis.com/v1/${resourceName}/media?maxWidthPx=800&key=${apiKey}`);
-    if (!response.ok) return sendJson(res, 502, { error: 'Google photo is currently unavailable.' });
-    res.set('Content-Type', response.headers.get('content-type') || 'image/jpeg');
-    res.set('Cache-Control', 'public, max-age=3600');
-    return res.send(Buffer.from(await response.arrayBuffer()));
+    if (!photoInFlight.has(resourceName)) {
+      photoInFlight.set(resourceName, (async () => {
+        const apiKey = getMapsApiKey();
+        if (!apiKey) throw new Error('Google Maps is not configured on the backend.');
+        const response = await fetch(`https://places.googleapis.com/v1/${resourceName}/media?maxWidthPx=800&key=${apiKey}`);
+        if (!response.ok) return null;
+        const seconds = photoCacheSeconds(response.headers.get('cache-control'));
+        const entry = {
+          body: Buffer.from(await response.arrayBuffer()),
+          type: response.headers.get('content-type') || 'image/jpeg',
+          expiresAt: Date.now() + seconds * 1000,
+        };
+        if (seconds > 0) rememberPhoto(resourceName, entry);
+        return entry;
+      })().finally(() => photoInFlight.delete(resourceName)));
+    }
+    const entry = await photoInFlight.get(resourceName);
+    if (!entry) return sendJson(res, 502, { error: 'Google photo is currently unavailable.' });
+    return send(entry);
   } catch (error) {
     return sendJson(res, 503, { error: 'Google photo is currently unavailable.' });
   }
@@ -6011,12 +6820,15 @@ app.post('/api/chat', requireAppAuth, limitPerUser('chat', 60, 10 * MINUTE_MS), 
       profile: userProfile,
     });
 
-    if (Array.isArray(response?.itinerary)) {
-      response.tripId = await persistItineraryForUser(req.appUser.userId, response.itinerary, response.meta || {});
-    }
+    // A generated itinerary is a draft: it is recorded only when the traveler saves it
+    // (POST /api/app-itineraries/sync).
     return sendJson(res, 200, response);
   } catch (error) {
     console.error('Chat error:', error.message);
+    if (error?.featureDisabled) {
+      // Turned off by the administrator or paused by the monthly budget: say so plainly.
+      return sendJson(res, 503, { error: error.message, reply: error.message });
+    }
     return sendJson(res, 500, {
       reply: 'Sorry, I hit a temporary issue while planning. Please try again in a moment.',
       meta: { error: error.message || 'AI unavailable' },
@@ -6037,6 +6849,23 @@ app.post('/api/itinerary/generate', requireAppAuth, limitPerUser('itinerary-gene
   }
   if (!normalizedEmail) {
     return sendJson(res, 401, { error: 'Authentication is required to generate an itinerary.' });
+  }
+  // A trip can't start on a day that has already passed. "Today" is the phone's own
+  // date when the app sends one that is within a day of the server's; otherwise the
+  // date in the westernmost time zone (UTC-12), so no traveler's today is ever refused.
+  const requestedStart = String(profile?.startDate || '').slice(0, 10);
+  const clientToday = dateOnly(profile?.clientToday);
+  const clientTodayTrusted = clientToday && Math.abs(clientToday.getTime() - dateOnly(new Date().toISOString()).getTime()) <= 86400000;
+  const earliestStart = clientTodayTrusted
+    ? String(profile.clientToday).slice(0, 10)
+    : new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  if (dateOnly(requestedStart) && requestedStart < earliestStart) {
+    return sendJson(res, 400, { error: 'The start date has already passed. Choose today or a later date to start your trip.' });
+  }
+  // The late first-day start only applies to a trip that really starts today.
+  if (profile && typeof profile === 'object' && profile.firstDayStartMinute !== undefined
+    && !(clientTodayTrusted && requestedStart === String(profile.clientToday).slice(0, 10))) {
+    delete profile.firstDayStartMinute;
   }
 
   try {
@@ -6071,17 +6900,16 @@ app.post('/api/itinerary/generate', requireAppAuth, limitPerUser('itinerary-gene
         address: String(origin.address || origin.name || '').slice(0, 240),
       } : null,
     });
-    const tripId = await persistItineraryForUser(req.appUser.userId, generated.itinerary, generated.meta);
-
+    // A generated itinerary is a draft until the traveler saves it in the app; only then
+    // is it recorded (POST /api/app-itineraries/sync), with its reminders.
     return sendJson(res, 200, {
       ok: true,
       itinerary: generated.itinerary,
       meta: generated.meta,
-      tripId,
     });
   } catch (error) {
     console.error('Itinerary generation error:', error.message);
-    return sendJson(res, 503, { error: error.message || 'Verified itinerary generation is currently unavailable.' });
+    return sendJson(res, error.statusCode === 400 ? 400 : 503, { error: error.message || 'Verified itinerary generation is currently unavailable.' });
   }
 });
 
@@ -6175,6 +7003,7 @@ async function researchHotelRates({ destination, startDate, endDate, nights, can
 }
 
 // Budget check thresholds (PHP).
+const MAX_BUDGET_PER_DAY_PHP = 100000; // more than this per day is not a realistic trip budget
 const MIN_REALISTIC_ROOM_PHP = 300;    // the cheapest real room rate accepted anywhere
 const COMFORTABLE_ROOM_PHP = 2500;     // most areas have rooms at or under this
 const FALLBACK_MEAL_PHP = 100;         // a basic meal when no restaurant prices are listed
@@ -6215,11 +7044,27 @@ app.post('/api/trip/budget-check', requireAppAuth, async (req, res) => {
   }
   const nights = days - 1; // a day trip needs no hotel
   const meals = days * MEALS_PER_DAY;
+  // Far more money than any trip of this length could use (₱1,000,000 for 3 days,
+  // say) is not a real budget: say so without spending anything on price searches.
+  if (budgetAmountPhp > MAX_BUDGET_PER_DAY_PHP * days) {
+    return sendJson(res, 200, {
+      checked: true, realistic: false, tooHigh: true, budgetAmountPhp, days, nights,
+      maximumPhp: MAX_BUDGET_PER_DAY_PHP * days,
+    });
+  }
   if (isDevelopmentMode) {
     return sendJson(res, 200, { checked: false, realistic: true, isDevelopmentMock: true });
   }
   if (isRateLimited(`budget-check:${req.appUser.userId}`, 30, 60 * 60 * 1000)) {
     return sendJson(res, 429, { error: 'Too many budget checks. Please try again later.' });
+  }
+  // Batangas only: say so before anything is planned.
+  try {
+    await assertDestinationInBatangas(destination, req.body?.placeId);
+  } catch (error) {
+    if (error.statusCode === 400) {
+      return sendJson(res, 200, { checked: true, realistic: false, outOfScope: true, message: error.message, budgetAmountPhp, days, nights });
+    }
   }
   try {
     const { center, candidates } = await findHotelCandidates(destination, req.body?.lat, req.body?.lng);

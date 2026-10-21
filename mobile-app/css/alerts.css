@@ -65,11 +65,6 @@
 .alerts-sync { margin-top: 10px; }
 .alerts-sync svg { width: 18px; height: 18px; }
 
-/* Itinerary schedule editor (shown by alerts.js) */
-.editor-panel { display: none; margin-top: 14px; }
-.editor-panel-title { font-weight: 800; color: #163457; font-size: 16px; }
-.editor-panel-note { margin: 4px 0 12px; color: #668096; font-size: 13px; }
-.alerts-row-buttons .btn { flex: 1 1 0; }
 
 /* Section heading row with bulk actions */
 .reminder-bulk-actions {
@@ -262,3 +257,15 @@
     line-height: 1.45;
 }
 .alerts-permission-note[hidden] { display: none; }
+
+/* Upcoming reminders: one drop-down per date, holding that day's reminders. */
+.sk-day-group { margin: 10px 0 0; border: 1px solid #d9eaf0; border-radius: 18px; background: #ffffff; box-shadow: 0 8px 22px rgba(22, 52, 87, .06); overflow: hidden; }
+.sk-day-group > summary { display: flex; align-items: center; gap: 10px; padding: 14px 44px 14px 16px; position: relative; cursor: pointer; list-style: none; }
+.sk-day-group > summary::-webkit-details-marker { display: none; }
+.sk-day-group > summary::after { content: ""; position: absolute; right: 18px; top: 50%; width: 9px; height: 9px; margin-top: -7px; border-right: 2px solid #4f6880; border-bottom: 2px solid #4f6880; transform: rotate(45deg); transition: transform .2s ease; }
+.sk-day-group[open] > summary::after { margin-top: -2px; transform: rotate(-135deg); }
+.sk-day-group > summary:focus-visible { outline: 2px solid #2c91b0; outline-offset: -2px; border-radius: 18px; }
+.sk-day-group-date { color: #163457; font-size: 16px; font-weight: 800; }
+.sk-day-group-count { padding: 2px 9px; border-radius: 999px; background: #e6f3f7; color: #1f6f88; font-size: 12px; font-weight: 700; }
+.sk-day-group-body { display: flex; flex-direction: column; gap: 10px; padding: 12px 10px; border-top: 1px solid #e3eef3; }
+.sk-day-group-body .sk-reminder-card { margin: 0; }

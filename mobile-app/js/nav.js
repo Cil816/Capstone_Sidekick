@@ -5,7 +5,13 @@ document.addEventListener('DOMContentLoaded', function () {
   // Active link highlighting
   try {
     const links = Array.from(nav.querySelectorAll('.nav-item'));
-    const current = window.location.pathname.split('/').pop() || 'dashboard.html';
+    let current = window.location.pathname.split('/').pop() || 'dashboard.html';
+    // Screens opened from a tab (Settings and Past trips belong to Profile) keep
+    // that tab highlighted; they name it with <body data-tab="...">.
+    const tab = document.body && document.body.getAttribute('data-tab');
+    if (tab && !links.some((a) => (a.getAttribute('href') || '').split('/').pop() === current)) {
+      current = `${tab}.html`;
+    }
     links.forEach((a) => {
       const href = (a.getAttribute('href') || '').split('/').pop();
       if (!href) return;

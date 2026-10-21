@@ -206,7 +206,7 @@ body::before {
 .ax-section { margin-bottom: 22px; }
 
 .admin-link { color: var(--ax-primary-dark); font-weight: 700; font-size: .9rem; text-decoration: none; }
-.admin-link:hover { text-decoration: underline; }
+.admin-link:hover { text-decoration: none; }
 
 /* ---- Buttons ---------------------------------------------------------------- */
 .admin-button,
@@ -860,4 +860,186 @@ body[data-page="usage"] .admin-main > .admin-card + .admin-card {
   .ax-card-head { flex-wrap: wrap; align-items: flex-start; }
   .ax-card-head > .ax-tabs, .ax-card-head > .ax-filter-chips { flex: 1 1 100%; }
   body[data-page="usage"] .admin-table { width: 100%; }
+}
+
+/* ---- Loading screen with the Sidekick logo (admin.js showLoading / hideLoading) -------
+   A teal ring turns around the logo while the admin waits on an action. */
+.ax-loader {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  overflow: hidden;
+}
+.ax-loader[open] { display: grid; place-items: center; }
+.ax-loader::backdrop { background: rgba(13, 32, 54, .45); }
+.ax-loader-box {
+  display: grid;
+  justify-items: center;
+  gap: 14px;
+  max-width: min(84vw, 300px);
+  padding: 26px 30px 24px;
+  border-radius: 22px;
+  background: var(--ax-card);
+  box-shadow: 0 24px 60px rgba(13, 32, 54, .28);
+  animation: axPop 240ms var(--ax-ease) backwards;
+}
+.ax-loader-mark { position: relative; width: 84px; height: 84px; display: grid; place-items: center; }
+.ax-loader-logo { width: 60px; height: 60px; border-radius: 50%; }
+.ax-loader-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: conic-gradient(from 0deg, rgba(44, 145, 176, 0) 0deg, rgba(44, 145, 176, .15) 90deg, #2c91b0 270deg, #68ddd9 360deg);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 5px), #000 calc(100% - 4px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 5px), #000 calc(100% - 4px));
+  animation: axLoaderSpin .9s linear infinite;
+}
+.ax-loader-text { margin: 0; max-width: 230px; text-align: center; font-weight: 700; line-height: 1.45; color: var(--ax-ink); }
+@keyframes axLoaderSpin { to { transform: rotate(360deg); } }
+/* With "reduce motion" on, the ring still turns (slowly): it is the only sign of progress. */
+@media (prefers-reduced-motion: reduce) {
+  .ax-loader .ax-loader-ring { animation-duration: 1.8s !important; animation-iteration-count: infinite !important; }
+}
+
+/* ---- Skeleton placeholders: grey shapes where content is still loading -------------- */
+:root { --ax-skel: #e4edf2; --ax-skel-shine: #f3f8fa; }
+.ax-skel {
+  display: block;
+  border-radius: 8px;
+  background-color: var(--ax-skel);
+  background-image: linear-gradient(90deg, var(--ax-skel) 0%, var(--ax-skel-shine) 45%, var(--ax-skel) 90%);
+  background-size: 220% 100%;
+  animation: axShimmer 1.3s ease-in-out infinite;
+}
+.ax-skel-line { height: 12px; margin: 7px 0; }
+.ax-skel-line.is-sm { height: 9px; }
+.ax-skel-lines { padding: 4px 0; }
+.ax-skel-icon { flex: none; width: 36px; height: 36px; border-radius: 12px; }
+.ax-skel-avatar { flex: none; width: 34px; height: 34px; border-radius: 50%; }
+.ax-skel-block { width: 100%; border-radius: 12px; }
+.ax-skel-text { flex: 1 1 auto; min-width: 0; }
+.ax-skel-kpi .ax-skel-icon { width: 44px; height: 44px; }
+.ax-skel-kpi .ax-kpi-body { flex: 1 1 auto; min-width: 0; }
+.ax-skel-kpi .ax-skel-line:nth-child(2) { height: 22px; }
+.ax-skel-item { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--ax-line); }
+.ax-skel-item:last-child { border-bottom: 0; }
+.ax-skel-rowline { display: flex; align-items: center; gap: 12px; padding: 4px 0; }
+.ax-skel-tr td { padding-top: 10px; padding-bottom: 10px; }
+.ax-skel-card { padding: 18px; }
+.ax-skel-card .ax-skel-line:first-child { height: 14px; margin-bottom: 12px; }
+@keyframes axShimmer { from { background-position: 100% 0; } to { background-position: -120% 0; } }
+@media (prefers-reduced-motion: reduce) { .ax-skel { animation: none; } }
+
+/* ---- "No internet connection" pop-up (admin.js showOfflineNotice) -------------------- */
+.ax-offline {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 16px;
+  border: 0;
+  background: transparent;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+.ax-offline[open] { display: grid; place-items: center; }
+.ax-offline::backdrop { background: rgba(13, 32, 54, .45); }
+.ax-offline-box {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  max-width: 380px;
+  padding: 28px 26px 24px;
+  border-radius: 22px;
+  background: var(--ax-card);
+  box-shadow: 0 24px 60px rgba(13, 32, 54, .28);
+  text-align: center;
+  animation: axPop 240ms var(--ax-ease) backwards;
+}
+.ax-offline-icon { display: grid; place-items: center; width: 52px; height: 52px; border-radius: 16px; background: var(--ax-soft); color: var(--ax-primary); }
+.ax-offline-icon svg { width: 26px; height: 26px; }
+.ax-offline-title { margin: 4px 0 0; font-size: 1.2rem; color: var(--ax-ink); }
+.ax-offline-text { margin: 0 0 8px; color: var(--ax-muted); line-height: 1.5; }
+.ax-offline-box .admin-button { min-width: 120px; }
+
+/* ---- Show / hide password (js/admin.js) ---- */
+.ax-pw { position: relative; display: block; width: 100%; }
+.ax-pw > input { width: 100%; padding-right: 48px !important; box-sizing: border-box; }
+.ax-pw-toggle {
+  position: absolute;
+  top: 50%;
+  right: 5px;
+  transform: translateY(-50%);
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--ax-muted);
+  cursor: pointer;
+}
+.ax-dialog-panel .ax-pw-toggle { margin-top: 3px; } /* dialog inputs have a 6px top margin */
+.ax-pw-toggle:hover, .ax-pw-toggle[aria-pressed="true"] { color: var(--ax-primary-dark); background: var(--ax-soft); }
+.ax-pw-toggle:focus-visible { outline: 2px solid var(--ax-primary); outline-offset: 1px; }
+.ax-pw-toggle svg { width: 19px; height: 19px; }
+.ax-dialog-hint { display: block; margin-top: 6px; font-size: .8rem; color: var(--ax-muted); }
+
+/* ---- Light / dark button on the sign-in page ---- */
+.ax-login-theme {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: auto;
+  min-height: 40px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  box-shadow: var(--ax-shadow);
+}
+.ax-login-theme svg { width: 18px; height: 18px; }
+@media (max-width: 480px) {
+  .ax-login-theme { top: 12px; right: 12px; }
+}
+
+/* ---- Settings: "Your profile" (one compact row; edits open in pop-ups) ---- */
+.ax-profile { display: flex; align-items: center; gap: 16px; }
+.ax-profile-avatar {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: var(--ax-gradient);
+  color: #fff;
+  font-family: "Manrope", "Avenir Next", sans-serif;
+  font-size: 1.2rem;
+  font-weight: 800;
+}
+.ax-profile-avatar:empty { background: var(--ax-soft); }
+.ax-profile-text { flex: 1 1 auto; min-width: 0; }
+.ax-profile-summary { display: flex; flex-direction: column; gap: 4px; margin: 4px 0 0; font-size: .88rem; color: var(--ax-muted); }
+.ax-profile-summary b { color: var(--ax-ink); font-size: .95rem; overflow-wrap: anywhere; }
+.ax-profile-summary .ax-skel { display: block; }
+.ax-profile-actions { flex: none; display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+@media (max-width: 640px) {
+  .ax-profile { flex-wrap: wrap; }
+  .ax-profile-actions { flex: 1 1 100%; justify-content: stretch; }
+  .ax-profile-actions .admin-button-secondary { flex: 1 1 140px; }
 }

@@ -34,6 +34,8 @@
   if (index < 0) return;
 
   var navigating = false;
+  // Set by js/theme-init.js when the browser swaps tab pages with a view transition.
+  var browserTransitions = document.documentElement.classList.contains('sk-vt');
 
   function screenEl() {
     return document.querySelector('.screen');
@@ -50,6 +52,13 @@
     var dir = targetIndex > index ? 'next' : 'prev';
     var href = TABS[targetIndex] + '.html';
     var el = screenEl();
+    if (browserTransitions) {
+      // The browser animates the change (see theme-init.js); just record the
+      // direction and go, without first sliding this page out.
+      try { sessionStorage.setItem(LAST_KEY, JSON.stringify({ index: index, time: Date.now() })); } catch (e) {}
+      window.location.href = href;
+      return;
+    }
     if (reduceMotion || !el) { window.location.href = href; return; }
     clearMotion(el);
     void el.offsetWidth;
@@ -76,6 +85,7 @@
   }
 
   function playArrival() {
+    if (browserTransitions) return; // the view transition already slides the page in
     var el = screenEl();
     var dir = arrivalDirection();
     try { sessionStorage.removeItem(LAST_KEY); } catch (e) {}

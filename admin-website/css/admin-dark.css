@@ -162,3 +162,18 @@ html[data-theme="dark"] .admin-status-banner.is-error { background: #3a1a20; col
 
 /* Charts drawn with SVG text */
 html[data-theme="dark"] .admin-main svg text { fill: var(--ax-muted); }
+
+/* Loading screen and skeleton placeholders */
+html[data-theme="dark"] { --ax-skel: #1b2d3e; --ax-skel-shine: #243a4e; }
+html[data-theme="dark"] .ax-loader::backdrop { background: rgba(0, 0, 0, .55); }
+html[data-theme="dark"] .ax-loader-box { background: #1a2e40; border: 1px solid #2c4659; box-shadow: 0 24px 60px rgba(0, 0, 0, .55); }
+html[data-theme="dark"] .ax-loader-ring { background: conic-gradient(from 0deg, rgba(79, 180, 207, 0) 0deg, rgba(79, 180, 207, .2) 90deg, #4fb4cf 270deg, #8ff0ea 360deg); }
+
+html[data-theme="dark"] .ax-offline::backdrop { background: rgba(0, 0, 0, .55); }
+html[data-theme="dark"] .ax-offline-box { background: #1a2e40; border: 1px solid #2c4659; box-shadow: 0 24px 60px rgba(0, 0, 0, .55); }
+
+/* Sign-in page light/dark button and the password eye */
+html[data-theme="dark"] .ax-login-theme { background: #172a3b; border-color: #2f475b; color: var(--ax-ink); }
+html[data-theme="dark"] .ax-login-theme:hover { background: #1d3448; }
+html[data-theme="dark"] .ax-pw-toggle:hover,
+html[data-theme="dark"] .ax-pw-toggle[aria-pressed="true"] { color: var(--ax-ink); background: #1d3448; }

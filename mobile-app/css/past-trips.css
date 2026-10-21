@@ -1,0 +1,152 @@
+/* Past trips screen (past-trips.html, js/past-trips.js). */
+.past-trips-list { display: flex; flex-direction: column; gap: 10px; }
+.past-trips-list .sk-skel-line { display: block; margin: 6px 0; }
+.past-trips-empty { margin: 0; padding: 18px; border: 1px dashed #c9dbe6; border-radius: 16px; background: rgba(255, 255, 255, .7); color: #4f6880; font-size: 14px; line-height: 1.45; text-align: center; }
+.past-trip-skel { padding: 16px; border: 1px solid #dce8ef; border-radius: 16px; background: #ffffff; }
+.past-trip { border: 1px solid #dce8ef; border-radius: 16px; background: #ffffff; box-shadow: 0 8px 22px rgba(44, 62, 80, .07); overflow: hidden; }
+.past-trip > summary { display: flex; align-items: center; gap: 12px; padding: 13px 44px 13px 14px; position: relative; cursor: pointer; list-style: none; }
+.past-trip-head { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.past-trip > summary::-webkit-details-marker { display: none; }
+.past-trip > summary::after { content: ""; position: absolute; right: 16px; top: 50%; width: 9px; height: 9px; margin-top: -7px; border-right: 2px solid #4f6880; border-bottom: 2px solid #4f6880; transform: rotate(45deg); transition: transform .2s ease; }
+.past-trip[open] > summary::after { margin-top: -2px; transform: rotate(-135deg); }
+.past-trip-name { color: #163457; font-size: 15px; font-weight: 750; overflow-wrap: anywhere; }
+.past-trip > summary small { color: #5b7489; font-size: 12px; }
+.past-trip-body { padding: 0 14px 14px; border-top: 1px solid #e3eef3; }
+.past-trip-meta { margin: 10px 0 0; color: #5b7489; font-size: 12px; line-height: 1.4; }
+.past-trip-day h3 { margin: 14px 0 6px; color: #1f6f88; font-size: 13px; font-weight: 750; }
+.past-trip-day ol { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+.past-trip-day li { display: flex; gap: 10px; align-items: flex-start; }
+.past-trip-time { flex: none; width: 66px; padding-top: 1px; color: #315f78; font-size: 12px; font-weight: 700; }
+.past-trip-stop { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.past-trip-stop strong { color: #163457; font-size: 14px; font-weight: 650; overflow-wrap: anywhere; }
+.past-trip-stop small { color: #64748b; font-size: 12px; overflow-wrap: anywhere; }
+.past-trip-remove {
+    display: block;
+    width: 100%;
+    margin-top: 16px;
+    padding: 10px 12px;
+    border: 1px solid #f1c7cd;
+    border-radius: 12px;
+    background: #ffffff;
+    color: #b42336;
+    font: inherit;
+    font-size: 14px;
+    font-weight: 650;
+    cursor: pointer;
+}
+.past-trip-remove:hover { background: #fdf1f3; }
+.past-trip-remove:disabled { opacity: .6; cursor: progress; }
+/* "Do this trip again": plans the same trip on new dates. */
+.past-trip-repeat {
+    display: block;
+    width: 100%;
+    margin-top: 16px;
+    padding: 10px 12px;
+    border: 1px solid #1f6f88;
+    border-radius: 12px;
+    background: #1f6f88;
+    color: #ffffff;
+    font: inherit;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+}
+.past-trip-repeat:hover { background: #195d73; }
+/* "Do this trip again" and "Remove" side by side. */
+.past-trip-actions { display: flex; gap: 8px; margin-top: 16px; }
+.past-trip-actions .past-trip-repeat,
+.past-trip-actions .past-trip-remove { margin-top: 0; min-width: 0; }
+.past-trip-actions .past-trip-repeat { flex: 2 1 0; }
+.past-trip-actions .past-trip-remove { flex: 1 1 0; }
+
+/* Compact header: small gaps from the title down to the list. */
+.past-trips-content { gap: 10px; }
+.past-trips-content .screen-title { margin: 0; }
+#past-trips-intro { margin: 0; }
+
+/* ---- Edit: select trips to remove ---- */
+/* One row under the intro: Edit on the right, or Select all / Remove / Cancel while editing. */
+.past-trips-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    min-height: 34px;
+    margin: 0;
+    padding: 0;
+}
+.past-trips-toolbar[hidden], .past-trips-select-bar[hidden], .past-trips-edit[hidden] { display: none; }
+.past-trips-edit {
+    min-height: 34px;
+    padding: 6px 18px;
+    border: 1px solid #c7dde6;
+    border-radius: 999px;
+    background-color: #ffffff;
+    color: #1f6f88;
+    font: inherit;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+}
+/* After "Edit": just "Select all" on the left, "Remove" and "Cancel" on the right. */
+.past-trips-select-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+}
+.past-trips-select-all { flex: 1 1 auto; display: inline-flex; align-items: center; gap: 8px; color: #163457; font-size: 14px; font-weight: 650; cursor: pointer; }
+/* "Select all": a round check box (filled with a tick when on, a dash when some are chosen). */
+.past-trips-select-all input {
+    -webkit-appearance: none;
+    appearance: none;
+    flex: none;
+    width: 22px;
+    height: 22px;
+    margin: 0;
+    border: 2px solid #9fb6c6;
+    border-radius: 50%;
+    background-color: #ffffff;
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: 14px 14px;
+    cursor: pointer;
+    transition: background-color .15s ease, border-color .15s ease;
+}
+.past-trips-select-all input:checked {
+    border-color: #2c91b0;
+    background-color: #2c91b0;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12.5l4.5 4.5L19 7.5'/%3E%3C/svg%3E");
+}
+.past-trips-select-all input:indeterminate {
+    border-color: #2c91b0;
+    background-color: #2c91b0;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3.2' stroke-linecap='round'%3E%3Cpath d='M6 12h12'/%3E%3C/svg%3E");
+}
+.past-trips-select-all input:focus-visible { outline: 2px solid #2c91b0; outline-offset: 2px; }
+/* The count is read out to screen readers; "Remove (2)" shows it on screen. */
+.past-trips-count { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.past-trips-delete, .past-trips-done {
+    min-height: 34px;
+    padding: 6px 16px;
+    border-radius: 999px;
+    font: inherit;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+}
+.past-trips-delete { border: 1px solid #b42336; background-color: #b42336; color: #ffffff; }
+.past-trips-delete:disabled { border-color: #e5b7be; background-color: #f3d8dc; color: #ffffff; cursor: not-allowed; }
+.past-trips-done { border: 1px solid #c7dde6; background-color: #ffffff; color: #1f6f88; }
+
+/* Each trip keeps a hidden check box (for screen readers); on screen, the trips that
+   aren't chosen are dimmed and a chosen trip shows at full brightness. */
+.past-trip-check { position: absolute; width: 1px; height: 1px; margin: 0; opacity: 0; pointer-events: none; }
+/* A tap on the box is handled by its row (js/past-trips.js), so box and row behave the same. */
+.past-trip > summary .past-trip-check { pointer-events: none; }
+.past-trips-list.is-selecting .past-trip > summary { padding-right: 14px; }
+.past-trips-list.is-selecting .past-trip > summary::after,
+.past-trips-list.is-selecting .past-trip-remove,
+.past-trips-list.is-selecting .past-trip-repeat { display: none; }
+.past-trip { transition: opacity .2s ease, filter .2s ease; }
+.past-trips-list.is-selecting .past-trip { opacity: .45; filter: saturate(.6); }
+.past-trips-list.is-selecting .past-trip.is-selected { opacity: 1; filter: none; }

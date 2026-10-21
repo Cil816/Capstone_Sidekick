@@ -20,7 +20,9 @@ function loadGoogleMapsForItinerary() {
   if (_itineraryMapLoadPromise) return _itineraryMapLoadPromise;
   const apiKey = String(window.SIDEKICK_CONFIG?.googleMapsApiKey || "").trim();
   if (!apiKey) return Promise.reject(new Error("Google Maps JavaScript key is not configured."));
-  _itineraryMapLoadPromise = new Promise((resolve, reject) => {
+  // Without internet, wait for the connection before loading the map script.
+  const online = window.SidekickCore?.waitForOnline ? window.SidekickCore.waitForOnline() : Promise.resolve();
+  _itineraryMapLoadPromise = online.then(() => new Promise((resolve, reject) => {
     const existing = document.querySelector('script[data-sidekick-maps="1"]');
     if (existing) {
       existing.addEventListener("load", resolve, { once: true });
@@ -34,7 +36,7 @@ function loadGoogleMapsForItinerary() {
     }
     window.gm_authFailure = () => {
       const map = document.getElementById("itinerary-map");
-      if (map) map.innerHTML = '<div class="itinerary-map-message">Google Maps could not authenticate this key. Check its website restrictions, billing, and Maps JavaScript API configuration.</div>';
+      if (map) map.innerHTML = '<div class="itinerary-map-message">The map isn’t available right now.</div>';
     };
     const script = document.createElement("script");
     script.dataset.sidekickMaps = "1";
@@ -43,18 +45,22 @@ function loadGoogleMapsForItinerary() {
     script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}&loading=async&callback=__sidekickItineraryMapsReady`;
     script.async = true;
     script.defer = true;
-    script.onerror = () => reject(new Error("Google Maps failed to load. Check the browser key, billing, and Maps JavaScript API configuration."));
+    script.onerror = () => { script.remove(); reject(new Error("Google Maps failed to load.")); };
     document.head.appendChild(script);
-  });
+  }));
+  // A failed load (for example, the connection dropped) can be tried again later.
+  _itineraryMapLoadPromise.catch(() => { _itineraryMapLoadPromise = null; });
   return _itineraryMapLoadPromise;
 }
 
 async function initializeItineraryMap() {
   const mapEl = document.getElementById("itinerary-map");
   if (!mapEl) return;
+  if (!_itineraryMap && !window.google?.maps) mapEl.innerHTML = '<div class="sk-skel sk-map-skeleton" aria-hidden="true"></div><span class="sr-only">Loading map…</span>';
   try {
     await loadGoogleMapsForItinerary();
     if (!_itineraryMap) {
+      mapEl.replaceChildren();
       _itineraryMap = new google.maps.Map(mapEl, {
         center: { lat: 14.5995, lng: 120.9842 },
         zoom: 6,
@@ -65,7 +71,13 @@ async function initializeItineraryMap() {
       google.maps.event.trigger(_itineraryMap, "resize");
     }
   } catch (error) {
-    mapEl.innerHTML = `<div class="itinerary-map-message">${window.SidekickCore.escapeHtml(error.message || "The map is unavailable.")}</div>`;
+    // Without internet the skeleton stays and the map loads once the connection is back.
+    if (window.SidekickCore?.isOnline && !window.SidekickCore.isOnline()) {
+      mapEl.innerHTML = '<div class="sk-skel sk-map-skeleton" aria-hidden="true"></div><span class="sr-only">Loading map…</span>';
+      await window.SidekickCore.waitForOnline();
+      return initializeItineraryMap();
+    }
+    mapEl.innerHTML = `<div class="itinerary-map-message">${window.SidekickCore.escapeHtml(window.SidekickCore.friendlyError(error, "The map isn’t available right now."))}</div>`;
   }
 }
 
@@ -272,7 +284,7 @@ async function searchPlacesForBuilder(query) {
       mapEl.appendChild(button);
     });
   } catch (error) {
-    mapEl.textContent = error.message || "Google Places is currently unavailable.";
+    mapEl.textContent = window.SidekickCore.friendlyError(error, "Places can’t be shown on the map right now.");
   }
 }
 
@@ -282,10 +294,11 @@ function getPlacePhotoUrl(place) {
   const freshPhoto = _freshActivityPhotosByPlaceId.get(placeId);
   if (_freshActivityPhotosByPlaceId.has(placeId) && !freshPhoto) return "";
   const resource = String(freshPhoto?.photoResource || place?.photoResource || "").trim();
-  const baseUrl = window.SidekickCore?.getApiBaseUrl?.() || "";
-  return resource && baseUrl
-    ? `${baseUrl}/api/maps/photo?name=${encodeURIComponent(resource)}`
-    : "";
+  let baseUrl = "";
+  try { baseUrl = window.SidekickCore?.getApiBaseUrl?.() || ""; } catch (error) { return ""; }
+  // An empty base means the API is on this same site (a web preview): use a relative URL.
+  if (!resource || (!baseUrl && !window.location.protocol.startsWith("http"))) return "";
+  return `${baseUrl}/api/maps/photo?name=${encodeURIComponent(resource)}`;
 }
 
 function getPhotoAttributionMarkup(place) {
@@ -412,17 +425,21 @@ function renderActivity(activity) {
   const timeText = activity?.dueAt ? new Date(Number(activity.dueAt)).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : window.SidekickCore.escapeHtml(activity.timeLabel || '');
   const distance = typeof activity?.travelDistanceKm === 'number' ? `${activity.travelDistanceKm.toFixed(1)} km from the last stop` : '';
   const mins = typeof activity?.travelMinutes === 'number' ? `about ${Math.round(activity.travelMinutes)} min travel` : '';
-  const routeSummary = [distance, mins, activity.routeStatus ? 'Travel time unavailable' : '']
+  const routeSummary = [distance, mins, activity.routeNoneKey
+    ? 'No road or public-transport route from the last stop; you may need a boat or a walk'
+    : activity.routeStatus ? 'Travel time unavailable' : '']
     .filter(Boolean)
     .join(' · ');
-  const costEstimate = _liveActivityCostsByPlaceId.get(String(activity?.placeId || ''));
+  const costEstimate = _liveActivityCostsByPlaceId.get(priceKey(activity));
   const hasActivityCostEstimate = costEstimate
     && Number.isFinite(costEstimate.lowPhp)
     && Number.isFinite(costEstimate.highPhp);
   const activityCostText = hasActivityCostEstimate
     ? (costEstimate.lowPhp === 0 && costEstimate.highPhp === 0
-      ? (/restaurant|cafe/i.test(String(activity?.category || '')) ? 'No entry fee' : 'Free entry')
-      : `Entry fee: PHP ${Number(costEstimate.lowPhp).toLocaleString()}–${Number(costEstimate.highPhp).toLocaleString()}`)
+      ? (/restaurant|cafe|hotel/i.test(String(activity?.category || '')) ? 'No entry fee' : 'Free entry')
+      : costEstimate.lowPhp === 0
+        ? `Entry: ${formatPriceRange(0, costEstimate.highPhp)} (free entry; optional fees or tours cost more)`
+        : `Entry fee: ${formatPriceRange(costEstimate.lowPhp, costEstimate.highPhp)}`)
     : '';
   const durationMinutes = Math.round(Number(activity.durationMinutes));
   const durationText = durationMinutes >= 60
@@ -453,6 +470,70 @@ function renderActivity(activity) {
   `;
 }
 
+// ---- Meal and rest breaks between stops ------------------------------------------
+// Generated days carry "breaks" (breakfast, lunch, dinner, and resting at night) that
+// are shown between the stops; they are not stops, so the map, costs, reminders and
+// editing ignore them. A break that overlaps a stop (after editing) is not shown.
+function activityStartMinute(activity) {
+  const due = Number(activity?.dueAt);
+  if (Number.isFinite(due) && due > 0) {
+    const date = new Date(due);
+    return date.getHours() * 60 + date.getMinutes();
+  }
+  const match = String(activity?.timeLabel || '').match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+  if (!match) return null;
+  return ((Number(match[1]) % 12) + (match[3].toUpperCase() === 'PM' ? 12 : 0)) * 60 + Number(match[2]);
+}
+
+function renderBreak(item) {
+  const esc = window.SidekickCore.escapeHtml;
+  const rest = item.kind === 'rest';
+  const icon = rest
+    ? '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>'
+    : '<path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2"/><path d="M7 2v20"/><path d="M21 15V2a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7"/>';
+  const hint = rest ? 'Free time and a good night’s rest' : 'Free time to eat · find a spot under Hotels & restaurants';
+  return `
+    <div class="activity-break${rest ? ' is-rest' : ''}" role="note">
+      <span class="activity-break-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${icon}</svg></span>
+      <span class="activity-break-text"><strong>${esc(item.label || (rest ? 'Rest' : 'Meal break'))}</strong><small>${esc(item.timeLabel || '')}${item.timeLabel ? ' · ' : ''}${esc(hint)}</small></span>
+    </div>`;
+}
+
+function renderDayStopsWithBreaks(day) {
+  const activities = day.activities || [];
+  const breaks = (Array.isArray(day.breaks) ? day.breaks : [])
+    .filter((item) => item && Number.isFinite(Number(item.startMinute)))
+    .sort((a, b) => Number(a.startMinute) - Number(b.startMinute));
+  if (!breaks.length) return activities.map(renderActivity).join('');
+  const spans = activities.map((activity) => {
+    const start = activityStartMinute(activity);
+    const length = Math.max(0, Math.round(Number(activity.durationMinutes) || 0));
+    return start === null ? null : [start, start + length];
+  });
+  const lastStart = Math.max(-1, ...spans.filter(Boolean).map((span) => span[0]));
+  const visible = breaks.filter((item) => {
+    const start = Number(item.startMinute);
+    if (item.kind === 'rest' || item.endMinute === null || item.endMinute === undefined) return start > lastStart;
+    const end = Number(item.endMinute);
+    return !spans.some((span) => span && start < span[1] && end > span[0]);
+  });
+  let next = 0;
+  const html = [];
+  activities.forEach((activity, index) => {
+    const start = spans[index]?.[0];
+    while (next < visible.length && start !== undefined && Number(visible[next].startMinute) <= start) {
+      html.push(renderBreak(visible[next]));
+      next += 1;
+    }
+    html.push(renderActivity(activity));
+  });
+  while (next < visible.length) {
+    html.push(renderBreak(visible[next]));
+    next += 1;
+  }
+  return html.join('');
+}
+
 // True while the signed-in user has a saved itinerary with at least one day.
 function hasStoredItinerary() {
   try {
@@ -472,6 +553,35 @@ document.addEventListener('sidekick:itinerary-updated', () => {
   renderTripBudget(null);
 });
 
+// The key an activity's price is stored under: its Google place ID, or for an activity
+// the traveler typed in (or whose location they changed) a key made from its name and
+// location, so it can still be priced and counted in the totals.
+function priceKey(activity) {
+  const placeId = String(activity?.placeId || '').trim();
+  if (placeId) return placeId;
+  const text = `${String(activity?.title || '').trim().toLowerCase()}|${String(activity?.location || '').trim().toLowerCase()}`;
+  if (text === '|') return '';
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < text.length; index += 1) hash = Math.imul(hash ^ text.charCodeAt(index), 0x01000193);
+  return `custom-${(hash >>> 0).toString(16)}`;
+}
+
+// The itinerary as sent for price research: every activity carries its price key.
+function itineraryForPricing(itinerary, keep = () => true) {
+  return (itinerary || []).map((day) => ({
+    ...day,
+    activities: (day?.activities || []).filter(keep).map((activity) => ({ ...activity, placeId: priceKey(activity) })),
+  }));
+}
+
+// "Free", "₱300", "Free – ₱500" or "₱200 – ₱800" for a price range.
+function formatPriceRange(low, high) {
+  const peso = (amount) => `₱${Math.round(Number(amount)).toLocaleString()}`;
+  if (!high) return 'Free';
+  if (low === high) return peso(high);
+  return `${low ? peso(low) : 'Free'} – ${peso(high)}`;
+}
+
 function renderTripBudget(budget) {
   const summary = document.getElementById('itinerary-budget-summary');
   if (!summary) return;
@@ -482,8 +592,13 @@ function renderTripBudget(budget) {
   }
   const hasActivityEstimate = Number.isFinite(budget.totalLowPhp) && Number.isFinite(budget.totalHighPhp);
   const total = hasActivityEstimate
-    ? `PHP ${Number(budget.totalLowPhp).toLocaleString()}–${Number(budget.totalHighPhp).toLocaleString()}`
+    ? formatPriceRange(Number(budget.totalLowPhp), Number(budget.totalHighPhp))
     : 'No price estimate found';
+  // A range starting at "Free" means some places are free to enter and the higher
+  // figure includes optional fees (tours, rentals, environmental fees).
+  const rangeNote = hasActivityEstimate && Number(budget.totalLowPhp) < Number(budget.totalHighPhp)
+    ? '<p class="itinerary-budget-note">The lower figure is the least you’d pay (free places and basic entry only); the higher one includes optional fees such as tours and rentals.</p>'
+    : '';
   const targetNote = Number.isFinite(_activeBudgetTargetPhp)
     ? `<p class="itinerary-budget-note">Your trip budget: PHP ${Number(_activeBudgetTargetPhp).toLocaleString()}.</p>`
     : '';
@@ -511,7 +626,7 @@ function renderTripBudget(budget) {
   const sourcesToggle = sourceHtml
     ? `<button class="itinerary-sources-toggle" type="button" aria-expanded="false" aria-controls="itinerary-budget-sources">Show sources (${sourceCount})</button><div class="itinerary-budget-sources" id="itinerary-budget-sources" hidden>${sourceHtml}</div>`
     : '<p class="itinerary-budget-note">No source links found.</p>';
-  summary.innerHTML = `<h2>Activity costs (estimate)</h2><p class="itinerary-budget-total">${window.SidekickCore.escapeHtml(total)}</p>${targetNote}${activityTargetNote}${activityOverTargetNote}${notes}${sourcesToggle}${suggestionHtml ? `<div class="itinerary-search-suggestions">${suggestionHtml}</div>` : ''}`;
+  summary.innerHTML = `<h2>Activity costs (estimate)</h2><p class="itinerary-budget-total">${window.SidekickCore.escapeHtml(total)}</p>${rangeNote}${targetNote}${activityTargetNote}${activityOverTargetNote}${notes}${sourcesToggle}${suggestionHtml ? `<div class="itinerary-search-suggestions">${suggestionHtml}</div>` : ''}`;
   const sourceToggle = summary.querySelector('.itinerary-sources-toggle');
   const sourcePanel = summary.querySelector('.itinerary-budget-sources');
   sourceToggle?.addEventListener('click', () => {
@@ -531,7 +646,7 @@ function getTripBudgetCacheKey(itineraryData) {
     endDate: String(meta.endDate || ''),
     itinerary: (itineraryData?.itinerary || []).map((day) => ({
       activities: (day.activities || []).map((activity) => ({
-        placeId: String(activity.placeId || ''),
+        placeId: priceKey(activity),
         title: String(activity.title || ''),
         location: String(activity.location || ''),
         category: String(activity.category || 'activity'),
@@ -555,7 +670,7 @@ function normalizeTripBudgetCounts(budget, itinerary, activityCosts) {
   const costByPlaceId = new Map((Array.isArray(activityCosts) ? activityCosts : [])
     .map((cost) => [String(cost?.placeId || ''), cost]));
   const pricedActivityCount = activities.filter((activity) => {
-    const cost = costByPlaceId.get(String(activity?.placeId || ''));
+    const cost = costByPlaceId.get(priceKey(activity));
     return cost && Number.isFinite(cost.lowPhp) && Number.isFinite(cost.highPhp);
   }).length;
   const totalActivityCount = activities.length;
@@ -606,8 +721,8 @@ async function loadLiveTripBudget(itineraryData, email) {
     .map((cost) => [String(cost.placeId), cost]));
   const canReusePrices = knownCosts.size > 0 && Boolean(meta.liveTripBudget);
   const unpricedPlaceIds = new Set((itineraryData.itinerary || []).flatMap((day) => day?.activities || [])
-    .map((activity) => String(activity?.placeId || ''))
-    .filter((placeId) => placeId && !knownCosts.has(placeId)));
+    .map((activity) => priceKey(activity))
+    .filter((key) => key && !knownCosts.has(key)));
   if (summary && (!canReusePrices || unpricedPlaceIds.size)) {
     summary.hidden = false;
     summary.innerHTML = '<h2>Estimated activity costs</h2><p class="itinerary-budget-note">Searching current activity prices and sources…</p>';
@@ -623,10 +738,7 @@ async function loadLiveTripBudget(itineraryData, email) {
           method: 'POST',
           body: JSON.stringify({
             email,
-            itinerary: itineraryData.itinerary.map((day) => ({
-              ...day,
-              activities: (day.activities || []).filter((activity) => unpricedPlaceIds.has(String(activity?.placeId || ''))),
-            })),
+            itinerary: itineraryForPricing(itineraryData.itinerary, (activity) => unpricedPlaceIds.has(priceKey(activity))),
             destination: meta.destination || meta.focusedPlace || '',
             startDate: normalizedDates?.startDate || meta.startDate,
             endDate: normalizedDates?.endDate || meta.endDate,
@@ -637,7 +749,7 @@ async function loadLiveTripBudget(itineraryData, email) {
         });
       }
       const usedPlaceIds = new Set((itineraryData.itinerary || []).flatMap((day) => day?.activities || [])
-        .map((activity) => String(activity?.placeId || '')).filter(Boolean));
+        .map((activity) => priceKey(activity)).filter(Boolean));
       activityCosts = Array.from(knownCosts.values()).filter((cost) => usedPlaceIds.has(String(cost.placeId)));
       const sources = Array.from(new Map([...(meta.liveTripBudget.sources || []), ...(response?.tripBudget?.sources || [])]
         .filter((source) => source?.url).map((source) => [source.url, source])).values()).slice(0, 12);
@@ -653,7 +765,7 @@ async function loadLiveTripBudget(itineraryData, email) {
         method: 'POST',
         body: JSON.stringify({
           email,
-          itinerary: itineraryData.itinerary,
+          itinerary: itineraryForPricing(itineraryData.itinerary),
           destination: meta.destination || meta.focusedPlace || '',
           startDate: normalizedDates?.startDate || meta.startDate,
           endDate: normalizedDates?.endDate || meta.endDate,
@@ -688,7 +800,7 @@ async function loadLiveTripBudget(itineraryData, email) {
   } catch (error) {
     if (summary && hasStoredItinerary()) {
       summary.hidden = false;
-      summary.innerHTML = `<h2>Estimated activity costs</h2><p class="itinerary-budget-note">Live price search is unavailable right now: ${window.SidekickCore.escapeHtml(error.message || 'Please try again later.')}</p>`;
+      summary.innerHTML = `<h2>Estimated activity costs</h2><p class="itinerary-budget-note">Live price search is unavailable right now. ${window.SidekickCore.escapeHtml(window.SidekickCore.friendlyError(error, 'Please try again later.'))}</p>`;
     }
   }
 }
@@ -698,7 +810,7 @@ function buildLocalTripBudget(itineraryData, activityCosts, { startDate, endDate
   const costByPlaceId = new Map((activityCosts || []).map((cost) => [String(cost.placeId), cost]));
   const activities = (itineraryData?.itinerary || []).flatMap((day) => day?.activities || []);
   const priced = activities
-    .map((activity) => costByPlaceId.get(String(activity?.placeId || '')))
+    .map((activity) => costByPlaceId.get(priceKey(activity)))
     .filter((cost) => cost && Number.isFinite(cost.lowPhp) && Number.isFinite(cost.highPhp));
   return {
     status: priced.length && priced.length === activities.length ? 'complete-estimate' : 'partial-estimate',
@@ -744,7 +856,13 @@ async function enrichItineraryWithLiveRoutes(itineraryData, email) {
       const fromCoord = lookupPlaceByActivity(prev);
       const toCoord = lookupPlaceByActivity(current);
 
-      if (prev && fromCoord && toCoord && !(Number.isFinite(current.travelMinutes) && Number.isFinite(current.travelDistanceKm))) {
+      // The pair of stops this travel estimate is for. A pair Google has no road or
+      // transit route for (an island reached by boat, say) isn't asked about again until
+      // a stop changes; after any other failure, it is tried again in 6 hours.
+      const routeKey = fromCoord && toCoord ? [fromCoord.lat, fromCoord.lng, toCoord.lat, toCoord.lng].map((n) => Number(n).toFixed(5)).join(',') : '';
+      const knownNoRoute = routeKey && current.routeNoneKey === routeKey;
+      const waitingToRetry = routeKey && current.routeRetryKey === routeKey && Number(current.routeRetryAfter) > Date.now();
+      if (prev && fromCoord && toCoord && !knownNoRoute && !waitingToRetry && !(Number.isFinite(current.travelMinutes) && Number.isFinite(current.travelDistanceKm))) {
         try {
           const response = await window.SidekickCore.apiRequest("/api/maps/route", {
             method: "POST",
@@ -755,12 +873,23 @@ async function enrichItineraryWithLiveRoutes(itineraryData, email) {
           current.travelMinutes = route.durationMinutes;
           current.transportMode = route.travelMode;
           current.routeStatus = response.isDevelopmentMock ? "Development route estimate" : "";
+          delete current.routeNoneKey;
+          delete current.routeRetryKey;
+          delete current.routeRetryAfter;
           changed = true;
         } catch (error) {
           current.travelDistanceKm = null;
           current.travelMinutes = null;
           current.transportMode = "Route unavailable";
-          current.routeStatus = error.message || "Route information could not be retrieved.";
+          current.routeStatus = window.SidekickCore.friendlyError(error, "Route information could not be retrieved.");
+          if (error?.statusCode === 422) {
+            current.routeNoneKey = routeKey;
+            delete current.routeRetryKey;
+            delete current.routeRetryAfter;
+          } else {
+            current.routeRetryKey = routeKey;
+            current.routeRetryAfter = Date.now() + 6 * 60 * 60 * 1000;
+          }
           changed = true;
         }
       }
@@ -785,12 +914,12 @@ function renderItinerary(itinerary, isDevelopmentMock = false) {
   container.innerHTML = "";
 
   for (const day of itinerary) {
-    const activitiesHtml = (day.activities || []).map(renderActivity).join("");
+    const activitiesHtml = renderDayStopsWithBreaks(day);
     const dayActivities = day.activities || [];
     const dayCostBands = isDevelopmentMock
       ? null
       : dayActivities
-        .map((activity) => _liveActivityCostsByPlaceId.get(String(activity?.placeId || '')))
+        .map((activity) => _liveActivityCostsByPlaceId.get(priceKey(activity)))
         .filter((cost) => cost && Number.isFinite(cost.lowPhp) && Number.isFinite(cost.highPhp));
     const dayCostLow = isDevelopmentMock
       ? Number(day.estimatedDayCostLowPhp ?? day.estimatedDayCostPhp)
@@ -809,8 +938,8 @@ function renderItinerary(itinerary, isDevelopmentMock = false) {
       : true);
     const dayCostText = hasDayCostEstimate
       ? (dayPricedActivityCount
-        ? `Entry fees: PHP ${dayCostLow.toLocaleString()}–${dayCostHigh.toLocaleString()} (${dayPricedActivityCount}/${dayActivities.length} prices found)${Number.isFinite(_activeActivityDailyBudgetTargetPhp) ? ` · daily target ~PHP ${_activeActivityDailyBudgetTargetPhp.toLocaleString()}` : ''}`
-        : `No activity prices found${Number.isFinite(_activeActivityDailyBudgetTargetPhp) ? ` · daily target ~PHP ${_activeActivityDailyBudgetTargetPhp.toLocaleString()}` : ''}`)
+        ? `Entry fees: ${formatPriceRange(dayCostLow, dayCostHigh)} (prices found for ${dayPricedActivityCount} of ${dayActivities.length} stops)${Number.isFinite(_activeActivityDailyBudgetTargetPhp) ? ` · planned ~₱${_activeActivityDailyBudgetTargetPhp.toLocaleString()} a day` : ''}`
+        : `No activity prices found${Number.isFinite(_activeActivityDailyBudgetTargetPhp) ? ` · planned ~₱${_activeActivityDailyBudgetTargetPhp.toLocaleString()} a day` : ''}`)
       : '';
 
     const dayHtml = `
@@ -852,7 +981,7 @@ function setItineraryForEmail(email, itineraryData) {
 }
 
 async function syncExistingItineraryForMonitoring(email, itineraryData) {
-  if (!itineraryData?.itinerary?.length || itineraryData.meta?.serverTripId) return;
+  if (!itineraryData?.itinerary?.length || itineraryData.meta?.serverTripId || itineraryData.meta?.isDraft) return;
   const status = document.getElementById('itinerary-monitoring-status');
   if (status) {
     status.hidden = false;
@@ -866,7 +995,7 @@ async function syncExistingItineraryForMonitoring(email, itineraryData) {
       window.SidekickCore.clearExpiredItineraryForEmail(email, null, itineraryData);
       return;
     }
-    if (status) status.textContent = `This itinerary could not be synced for admin monitoring: ${error.message || 'Please try again later.'}`;
+    if (status) status.textContent = `This itinerary could not be saved online yet. ${window.SidekickCore.friendlyError(error, 'It is still saved on this phone. Please try again later.')}`;
   }
 }
 
@@ -903,6 +1032,8 @@ function attachAddActivityHandler(itineraryData, prefs, email, startDate) {
   if (!addBtn) return;
 
   addBtn.onclick = async () => {
+    // The editor's form searches Google Maps for the place (photo and map pin included).
+    if (window.SidekickItineraryEdit?.openAddActivity?.(0)) return;
     const dayCount = Math.max(1, itineraryData.itinerary?.length || 1);
     const picked = (typeof _selectedPlace === 'object' && _selectedPlace
       && Number.isFinite(Number(_selectedPlace.lat)) && Number.isFinite(Number(_selectedPlace.lng))) ? _selectedPlace : null;
@@ -995,7 +1126,13 @@ document.addEventListener("DOMContentLoaded", () => {
   if (!prefs) return;
 
   const email = session.email;
-  const existing = getItineraryForEmail(email);
+  // With nothing open, open the unsaved draft, or else the soonest planned trip.
+  let existing = getItineraryForEmail(email);
+  if (!existing) {
+    const firstKey = window.SidekickCore.getItineraryDraft?.(email) ? "draft" : window.SidekickCore.getPlannedTrips?.(email)?.[0]?.meta?.planId;
+    if (firstKey && window.SidekickCore.openTripForEmail?.(email, firstKey)) existing = getItineraryForEmail(email);
+  }
+  const hasAnyTrip = Boolean(existing) || Boolean(window.SidekickCore.getPlannedTrips?.(email)?.length);
   const builderEl = document.getElementById('itinerary-builder');
   const destinationInput = document.getElementById('itinerary-destination');
   const destinationSuggestions = document.getElementById('itinerary-destination-suggestions');
@@ -1004,6 +1141,35 @@ document.addEventListener("DOMContentLoaded", () => {
   const endInput = document.getElementById('itinerary-end');
   const budgetInput = document.getElementById('itinerary-budget');
   const originInput = document.getElementById('itinerary-origin');
+  const nameInput = document.getElementById('itinerary-name');
+  // Trip name: filled in as "<destination> trip" (the name the app gives a trip) until
+  // the traveler types their own; clearing it goes back to the automatic name.
+  const automaticTripName = () => {
+    const destination = String(destinationInput?.value || '').trim();
+    return destination ? `${destination} trip`.slice(0, 100) : '';
+  };
+  const syncTripName = () => {
+    if (nameInput && nameInput.dataset.custom !== '1') nameInput.value = automaticTripName();
+  };
+  const resetTripName = () => {
+    if (!nameInput) return;
+    delete nameInput.dataset.custom;
+    syncTripName();
+  };
+  // The name the traveler typed, or '' when the automatic name is used.
+  const customTripName = () => {
+    if (!nameInput || nameInput.dataset.custom !== '1') return '';
+    const name = nameInput.value.trim().slice(0, 100);
+    return name && name !== automaticTripName() ? name : '';
+  };
+  if (nameInput) {
+    nameInput.addEventListener('input', () => {
+      const typed = nameInput.value.trim();
+      if (typed && typed !== automaticTripName()) nameInput.dataset.custom = '1';
+      else delete nameInput.dataset.custom;
+    });
+    nameInput.addEventListener('blur', () => { if (!nameInput.value.trim()) resetTripName(); });
+  }
   const buildBtn = document.getElementById('build-itinerary');
   const monitoringStatus = document.getElementById('itinerary-monitoring-status');
   document.addEventListener('sidekick:itinerary-sync-error', (event) => {
@@ -1030,6 +1196,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const chooseDestinationSuggestion = async (suggestion) => {
     if (!destinationInput) return;
     destinationInput.value = suggestion.text || suggestion.name || '';
+    syncTripName();
     destinationInput.dataset.placeId = suggestion.placeId || '';
     destinationInput.dataset.placeTypes = JSON.stringify(suggestion.types || []);
     destinationSuggestions?.replaceChildren();
@@ -1092,6 +1259,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   if (destinationInput) {
     destinationInput.addEventListener('input', () => {
+      syncTripName();
       delete destinationInput.dataset.placeId;
       delete destinationInput.dataset.placeTypes;
       destinationInput.removeAttribute('aria-activedescendant');
@@ -1219,6 +1387,8 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   if (startInput && endInput) {
+    // The date picker greys out days that have already passed.
+    startInput.min = formatDateInput(new Date());
     startInput.addEventListener('change', () => {
       endInput.min = startInput.value;
       if (!endInput.value || endInput.value < startInput.value) endInput.value = startInput.value;
@@ -1226,37 +1396,62 @@ document.addEventListener("DOMContentLoaded", () => {
     });
     endInput.addEventListener('change', () => updateBuilderDatePreview(startInput.value, endInput.value));
   }
-  // Customize opens the builder; tapping it again hides it.
-  if (showBuilderBtn) showBuilderBtn.addEventListener('click', () => showBuilder(builderEl?.style.display === 'none'));
+  // The first free dates (not part of a planned trip), from today on.
+  const nextFreeTripDates = (days = 3) => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    for (let offset = 0; offset < 400; offset += 1) {
+      const first = new Date(today);
+      first.setDate(first.getDate() + offset);
+      const last = new Date(first);
+      last.setDate(last.getDate() + days - 1);
+      if (!window.SidekickCore.findOverlappingTrip?.(email, formatDateInput(first), formatDateInput(last))) return { first, last };
+    }
+    const last = new Date(today);
+    last.setDate(last.getDate() + days - 1);
+    return { first: today, last };
+  };
+  const prefillBuilderForNewTrip = () => {
+    const { first, last } = nextFreeTripDates(3);
+    if (destinationInput) { destinationInput.value = ''; delete destinationInput.dataset.placeId; }
+    resetTripName();
+    if (startInput) startInput.value = formatDateInput(first);
+    if (endInput) { endInput.min = formatDateInput(first); endInput.value = formatDateInput(last); }
+    if (budgetInput) budgetInput.value = '';
+    updateBuilderDatePreview(startInput?.value, endInput?.value);
+  };
+  // "+ New trip" opens the builder for a new trip; tapping it again hides it.
+  if (showBuilderBtn) showBuilderBtn.addEventListener('click', () => {
+    const opening = builderEl?.style.display === 'none';
+    if (opening) prefillBuilderForNewTrip();
+    showBuilder(opening);
+    if (opening) builderEl?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
   const removeAllBtn = document.getElementById('remove-all-itinerary');
   if (removeAllBtn) {
     removeAllBtn.addEventListener('click', async (e) => {
       e.preventDefault();
-      const ok = await window.SidekickUI.confirm('Every day and activity in this itinerary, and its reminders, will be removed. This cannot be undone.', { title: 'Remove your itinerary?', confirmText: 'Remove', tone: 'danger' });
+      const open = getItineraryForEmail(email);
+      const name = window.SidekickCore.tripDisplayName?.(open) || 'this trip';
+      const ok = await window.SidekickUI.confirm(open?.meta?.isDraft
+        ? 'This unsaved itinerary will be discarded.'
+        : 'Every day and activity in this trip, and its reminders, will be removed. Your other planned trips stay. This cannot be undone.', { title: `Delete “${name}”?`, confirmText: 'Delete', tone: 'danger' });
       if (!ok) return;
       removeAllBtn.disabled = true;
       try {
         await window.SidekickCore.clearItineraryForEmail(email);
-        const all = JSON.parse(localStorage.getItem('sidekick.remindersByEmail.v1') || '{}');
-        all[email] = (all[email] || []).filter((reminder) => (
-          reminder.type !== 'Itinerary' && typeof reminder.parentDueAt === 'undefined'
-        ));
-        localStorage.setItem('sidekick.remindersByEmail.v1', JSON.stringify(all));
+        // Reminders are rebuilt from the planned trips that remain.
+        window.SidekickCore.syncRemindersFromItinerary?.(email);
         document.dispatchEvent(new CustomEvent('sidekick:reminders-updated', { detail: { email } }));
       } catch (error) {
-        window.SidekickUI.alert(error.message || 'Unable to remove the itinerary. Please try again.', { title: 'Not removed' });
+        window.SidekickUI.alert(window.SidekickCore.friendlyError(error, 'Unable to remove the itinerary. Please try again.'), { title: 'Not removed' });
         removeAllBtn.disabled = false;
         return;
       }
 
-      const container = document.getElementById('itinerary-content');
-      if (container) {
-        container.innerHTML = `<div id="no-itinerary-message" style="padding:24px;color:#6B7280">You don't have an itinerary yet. Use the builder above to create one.</div><button class="add-activity-btn" id="add-activity-btn" type="button" style="display:none">+ Add Activity</button>`;
-      }
-      if (monitoringStatus) monitoringStatus.hidden = true;
-      window.SidekickItineraryEdit?.setCurrent(null);
-      removeAllBtn.disabled = false;
-      showBuilder(true);
+      // Show what remains (another planned trip, or the builder).
+      window.SidekickUI.loading.show();
+      window.location.reload();
     });
   }
 
@@ -1266,12 +1461,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const startDate = normalizedDates?.start || new Date();
     const endDate = normalizedDates?.end || startDate;
     if (normalizedDates?.changed) setItineraryForEmail(email, existing);
-    if (startInput) startInput.value = formatDateInput(startDate);
-    if (destinationInput) destinationInput.value = existing.meta?.destination || existing.meta?.focusedPlace || '';
-    if (endInput) {
-      endInput.min = formatDateInput(startDate);
-      endInput.value = formatDateInput(endDate);
-    }
+    void endDate;
     updateHeaderDate(prefs, existing);
     renderItinerary(existing.itinerary, Boolean(existing.meta?.isDevelopmentMock));
     void syncExistingItineraryForMonitoring(email, existing);
@@ -1296,8 +1486,8 @@ document.addEventListener("DOMContentLoaded", () => {
       defaultEnd.setDate(defaultEnd.getDate() + 2);
       endInput.value = formatDateInput(defaultEnd);
     }
-    updateBuilderDatePreview(startInput?.value, endInput?.value);
-    showBuilder(true);
+    prefillBuilderForNewTrip();
+    showBuilder(!hasAnyTrip);
   }
 
   if (buildBtn) buildBtn.addEventListener('click', async (e) => {
@@ -1314,7 +1504,23 @@ document.addEventListener("DOMContentLoaded", () => {
     try {
       tripDates = itineraryDates(startInput?.value, endInput?.value);
     } catch (error) {
-      window.SidekickUI.alert(error.message, { title: 'Check your dates' });
+      window.SidekickUI.alert(window.SidekickCore.friendlyError(error, 'Please check your trip dates and try again.'), { title: 'Check your dates' });
+      return;
+    }
+    // A trip can't start on a day that has already passed (today is fine).
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    if (tripDates.start < todayStart) {
+      const shown = tripDates.start.toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' });
+      await window.SidekickUI.alert(`${shown} has already passed. Choose today or a later date to start your trip.`, { title: 'Start date has passed', confirmText: 'Change date' });
+      if (startInput) startInput.min = formatDateInput(todayStart);
+      startInput?.focus();
+      return;
+    }
+    // Starting today but late at night: nothing can be planned for today any more.
+    if (window.SidekickTripStyle?.tooLateToday?.(window.SidekickCore.firstDayStartMinute?.(formatDateInput(tripDates.start)) ?? null)) {
+      await window.SidekickUI.alert('It’s too late in the day to start sightseeing today. Start your trip tomorrow instead.', { title: 'Too late to start today', confirmText: 'Change date' });
+      startInput?.focus();
       return;
     }
     const rawBudget = Number(budgetInput?.value);
@@ -1328,6 +1534,21 @@ document.addEventListener("DOMContentLoaded", () => {
       window.SidekickUI.alert('Itinerary plans can cover up to 14 days. Choose a shorter date range.', { title: 'Trip too long' });
       return;
     }
+    // Dates already taken by a planned trip can't be used for another one.
+    const clash = window.SidekickCore.findOverlappingTrip?.(email, formatDateInput(startVal), formatDateInput(endVal));
+    if (clash) {
+      await window.SidekickUI.alert(window.SidekickCore.tripOverlapMessage(clash), { title: 'Those dates are taken', confirmText: 'Change dates' });
+      startInput?.focus();
+      return;
+    }
+    // Only one unsaved itinerary is kept: building a new one replaces it.
+    const unsaved = window.SidekickCore.getItineraryDraft?.(email);
+    if (unsaved) {
+      const replace = await window.SidekickUI.confirm(`You haven’t saved “${window.SidekickCore.tripDisplayName(unsaved)}” yet. Building a new itinerary will replace it.`, {
+        title: 'Replace your unsaved itinerary?', confirmText: 'Build new one', cancelText: 'Keep it',
+      });
+      if (!replace) return;
+    }
     const originText = String(originInput?.value || '').trim().slice(0, 180);
     const budgetLabel = `PHP ${rawBudget.toLocaleString()} total`;
     const tempPrefs = { ...prefs, preferredPlaces: [destinationName], budget: budgetLabel, budgetAmountPhp: rawBudget, transportation: 'DRIVE' };
@@ -1337,6 +1558,7 @@ document.addEventListener("DOMContentLoaded", () => {
       confirmText: 'Build itinerary',
       cancelText: 'Not yet',
       details: [
+        ['Trip name', customTripName() || automaticTripName()],
         ['Destination', destinationName],
         ['Dates', durationDays === 1 ? shortDate(startVal) : `${shortDate(startVal)} – ${shortDate(endVal)}`],
         ['Budget', `₱${rawBudget.toLocaleString()} total`],
@@ -1354,11 +1576,12 @@ document.addEventListener("DOMContentLoaded", () => {
       const pickedId = destinationInput?.dataset.placeId || '';
       const knownPlace = pickedId && _selectedPlace?.placeId === pickedId && hasPlaceCoordinates(_selectedPlace) ? _selectedPlace : null;
       buildBtn.disabled = true;
-      buildBtn.textContent = 'Checking your budget…';
+      window.SidekickUI?.loading.show('Checking your budget…');
       let budgetCheck = null;
       try {
         budgetCheck = await window.SidekickCore.checkTripBudget({
           destination: destinationName,
+          placeId: destinationInput?.dataset.placeId || '',
           lat: knownPlace ? Number(knownPlace.lat) : null,
           lng: knownPlace ? Number(knownPlace.lng) : null,
           startDate: formatDateInput(startVal),
@@ -1366,8 +1589,8 @@ document.addEventListener("DOMContentLoaded", () => {
           budgetAmountPhp: rawBudget,
         });
       } finally {
+        window.SidekickUI?.loading.hide();
         buildBtn.disabled = false;
-        buildBtn.textContent = 'Build Itinerary';
       }
       if (budgetCheck?.checked && !budgetCheck.realistic) {
         const problem = window.SidekickCore.describeUnrealisticBudget(budgetCheck, destinationName);
@@ -1378,6 +1601,16 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     }
     preCheckedBudgetKey = '';
+
+    // Ask how the traveler wants to spend the trip: time of day, how busy, and focus
+    // (their onboarding preferences come first, with other ideas to add).
+    // A trip starting today begins about half an hour from now, not in the morning.
+    const firstDayStart = window.SidekickCore.firstDayStartMinute?.(formatDateInput(startVal)) ?? null;
+    let tripStyle = null;
+    if (window.SidekickTripStyle?.ask) {
+      tripStyle = await window.SidekickTripStyle.ask({ destination: destinationName, days: durationDays, preferences: prefs || {}, firstDayStartMinute: firstDayStart });
+      if (!tripStyle) return; // "Back": nothing is built
+    }
 
     // Offer hotels that fit the budget before generating.
     let chosenStay = null;
@@ -1416,7 +1649,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     buildBtn.disabled = true;
-    buildBtn.textContent = 'Building itinerary (this might take a while)…';
+    window.SidekickUI?.loading.show('Building your itinerary… this can take a minute');
     try {
       const generated = await window.SidekickCore.apiRequest('/api/itinerary/generate', {
         method: 'POST',
@@ -1424,7 +1657,7 @@ document.addEventListener("DOMContentLoaded", () => {
           email,
           message: `Plan a ${durationDays}-day trip to ${destinationName}. Total budget: PHP ${rawBudget}. Keep the full trip within this budget when possible. Start date: ${formatDateInput(startVal)}. End date: ${formatDateInput(endVal)}.`,
           selectedDestination: { name: destinationName, placeId: destinationInput?.dataset.placeId || '' },
-          profile: { ...tempPrefs, startDate: formatDateInput(startVal), endDate: formatDateInput(endVal), durationDays, ...(chosenStay ? { stay: chosenStay } : {}) },
+          profile: { ...tempPrefs, startDate: formatDateInput(startVal), endDate: formatDateInput(endVal), durationDays, ...(chosenStay ? { stay: chosenStay } : {}), ...(tripStyle ? { tripStyle } : {}), ...(Number.isFinite(firstDayStart) ? { firstDayStartMinute: firstDayStart } : {}), clientToday: formatDateInput(new Date()) },
           origin: originText ? { name: originText, address: originText } : null,
         }),
       });
@@ -1439,7 +1672,10 @@ document.addEventListener("DOMContentLoaded", () => {
           durationDays,
           budget: budgetLabel,
           budgetAmountPhp: rawBudget,
-          serverTripId: generated.tripId,
+          // Not saved yet: no server record and no reminders until "Save itinerary".
+          isDraft: true,
+          // A name the traveler typed; otherwise the trip is named after its destination.
+          ...(customTripName() ? { title: customTripName() } : {}),
           ...(chosenStay ? { stay: { ...chosenStay, ...(generated.meta?.stay || {}) } } : {}),
         },
       };
@@ -1458,14 +1694,17 @@ document.addEventListener("DOMContentLoaded", () => {
       window.SidekickItineraryEdit?.setCurrent(itineraryData);
       if (chosenStay) window.SidekickStayEat?.setStay(chosenStay, destinationName);
       showBuilder(false);
+      // The Planned trips list shows the new draft open, with "Save itinerary" at its end.
+      document.dispatchEvent(new CustomEvent('sidekick:draft-built'));
       window.SidekickAppRating?.afterItineraryGenerated();
       try { window.SidekickCore?.syncRemindersFromItinerary?.(email); } catch (error) {}
       try { window.SidekickCore?.scheduleAllFor?.(email); } catch (error) {}
     } catch (error) {
-      window.SidekickUI.alert(error.message || 'Verified itinerary generation failed.', { title: 'Itinerary not built' });
+      window.SidekickUI?.loading.hide(true);
+      window.SidekickUI.alert(window.SidekickCore.friendlyError(error, 'Your itinerary couldn’t be built right now. Please try again.'), { title: 'Itinerary not built' });
     } finally {
+      window.SidekickUI?.loading.hide();
       buildBtn.disabled = false;
-      buildBtn.textContent = 'Build Itinerary';
     }
   });
 
@@ -1486,6 +1725,7 @@ document.addEventListener("DOMContentLoaded", () => {
       destinationInput.value = pendingBuild.destination;
       destinationInput.dataset.placeId = pendingBuild.placeId || '';
     }
+    resetTripName();
     const pendingPlace = { name: pendingBuild.destination, placeId: pendingBuild.placeId || '', lat: pendingBuild.lat, lng: pendingBuild.lng };
     if (pendingPlace.placeId && hasPlaceCoordinates(pendingPlace)) _selectedPlace = pendingPlace;
     if (startInput) startInput.value = pendingBuild.startDate;

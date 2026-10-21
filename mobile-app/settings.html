@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <title>Sidekick AI - Settings</title>
   <link rel="stylesheet" href="css/common.css">
   <link rel="stylesheet" href="css/settings.css">
@@ -74,7 +74,7 @@
           <h2>Travel Data</h2>
           <button id="sync-reminders-btn" class="btn btn-outline btn-full settings-action" type="button">Sync reminders from itinerary</button>
           <button id="clear-chat-btn" class="btn btn-outline btn-full settings-action" type="button">Clear chat history</button>
-          <button id="clear-itinerary-btn" class="btn btn-outline btn-full settings-action" type="button">Remove itinerary</button>
+          <button id="clear-itinerary-btn" class="btn btn-outline btn-full settings-action" type="button">Remove all trips</button>
           <button id="reset-prefs-btn" class="btn btn-outline btn-full settings-action" type="button">Reset onboarding preferences</button>
         </section>
 
@@ -101,7 +101,7 @@
   <dialog class="delete-account-dialog" id="delete-account-dialog" aria-labelledby="delete-account-title">
     <form id="delete-account-form" novalidate>
       <h2 id="delete-account-title">Delete your account?</h2>
-      <p>This permanently deletes your Sidekick account, itineraries, preferences and ratings from our server, and clears your Sidekick data on this device. This cannot be undone.</p>
+      <p>This deletes your Sidekick account, itineraries, preferences and ratings from our server, and clears your Sidekick data on this device. A copy is kept securely for a limited time, then removed for good. This cannot be undone.</p>
       <label for="delete-account-password">Enter your password to confirm</label>
       <input type="password" id="delete-account-password" autocomplete="current-password" required>
       <p class="auth-error" id="delete-account-error" role="alert" hidden></p>
@@ -156,6 +156,7 @@
   <script src="js/ui.js"></script>
   <script src="js/settings.js"></script>
   <script src="js/nav.js"></script>
-  <script src="js/tab-motion.js"></script>
+  <script src="js/tab-motion.js"></script>
+  <script src="js/pull-refresh.js"></script>
 </body>
 </html>

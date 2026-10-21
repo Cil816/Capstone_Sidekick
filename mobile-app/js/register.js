@@ -12,10 +12,14 @@ function setRegisterStatus(message) {
   status.hidden = !message;
 }
 
+// While a step is running the Sidekick loading screen shows (busyText is no longer
+// shown on the button); the button keeps its normal label and is disabled.
 function setButtonBusy(button, busy, busyText, idleText) {
   if (!button) return;
   button.disabled = busy;
-  button.textContent = busy ? busyText : idleText;
+  button.textContent = idleText;
+  if (busy) window.SidekickUI?.loading.show();
+  else window.SidekickUI?.loading.hide();
 }
 
 function bindRegisterForm() {
@@ -70,7 +74,7 @@ function bindRegisterForm() {
       setRegisterStatus("Verification code sent. Check your inbox and spam folder.");
       otpInput.focus();
     } catch (error) {
-      setRegisterError(error.message || "Unable to send a verification code. Check the email and try again.");
+      setRegisterError(window.SidekickCore.friendlyError(error, "Unable to send a verification code. Check the email and try again."));
     } finally {
       setButtonBusy(requestCodeButton, false, "Checking email…", "Verify email");
     }
@@ -98,7 +102,7 @@ function bindRegisterForm() {
       showStep("details");
       nameInput.focus();
     } catch (error) {
-      setRegisterError(error.message || "Invalid or expired code. Please try again.");
+      setRegisterError(window.SidekickCore.friendlyError(error, "Invalid or expired code. Please try again."));
     } finally {
       setButtonBusy(confirmCodeButton, false, "Checking code…", "Confirm email");
     }
@@ -116,7 +120,7 @@ function bindRegisterForm() {
       otpInput.value = "";
       setRegisterStatus("A new verification code has been sent.");
     } catch (error) {
-      setRegisterError(error.message || "Unable to resend the code.");
+      setRegisterError(window.SidekickCore.friendlyError(error, "Unable to resend the code. Please try again."));
     } finally {
       setButtonBusy(resendCodeButton, false, "Sending…", "Resend code");
     }
@@ -191,12 +195,14 @@ function bindRegisterForm() {
       });
       // A brand-new account: drop any onboarding answers left from an earlier account with this email.
       window.SidekickCore.recordAccountForEmail(result.user.email, result.user.user_id, { newAccount: true });
+      // Keep the loading screen up while the next page opens.
+      window.SidekickUI?.loading.show();
       window.location.href = "onboarding.html";
     } catch (error) {
-      setRegisterError(error.message || "Registration failed. Please try again.");
+      setRegisterError(window.SidekickCore.friendlyError(error, "Registration failed. Please try again."));
       if (/code|verify|expired/i.test(error.message || "")) {
         showStep("code");
-        setRegisterError(error.message || "Invalid or expired code. Please request another code.");
+        setRegisterError(window.SidekickCore.friendlyError(error, "Invalid or expired code. Please request another code."));
         otpInput.focus();
       }
     } finally {

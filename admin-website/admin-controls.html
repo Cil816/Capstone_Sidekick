@@ -49,51 +49,64 @@
         <div id="admin-status-banner" class="admin-status-banner" aria-live="polite"></div>
 
         <div id="settings-setup-note" class="admin-card ax-setup-note" hidden></div>
+        <section class="admin-card ax-profile-card" aria-labelledby="profile-heading">
+          <div class="ax-profile">
+            <span id="profile-avatar" class="ax-profile-avatar" aria-hidden="true"></span>
+            <div class="ax-profile-text">
+              <h2 class="ax-card-title" id="profile-heading">Your profile</h2>
+              <p id="profile-summary" class="ax-profile-summary"><span class="ax-skel ax-skel-line" aria-hidden="true" style="width:40%"></span><span class="ax-skel ax-skel-line is-sm" aria-hidden="true" style="width:70%"></span><span class="sr-only">Loading…</span></p>
+            </div>
+            <div class="ax-profile-actions">
+              <button id="profile-edit-name" class="admin-button-secondary" type="button" disabled>Edit name</button>
+              <button id="profile-change-password" class="admin-button-secondary" type="button" disabled>Change password</button>
+            </div>
+          </div>
+        </section>
         <section class="admin-card" aria-labelledby="maintenance-heading">
           <div class="ax-card-head"><div><h2 class="ax-card-title" id="maintenance-heading">Maintenance mode</h2><p class="ax-card-note">While on, the app shows your message and pauses sign-in, trips and chat. Saved data is untouched and this admin website keeps working.</p></div></div>
           <div class="ax-setting-row">
-            <div><strong>Pause the app for maintenance</strong><p id="maintenance-detail" class="ax-setting-detail"></p></div>
-            <label class="ax-switch"><input id="setting-maintenance" type="checkbox" role="switch" /><span aria-hidden="true"></span><span class="sr-only">Maintenance mode</span></label>
+            <div><strong>Pause the app for maintenance</strong><p id="maintenance-detail" class="ax-setting-detail"><span class="ax-skel ax-skel-line is-sm" aria-hidden="true" style="width:70%"></span><span class="sr-only">Loading…</span></p></div>
+            <label class="ax-switch"><input id="setting-maintenance" type="checkbox" role="switch" disabled /><span aria-hidden="true"></span><span class="sr-only">Maintenance mode</span></label>
           </div>
           <div class="ax-setting-field">
             <label for="setting-maintenance-message">Message shown in the app</label>
-            <textarea id="setting-maintenance-message" maxlength="300" rows="2" placeholder="Sidekick is under maintenance right now. Your saved trips are safe. Please try again later."></textarea>
-            <div class="ax-setting-actions"><button id="save-maintenance-message" class="admin-button-secondary" type="button">Save message</button></div>
+            <textarea id="setting-maintenance-message" maxlength="300" rows="2" disabled placeholder="Sidekick is under maintenance right now. Your saved trips are safe. Please try again later."></textarea>
+            <div class="ax-setting-actions"><button id="save-maintenance-message" class="admin-button-secondary" type="button" disabled>Save message</button></div>
           </div>
         </section>
         <section class="admin-card" aria-labelledby="api-access-heading">
           <div class="ax-card-head"><div><h2 class="ax-card-title" id="api-access-heading">API access in the app</h2><p class="ax-card-note">Turn a paid feature off to stop its charges immediately. The rest of the app keeps working, and users see a short notice instead.</p></div></div>
           <div class="ax-setting-row">
             <div><strong>AI features (Gemini)</strong><p class="ax-setting-detail">Sidekick chat, AI itinerary generation, review summaries and budget research.</p></div>
-            <label class="ax-switch"><input id="setting-ai" type="checkbox" role="switch" /><span aria-hidden="true"></span><span class="sr-only">AI features</span></label>
+            <label class="ax-switch"><input id="setting-ai" type="checkbox" role="switch" disabled /><span aria-hidden="true"></span><span class="sr-only">AI features</span></label>
           </div>
           <div class="ax-setting-row">
             <div><strong>Maps and places (Google Maps Platform)</strong><p class="ax-setting-detail">Place search, photos, recommendations, hotels and restaurants, and routes.</p></div>
-            <label class="ax-switch"><input id="setting-maps" type="checkbox" role="switch" /><span aria-hidden="true"></span><span class="sr-only">Maps and places</span></label>
+            <label class="ax-switch"><input id="setting-maps" type="checkbox" role="switch" disabled /><span aria-hidden="true"></span><span class="sr-only">Maps and places</span></label>
           </div>
         </section>
         <section class="admin-card" aria-labelledby="budget-heading">
           <div class="ax-card-head"><div><h2 class="ax-card-title" id="budget-heading">Monthly API budget</h2><p class="ax-card-note">Estimated spending this month, from the <a href="admin-usage.html">API usage</a> page.</p></div></div>
-          <div id="budget-meter" class="ax-budget-meter"></div>
+          <div id="budget-meter" class="ax-budget-meter"><span class="ax-skel ax-skel-line" aria-hidden="true" style="width:60%"></span><span class="ax-skel ax-skel-line is-sm" aria-hidden="true" style="width:100%"></span><span class="sr-only">Loading…</span></div>
           <div class="ax-setting-field ax-setting-inline">
             <label for="setting-budget">Monthly budget (US dollars, 0 for none)</label>
-            <input id="setting-budget" type="number" min="0" max="1000000" step="1" inputmode="decimal" />
-            <button id="save-budget" class="admin-button-secondary" type="button">Save budget</button>
+            <input id="setting-budget" type="number" min="0" max="1000000" step="1" inputmode="decimal" disabled />
+            <button id="save-budget" class="admin-button-secondary" type="button" disabled>Save budget</button>
           </div>
           <div class="ax-setting-row">
             <div><strong>Pause AI and maps when the budget is reached</strong><p class="ax-setting-detail">They turn back on automatically next month or when you raise the budget.</p></div>
-            <label class="ax-switch"><input id="setting-autopause" type="checkbox" role="switch" /><span aria-hidden="true"></span><span class="sr-only">Pause at budget</span></label>
+            <label class="ax-switch"><input id="setting-autopause" type="checkbox" role="switch" disabled /><span aria-hidden="true"></span><span class="sr-only">Pause at budget</span></label>
           </div>
         </section>
         <section class="admin-card" aria-labelledby="archive-heading">
-          <div class="ax-card-head"><div><h2 class="ax-card-title" id="archive-heading">Archive of deleted data</h2><p class="ax-card-note">When a user or an administrator deletes something, a copy is kept here (without passwords) and removed for good after the retention period.</p></div></div>
+          <div class="ax-card-head"><div><h2 class="ax-card-title" id="archive-heading">Archive of deleted data</h2><p class="ax-card-note">Deleted accounts and itineraries are kept here: those deleted by users or administrators, trips that expired, and stops removed while editing. Passwords, chats and reminders are not kept. Everything is removed for good after the retention period.</p></div></div>
           <div class="ax-setting-field ax-setting-inline">
             <label for="setting-retention">Keep deleted data for (days)</label>
-            <input id="setting-retention" type="number" min="1" max="3650" step="1" inputmode="numeric" />
-            <button id="save-retention" class="admin-button-secondary" type="button">Save</button>
+            <input id="setting-retention" type="number" min="1" max="3650" step="1" inputmode="numeric" disabled />
+            <button id="save-retention" class="admin-button-secondary" type="button" disabled>Save</button>
           </div>
           <div id="archive-counts" class="ax-archive-counts"></div>
-          <ul id="archive-list" class="ax-feed"></ul>
+          <ul id="archive-list" class="ax-feed"><li class="ax-skel-item"><span class="ax-skel ax-skel-icon" aria-hidden="true"></span><span class="ax-skel-text" aria-hidden="true"><span class="ax-skel ax-skel-line" aria-hidden="true" style="width:78%"></span><span class="ax-skel ax-skel-line is-sm" aria-hidden="true" style="width:34%"></span></span><span class="sr-only">Loading…</span></li><li class="ax-skel-item" aria-hidden="true"><span class="ax-skel ax-skel-icon" aria-hidden="true"></span><span class="ax-skel-text" aria-hidden="true"><span class="ax-skel ax-skel-line" aria-hidden="true" style="width:64%"></span><span class="ax-skel ax-skel-line is-sm" aria-hidden="true" style="width:34%"></span></span></li><li class="ax-skel-item" aria-hidden="true"><span class="ax-skel ax-skel-icon" aria-hidden="true"></span><span class="ax-skel-text" aria-hidden="true"><span class="ax-skel ax-skel-line" aria-hidden="true" style="width:70%"></span><span class="ax-skel ax-skel-line is-sm" aria-hidden="true" style="width:34%"></span></span></li></ul>
         </section>
       </main>
     </div>

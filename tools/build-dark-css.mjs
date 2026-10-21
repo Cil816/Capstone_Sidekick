@@ -21,7 +21,7 @@ const cssDir = path.join(root, 'mobile-app', 'css');
 const FILES = [
   'common.css',
   'alerts.css', 'app-rating.css', 'chat.css', 'dashboard.css', 'itinerary.css', 'legal.css',
-  'login.css', 'navbar.css', 'onboarding.css', 'otp.css', 'register.css', 'settings.css', 'welcome.css',
+  'login.css', 'navbar.css', 'onboarding.css', 'otp.css', 'past-trips.css', 'register.css', 'settings.css', 'welcome.css',
   'theme.css', 'tab-motion.css', 'travel-map.css', 'a11y.css',
 ];
 
@@ -238,6 +238,17 @@ ${DARK} body[data-map-stop="index"] .sk-map-wash {
 @media (max-width: 599px) {
   ${DARK} .chat-input-container { box-shadow: 0 -10px 18px hsla(190, 38%, 12%, .95); }
 }
+
+/* Logo loading screen: a slightly lighter box so it stands out on the dimmed page */
+${DARK} .sk-loader-box { background: #1a2e40; border: 1px solid #2c4659; }
+${DARK} .sk-loader::backdrop { background: rgba(0, 0, 0, .55); }
+${DARK} .sk-offline::backdrop { background: #0c1722; }
+
+/* Drop-down arrow in a light colour */
+${DARK} select:not([multiple]):not([size]) {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%239db3c5' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E") !important;
+}
+${DARK} .sk-ptr { background: #1a2e40; border: 1px solid #2c4659; box-shadow: 0 6px 18px rgba(0, 0, 0, .45); }
 
 /* Profile picture placeholder (inline light background in profile.html) */
 ${DARK} .profile-card div[style*="#F5F7FA"] { background: #1a2d3d !important; color: #9db3c5; }

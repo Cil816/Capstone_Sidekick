@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <title>Sidekick AI - Past trips</title>
+  <link rel="stylesheet" href="css/common.css">
+  <link rel="stylesheet" href="css/settings.css">
+  <link rel="stylesheet" href="css/past-trips.css">
+  <link rel="stylesheet" href="css/theme.css">
+  <link rel="stylesheet" href="css/tab-motion.css">
+  <link rel="stylesheet" href="css/a11y.css">
+  <link rel="stylesheet" href="css/dark.css">
+  <script src="js/theme-init.js"></script>
+</head>
+<body data-tab="profile">
+  <div class="app-container">
+    <div class="screen">
+      <div class="header">
+        <a href="profile.html" class="back-btn" aria-label="Back to profile">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M19 12H5M12 19l-7-7 7-7"/>
+          </svg>
+        </a>
+      </div>
+
+      <div class="content settings-content past-trips-content">
+        <h1 class="screen-title">Past trips</h1>
+        <p class="screen-subtitle" id="past-trips-intro">Your finished itineraries, with every activity as you last planned it.</p>
+
+        <div class="past-trips-toolbar" id="past-trips-toolbar" hidden>
+          <button type="button" class="past-trips-edit" id="past-trips-edit">Edit</button>
+          <div class="past-trips-select-bar" id="past-trips-select-bar" hidden>
+            <label class="past-trips-select-all"><input type="checkbox" id="past-trips-select-all"> Select all</label>
+            <span class="past-trips-count" id="past-trips-count" aria-live="polite">0 selected</span>
+            <button type="button" class="past-trips-delete" id="past-trips-delete" disabled>Remove</button>
+            <button type="button" class="past-trips-done" id="past-trips-done">Cancel</button>
+          </div>
+        </div>
+
+        <div id="past-trips-list" class="past-trips-list" aria-live="polite"><div class="past-trip-skel" aria-hidden="true"><span class="sk-skel sk-skel-line" style="width:60%"></span><span class="sk-skel sk-skel-line sk-skel-line-sm" style="width:40%"></span></div><div class="past-trip-skel" aria-hidden="true"><span class="sk-skel sk-skel-line" style="width:55%"></span><span class="sk-skel sk-skel-line sk-skel-line-sm" style="width:35%"></span></div><span class="sr-only">Loading past trips…</span></div>
+      </div>
+    </div>
+  </div>
+
+  <nav class="bottom-nav overlay">
+    <a href="dashboard.html" class="nav-item">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+      </svg>
+      <span>Home</span>
+    </a>
+    <a href="itinerary.html" class="nav-item">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+        <line x1="16" y1="2" x2="16" y2="6"></line>
+        <line x1="8" y1="2" x2="8" y2="6"></line>
+        <line x1="3" y1="10" x2="21" y2="10"></line>
+      </svg>
+      <span>Itinerary</span>
+    </a>
+    <a href="chat.html" class="nav-item">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="12" cy="12" r="10"></circle>
+                        <polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"></polygon>
+      </svg>
+      <span>Sidekick</span>
+    </a>
+    <a href="alerts.html" class="nav-item">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M18 8a6 6 0 1 0-12 0c0 7-3 8-3 8h18s-3-1-3-8"></path>
+        <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+      </svg>
+      <span>Alerts</span>
+    </a>
+    <a href="profile.html" class="nav-item active">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+        <circle cx="12" cy="7" r="4"></circle>
+      </svg>
+      <span>Profile</span>
+    </a>
+  </nav>
+
+  <script src="js/config.local.js"></script>
+  <script src="js/core.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/past-trips.js"></script>
+  <script src="js/nav.js"></script>
+  <script src="js/tab-motion.js"></script>
+  <script src="js/pull-refresh.js"></script>
+</body>
+</html>

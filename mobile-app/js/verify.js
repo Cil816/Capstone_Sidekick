@@ -24,7 +24,7 @@ form.addEventListener("submit", async (event) => {
 
   const button = form.querySelector("button[type=submit]");
   button.disabled = true;
-  button.textContent = "Verifying...";
+  window.SidekickUI?.loading.show();
   try {
     const result = await window.SidekickCore.apiRequest("/api/verify-otp", {
       method: "POST",
@@ -39,12 +39,15 @@ form.addEventListener("submit", async (event) => {
     // Verifying completes a brand-new account: start onboarding fresh for this email.
     window.SidekickCore.recordAccountForEmail(result.user.email, result.user.user_id, { newAccount: true });
     const destination = window.SidekickCore.getPreferences() ? "dashboard.html" : "onboarding.html";
+    // Keep the loading screen up while the next page opens.
+    window.SidekickUI?.loading.show();
     window.location.href = destination;
   } catch (error) {
-    showMessage(error.message || "Invalid or expired code. Please try again.");
+    window.SidekickUI?.loading.hide(true);
+    showMessage(window.SidekickCore.friendlyError(error, "Invalid or expired code. Please try again."));
   } finally {
+    window.SidekickUI?.loading.hide();
     button.disabled = false;
-    button.textContent = "Verify email";
   }
 });
 
@@ -58,7 +61,7 @@ resendButton.addEventListener("click", async () => {
     });
     showMessage("A new verification code has been sent.");
   } catch (error) {
-    showMessage(error.message || "Unable to resend the code.");
+    showMessage(window.SidekickCore.friendlyError(error, "Unable to resend the code. Please try again."));
   } finally {
     resendButton.disabled = false;
   }

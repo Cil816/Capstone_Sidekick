@@ -44,7 +44,9 @@ function setSearchStatus(text = "") {
 
 function ensureGoogleMapsLoaded() {
   if (_gmapsLoadPromise) return _gmapsLoadPromise;
-  _gmapsLoadPromise = new Promise((resolve, reject) => {
+  // Without internet, wait for the connection before loading the map script.
+  const online = window.SidekickCore?.waitForOnline ? window.SidekickCore.waitForOnline() : Promise.resolve();
+  _gmapsLoadPromise = online.then(() => new Promise((resolve, reject) => {
     if (window.google && window.google.maps && window.google.maps.places) {
       resolve();
       return;
@@ -61,16 +63,18 @@ function ensureGoogleMapsLoaded() {
     const script = document.createElement("script");
     window.gm_authFailure = () => {
       const map = document.getElementById("destination-map");
-      if (map) map.innerHTML = '<div class="destination-map-message">Google Maps could not authenticate this key. Check its website restrictions, billing, and Maps JavaScript API configuration.</div>';
+      if (map) map.innerHTML = '<div class="destination-map-message">The interactive map isn’t available right now.</div>';
     };
     // loading=async needs a callback: it fires once the API and the geometry library are ready.
     window.__sidekickDashboardMapsReady = () => resolve();
     script.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_MAPS_API_KEY}&libraries=geometry&loading=async&callback=__sidekickDashboardMapsReady`;
     script.async = true;
     script.defer = true;
-    script.onerror = () => reject(new Error("Failed to load Google Maps script"));
+    script.onerror = () => { script.remove(); reject(new Error("Failed to load Google Maps script")); };
     document.head.appendChild(script);
-  });
+  }));
+  // A failed load (for example, the connection dropped) can be tried again later.
+  _gmapsLoadPromise.catch(() => { _gmapsLoadPromise = null; });
   return _gmapsLoadPromise;
 }
 
@@ -119,10 +123,10 @@ function buildPreferenceKeywords(prefs, searchQuery = "") {
 
 function normalizeRegion(rawAddress) {
   const addr = String(rawAddress || "");
-  if (!addr) return "Philippines";
+  if (!addr) return "Batangas";
   const parts = addr.split(",").map((x) => x.trim()).filter(Boolean);
   if (parts.length >= 2) return parts[parts.length - 2];
-  return parts[0] || "Philippines";
+  return parts[0] || "Batangas";
 }
 
 function extractTags(types) {
@@ -257,8 +261,9 @@ function preferenceScore(place, prefs) {
   return score;
 }
 
+// Sidekick covers the province of Batangas only (Nasugbu, Batangas City, Lipa).
 function getPhilippinesSeedLocations() {
-  return [{ lat: 14.5995, lng: 120.9842 }, { lat: 10.3157, lng: 123.8854 }, { lat: 7.1907, lng: 125.4553 }];
+  return [{ lat: 14.0670, lng: 120.6330 }, { lat: 13.7565, lng: 121.0583 }, { lat: 13.9411, lng: 121.1631 }];
 }
 
 // Types that mark a place as a real tourist spot, and types/names that mark it as an
@@ -301,6 +306,49 @@ function getRecommendedLimit(prefs) {
   return Math.max(IS_PERF_LITE ? 5 : 8, destinationCount);
 }
 
+// ---- Place lists kept on the phone ---------------------------------------------------
+// Home and "See all" place lists are kept for the session (up to 24 hours, like the
+// server), so switching tabs or reopening Home doesn't ask the server again. Pull to
+// refresh clears them (pull-refresh.js sets sidekick.refreshRequested) for fresh lists.
+// v2: lists from before the app covered Batangas only are not reused.
+const PLACES_CACHE_KEY = "sidekick.homePlaces.v2";
+const PLACES_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const PLACES_CACHE_MAX_ENTRIES = 24;
+
+function readPlacesCache() {
+  try {
+    const cache = JSON.parse(sessionStorage.getItem(PLACES_CACHE_KEY) || "{}");
+    return cache && typeof cache === "object" ? cache : {};
+  } catch (error) {
+    return {};
+  }
+}
+
+try {
+  sessionStorage.removeItem("sidekick.homePlaces.v1");
+  if (sessionStorage.getItem("sidekick.refreshRequested")) {
+    sessionStorage.removeItem("sidekick.refreshRequested");
+    sessionStorage.removeItem(PLACES_CACHE_KEY);
+  }
+} catch (error) { /* storage unavailable: nothing is kept */ }
+
+async function fetchPlacesCached(body) {
+  const key = JSON.stringify(body);
+  const hit = readPlacesCache()[key];
+  if (hit && Date.now() - Number(hit.at) < PLACES_CACHE_MAX_AGE_MS && Array.isArray(hit.data?.places)) return hit.data;
+  const data = await window.SidekickCore.apiRequest("/api/maps/places", { method: "POST", body: key });
+  if (Array.isArray(data?.places) && data.places.length) {
+    try {
+      const fresh = readPlacesCache();
+      fresh[key] = { at: Date.now(), data: { places: data.places, isDevelopmentMock: Boolean(data.isDevelopmentMock) } };
+      const keys = Object.keys(fresh).sort((a, b) => Number(fresh[a].at) - Number(fresh[b].at));
+      while (keys.length > PLACES_CACHE_MAX_ENTRIES) delete fresh[keys.shift()];
+      sessionStorage.setItem(PLACES_CACHE_KEY, JSON.stringify(fresh));
+    } catch (error) { /* full or unavailable: the list just isn't kept */ }
+  }
+  return data;
+}
+
 async function fetchDestinationPlaces(destination, index, prefs, interestKeywords, destinationCount) {
   const interestKeyword = interestKeywords.length ? interestKeywords[index % interestKeywords.length] : "";
   // Always search for top tourist spots; with few destinations add an interest-based query too.
@@ -310,9 +358,7 @@ async function fetchDestinationPlaces(destination, index, prefs, interestKeyword
   const lat = Number(destination.lat);
   const lng = Number(destination.lng);
   const seeds = destination.lat != null && destination.lng != null && Number.isFinite(lat) && Number.isFinite(lng) ? [{ lat, lng }] : [];
-  const data = await window.SidekickCore.apiRequest("/api/maps/places", {
-    method: "POST", body: JSON.stringify({ queries, seeds, touristOnly: true }),
-  });
+  const data = await fetchPlacesCached({ queries, seeds, touristOnly: true });
   return (data.places || []).map(toBackendDashboardPlace)
     .map((place) => ({ ...place, isDevelopmentMock: Boolean(data.isDevelopmentMock), preferredFor: destination.name }))
     .filter((place) => Number.isFinite(place.lat) && Number.isFinite(place.lng))
@@ -326,9 +372,7 @@ async function fetchRecommendedPlaces(prefs, searchQuery = "") {
 
   if (!destinations.length) {
     const keywords = buildPreferenceKeywords(prefs, searchQuery);
-    const data = await window.SidekickCore.apiRequest("/api/maps/places", {
-      method: "POST", body: JSON.stringify({ queries: keywords, seeds: getPhilippinesSeedLocations(), touristOnly: true }),
-    });
+    const data = await fetchPlacesCached({ queries: keywords, seeds: getPhilippinesSeedLocations(), touristOnly: true });
     const allPlaces = (data.places || []).map(toBackendDashboardPlace)
       .map((place) => ({ ...place, isDevelopmentMock: Boolean(data.isDevelopmentMock) }))
       .filter((place) => Number.isFinite(place.lat) && Number.isFinite(place.lng))
@@ -357,10 +401,7 @@ async function fetchRecommendedPlaces(prefs, searchQuery = "") {
 }
 
 async function fetchPopularPlaces() {
-  const data = await window.SidekickCore.apiRequest("/api/maps/places", {
-    method: "POST",
-    body: JSON.stringify({ queries: ["top tourist attractions", "famous landmarks", "must visit destinations", "best beaches and islands"], touristOnly: true }),
-  });
+  const data = await fetchPlacesCached({ queries: ["top tourist attractions", "famous landmarks", "must visit destinations", "best beaches and islands"], touristOnly: true });
   // Development mode only returns sample places for another country; use the curated list instead.
   if (data.isDevelopmentMock) return [];
   const popularity = (place) => (place.rating || 0) * Math.log10((place.ratingCount || 0) + 10);
@@ -513,8 +554,14 @@ async function showDestinationDetails(place, prefs, session) {
     _routePolyline.setMap(null);
     _routePolyline = null;
   }
+  const mapPlaceKey = `${place.placeId || ""}|${place.lat},${place.lng}`;
+  mapEl.dataset.placeKey = mapPlaceKey;
+  // Draws the map; without internet a skeleton shows until the connection is back.
+  const drawMap = async () => {
+  if (!window.google?.maps) mapEl.innerHTML = '<div class="sk-skel sk-map-skeleton" aria-hidden="true"></div><span class="sr-only">Loading map…</span>';
   try {
     await ensureGoogleMapsLoaded();
+    if (mapEl.dataset.placeKey !== mapPlaceKey) return; // another destination was opened
     const destinationPosition = { lat: Number(place.lat), lng: Number(place.lng) };
     if (!Number.isFinite(destinationPosition.lat) || !Number.isFinite(destinationPosition.lng)) {
       throw new Error("This destination has no coordinates for mapping.");
@@ -523,11 +570,18 @@ async function showDestinationDetails(place, prefs, session) {
     _marker = new google.maps.Marker({ map: _modalMap, position: destinationPosition, title: place.name, label: { text: "B", color: "#fff" } });
     requestAnimationFrame(() => google.maps.event.trigger(_modalMap, "resize"));
   } catch (err) {
-    const message = err && err.message === "No API"
-      ? "Interactive map is not configured. Add a browser-restricted Google Maps key in mobile-app/js/config.local.js."
-      : err.message || "Interactive map is unavailable right now.";
+    if (mapEl.dataset.placeKey !== mapPlaceKey) return;
+    if (window.SidekickCore?.isOnline && !window.SidekickCore.isOnline()) {
+      mapEl.innerHTML = '<div class="sk-skel sk-map-skeleton" aria-hidden="true"></div><span class="sr-only">Loading map…</span>';
+      window.SidekickCore.waitForOnline().then(() => { if (mapEl.dataset.placeKey === mapPlaceKey) void drawMap(); });
+      return;
+    }
+    const message = window.SidekickCore.friendlyError(err, "The interactive map isn’t available right now.");
     mapEl.innerHTML = `<div class="destination-map-message">${window.SidekickCore.escapeHtml(message)}</div>`;
   }
+  };
+  // The rest of the pop-up (route button, starting location) works without waiting for the map.
+  void drawMap();
 
   if (routeButton) {
     routeButton.onclick = () => calculateDestinationRoute(place);
@@ -616,7 +670,7 @@ async function showDestinationDetails(place, prefs, session) {
           if (originStatus) originStatus.textContent = "";
         } catch (error) {
           if (requestId === _originSearchRequestId && originStatus) {
-            originStatus.textContent = error.message || "Location search failed.";
+            originStatus.textContent = window.SidekickCore.friendlyError(error, "Location search failed. Please try again.");
           }
         }
       }, 300);
@@ -679,7 +733,7 @@ async function showDestinationDetails(place, prefs, session) {
             ? "Google Maps could not find a driving or public-transit route between these locations. Try a different starting point or destination."
             : "The route service is temporarily unavailable. Please try again later.",
         );
-        setText("destination-route-error-details", error.message || "No additional error details were provided.");
+        setText("destination-route-error-details", window.SidekickCore.friendlyError(error, "No other details are available. Please try again later."));
         routeError.querySelector("details")?.removeAttribute("open");
       }
     } finally {
@@ -734,40 +788,54 @@ async function generateFocusedItinerary(place, prefs, session) {
     daysInput?.focus();
     return;
   }
-  // The trip starts today and lasts the chosen number of days.
+  // The trip starts today and lasts the chosen number of days. Late at night, when
+  // there's no time left to see anything today (less than 90 minutes before midnight,
+  // the same limit as the Itinerary screen), it starts tomorrow instead.
   const dateValue = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
   const start = new Date();
+  const firstDayStart = window.SidekickCore.firstDayStartMinute?.(dateValue(start)) ?? null;
+  const startsTomorrow = Number.isFinite(firstDayStart) && firstDayStart > 24 * 60 - 90;
+  if (startsTomorrow) start.setDate(start.getDate() + 1);
   const end = new Date(start);
   end.setDate(end.getDate() + durationDays - 1);
   const origin = _selectedOriginPlace
     ? String(_selectedOriginPlace.address || _selectedOriginPlace.name || "").trim()
     : String(document.getElementById("destination-origin")?.value || "").trim();
+  // Dates already taken by a planned trip can't be used for another one.
+  const clash = window.SidekickCore.findOverlappingTrip?.(session.email, dateValue(start), dateValue(end));
+  if (clash) {
+    await window.SidekickUI.alert(`${window.SidekickCore.tripOverlapMessage(clash)} You can pick other dates with “+ New trip” on the Itinerary tab.`, { title: "Those dates are taken", confirmText: "OK" });
+    return;
+  }
+  if (startsTomorrow) {
+    const day = start.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
+    await window.SidekickUI.alert(`It’s too late to start sightseeing today, so your trip will start tomorrow, ${day}.`, { title: "Your trip starts tomorrow", confirmText: "OK" });
+  }
 
   // Check the budget against the cheapest restaurants and hotels before leaving,
   // so an unrealistic budget can be fixed right here.
   const trip = { destination: place.name, startDate: dateValue(start), endDate: dateValue(end), budgetAmountPhp };
-  if (button) {
-    button.disabled = true;
-    button.textContent = "Checking budget…";
-  }
+  if (button) button.disabled = true;
+  window.SidekickUI?.loading.show("Checking your budget…");
   let budgetCheck = null;
   try {
     budgetCheck = await window.SidekickCore.checkTripBudget({
       ...trip,
+      placeId: place.placeId || "",
       lat: Number.isFinite(Number(place.lat)) ? Number(place.lat) : null,
       lng: Number.isFinite(Number(place.lng)) ? Number(place.lng) : null,
     });
   } finally {
-    if (button) {
-      button.disabled = false;
-      button.textContent = "Generate itinerary";
-    }
+    window.SidekickUI?.loading.hide();
+    if (button) button.disabled = false;
   }
   if (budgetCheck?.checked && !budgetCheck.realistic) {
     const problem = window.SidekickCore.describeUnrealisticBudget(budgetCheck, place.name);
     await window.SidekickUI.alert(problem.message, { title: problem.title, details: problem.details, confirmText: "Edit my trip" });
     if (errorEl) {
-      errorEl.textContent = `Budget too low for ${durationDays} day${durationDays === 1 ? "" : "s"}. Enter at least ₱${Math.round(budgetCheck.minimumPhp).toLocaleString()}${budgetCheck.maxAffordableDays >= 1 && budgetCheck.maxAffordableDays < durationDays ? ` or choose ${budgetCheck.maxAffordableDays} day${budgetCheck.maxAffordableDays === 1 ? "" : "s"}` : ""}.`;
+      errorEl.textContent = budgetCheck.tooHigh
+        ? `Budget too high for ${durationDays} day${durationDays === 1 ? "" : "s"}. Enter up to ₱${Math.round(budgetCheck.maximumPhp).toLocaleString()}.`
+        : `Budget too low for ${durationDays} day${durationDays === 1 ? "" : "s"}. Enter at least ₱${Math.round(budgetCheck.minimumPhp).toLocaleString()}${budgetCheck.maxAffordableDays >= 1 && budgetCheck.maxAffordableDays < durationDays ? ` or choose ${budgetCheck.maxAffordableDays} day${budgetCheck.maxAffordableDays === 1 ? "" : "s"}` : ""}.`;
       errorEl.hidden = false;
     }
     budgetInput?.focus();
@@ -794,6 +862,8 @@ async function generateFocusedItinerary(place, prefs, session) {
     }
     return;
   }
+  // Keep a loading screen up while the itinerary page opens and starts building.
+  window.SidekickUI?.loading.show("Building your itinerary… this can take a minute");
   window.location.href = "itinerary.html";
 }
 
@@ -828,9 +898,7 @@ async function fetchDestinationPool(destination, interestKeywords) {
   const lat = Number(destination.lat);
   const lng = Number(destination.lng);
   const seeds = destination.lat != null && destination.lng != null && Number.isFinite(lat) && Number.isFinite(lng) ? [{ lat, lng }] : [];
-  const data = await window.SidekickCore.apiRequest("/api/maps/places", {
-    method: "POST", body: JSON.stringify({ queries, seeds, touristOnly: true }),
-  });
+  const data = await fetchPlacesCached({ queries, seeds, touristOnly: true });
   return (data.places || []).map(toBackendDashboardPlace)
     .map((place) => ({ ...place, isDevelopmentMock: Boolean(data.isDevelopmentMock), preferredFor: destination.name }))
     .filter((place) => Number.isFinite(place.lat) && Number.isFinite(place.lng))
@@ -843,9 +911,7 @@ async function buildRecommendedPool(prefs, initial) {
   const interestKeywords = getInterestKeywords(prefs);
   const generalQueries = Array.from(new Set([...buildPreferenceKeywords(prefs), "tourist attractions"])).slice(0, 4);
   const jobs = destinations.map((destination) => fetchDestinationPool(destination, interestKeywords));
-  jobs.push(window.SidekickCore.apiRequest("/api/maps/places", {
-    method: "POST", body: JSON.stringify({ queries: generalQueries, seeds: getPhilippinesSeedLocations(), touristOnly: true }),
-  }).then((data) => (data.places || []).map(toBackendDashboardPlace)
+  jobs.push(fetchPlacesCached({ queries: generalQueries, seeds: getPhilippinesSeedLocations(), touristOnly: true }).then((data) => (data.places || []).map(toBackendDashboardPlace)
     .map((place) => ({ ...place, isDevelopmentMock: Boolean(data.isDevelopmentMock) }))
     .filter((place) => Number.isFinite(place.lat) && Number.isFinite(place.lng))
     .filter(isTouristSpot)));
@@ -868,9 +934,7 @@ async function buildPopularPool(initial) {
     ["top tourist attractions", "famous landmarks", "must visit destinations", "best beaches and islands"],
     ["best waterfalls", "mountains and hiking spots", "historical sites and churches", "top islands"],
   ];
-  const settled = await Promise.allSettled(searches.map((queries) => window.SidekickCore.apiRequest("/api/maps/places", {
-    method: "POST", body: JSON.stringify({ queries, touristOnly: true }),
-  })));
+  const settled = await Promise.allSettled(searches.map((queries) => fetchPlacesCached({ queries, touristOnly: true })));
   const responses = settled.filter((r) => r.status === "fulfilled").map((r) => r.value);
   // Development mode returns sample places from another country, so ignore them.
   const usable = responses.filter((data) => !data.isDevelopmentMock);
@@ -967,14 +1031,16 @@ async function openSeeAll(kind, prefs, session, initialPlaces) {
   setText("see-all-title", kind === "recommended" ? "Recommended for you" : "Popular destinations");
   setText("see-all-subtitle", kind === "recommended"
     ? "Ordered from most to least preferred"
-    : "Top tourist spots across the Philippines");
+    : "Top tourist spots in Batangas");
   setSeeAllVisible(true);
   screen.scrollTop = 0;
   try { history.pushState({ seeAll: true }, ""); } catch (error) {}
 
-  status.textContent = "Loading destinations…";
+  status.textContent = "";
   let items = _seeAllCache[kind];
   if (!items) {
+    list.innerHTML = window.SidekickUI?.skeleton ? window.SidekickUI?.skeleton.list(6) : "";
+    if (!list.innerHTML) status.textContent = "Loading destinations…";
     try {
       items = kind === "recommended"
         ? await buildRecommendedPool(prefs, initialPlaces)
@@ -991,6 +1057,7 @@ async function openSeeAll(kind, prefs, session, initialPlaces) {
   }
   // The user may have closed this screen or opened the other list while loading.
   if (!_seeAllState.open || _seeAllState.kind !== kind) return;
+  list.replaceChildren(); // removes the loading placeholders
   _seeAllState.items = items;
   status.textContent = items.length ? "" : "No destinations to show right now.";
   showMoreSeeAll();
@@ -1050,7 +1117,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   [recommendedRow, destinationsGrid].forEach((container) => {
     if (!container) return;
     container.setAttribute("aria-busy", "true");
-    container.innerHTML = '<p class="dashboard-loading">Loading destinations…</p>';
+    container.innerHTML = window.SidekickUI?.skeleton
+      ? (container.id === "recommended-row" ? window.SidekickUI?.skeleton.cards(2, "row") : window.SidekickUI?.skeleton.cards(4, "grid"))
+      : '<p class="dashboard-loading">Loading destinations…</p>';
   });
 
   const initial = window.SidekickCore.buildDashboardRecommendations(prefs);
@@ -1126,10 +1195,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       await showDestinationDetails(place, prefs, session);
     } catch (error) {
       if (requestId === suggestionRequestId) {
-        const message = error?.message || "Unable to load this destination.";
-        setSearchStatus(message === "The server request failed."
-          ? "Could not load this place. Restart the backend server and try again."
-          : message);
+        setSearchStatus(window.SidekickCore.friendlyError(error, "Could not load this place. Please try again."));
       }
     }
   };
@@ -1173,7 +1239,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         } catch (error) {
           if (requestId !== suggestionRequestId) return;
           closeSuggestions();
-          setSearchStatus(error?.message || "Unable to load destination suggestions.");
+          setSearchStatus(window.SidekickCore.friendlyError(error, "Unable to load destination suggestions. Please try again."));
         }
       }, 320);
     });

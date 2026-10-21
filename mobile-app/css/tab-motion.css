@@ -119,6 +119,54 @@ body[data-tab] .screen.sk-tab-out-prev {
     animation: skTabOutToRight 170ms ease-in forwards;
 }
 
+/* ---- Browser view transitions (newer WebViews; see js/theme-init.js) ----------
+   Both tab pages opt in, so the browser keeps the old screen on display until the
+   new one is ready, then slides the two as pictures on the graphics chip. The
+   bottom bar has its own name, so it stays in place instead of sliding along. */
+@media (prefers-reduced-motion: no-preference) {
+    @view-transition {
+        navigation: auto;
+    }
+}
+
+body[data-tab] .bottom-nav.overlay {
+    view-transition-name: sk-bottom-nav;
+}
+
+/* The page's own fade-in would play on top of the slide, so it is skipped. */
+html.sk-vt body[data-tab] .screen {
+    animation: none;
+}
+
+::view-transition-group(root) {
+    animation-duration: 280ms;
+}
+
+::view-transition-group(sk-bottom-nav) {
+    animation-duration: 200ms;
+}
+
+html:active-view-transition-type(sk-next)::view-transition-old(root) {
+    animation: skVtOutToLeft 280ms cubic-bezier(.4, 0, .2, 1) both;
+}
+
+html:active-view-transition-type(sk-next)::view-transition-new(root) {
+    animation: skVtInFromRight 280ms cubic-bezier(.4, 0, .2, 1) both;
+}
+
+html:active-view-transition-type(sk-prev)::view-transition-old(root) {
+    animation: skVtOutToRight 280ms cubic-bezier(.4, 0, .2, 1) both;
+}
+
+html:active-view-transition-type(sk-prev)::view-transition-new(root) {
+    animation: skVtInFromLeft 280ms cubic-bezier(.4, 0, .2, 1) both;
+}
+
+@keyframes skVtOutToLeft { to { opacity: 0; transform: translateX(-40px); } }
+@keyframes skVtOutToRight { to { opacity: 0; transform: translateX(40px); } }
+@keyframes skVtInFromRight { from { opacity: 0; transform: translateX(40px); } }
+@keyframes skVtInFromLeft { from { opacity: 0; transform: translateX(-40px); } }
+
 /* Lighter phones: keep the gradient, stop the drifting glows. */
 .perf-lite .sk-tab-bg span {
     animation: none;

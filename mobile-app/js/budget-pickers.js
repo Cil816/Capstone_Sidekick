@@ -179,7 +179,7 @@
         <p class="hotel-detail-meta">${esc(metaText)}</p>
         ${fitHtml}
         ${place.address ? `<p class="hotel-detail-address">${esc(place.address)}</p>` : ""}
-        <div id="hotel-detail-extra" class="hotel-detail-extra" aria-live="polite"><p class="budget-picker-status">Loading photos and details…</p></div>
+        <div id="hotel-detail-extra" class="hotel-detail-extra" aria-live="polite">${window.SidekickUI?.skeleton?.lines(3) || '<p class="budget-picker-status">Loading photos and details…</p>'}</div>
         ${noteHtml}
       </div>`;
   }
@@ -278,7 +278,7 @@
       let selected = null;
       async function loadHotels() {
         setActions([]);
-        setBody('<p class="budget-picker-status">Finding hotels within your budget… this can take a moment.</p>');
+        setBody('<p class="budget-picker-status">Finding hotels within your budget… this can take a moment.</p>' + (window.SidekickUI?.skeleton?.list(3) || ''));
         let data;
         try {
           data = await window.SidekickCore.apiRequest("/api/hotels/budget-options", {
@@ -287,7 +287,7 @@
           });
         } catch (error) {
           if (settled) return;
-          setBody(`<p class="budget-picker-status">${esc(error.message || "Hotel search is unavailable right now.")}</p>`);
+          setBody(`<p class="budget-picker-status">${esc(window.SidekickCore.friendlyError(error, "Hotel search is unavailable right now."))}</p>`);
           setActions([
             { label: "Try again", onClick: () => { void loadHotels(); } },
             { label: "Continue without a hotel", kind: "primary", onClick: () => { onClose = null; close(); finish({ status: "skip" }); } },
@@ -417,12 +417,12 @@
     const mealCap = Number.isFinite(Number(budgetAmountPhp)) && budgetAmountPhp > 0
       ? Math.floor((budgetAmountPhp * MEAL_SHARE) / (Math.max(1, durationDays) * MEALS_OUT_PER_DAY))
       : null;
-    setBody('<p class="budget-picker-status">Finding restaurants near this day’s stops…</p>');
+    setBody('<p class="budget-picker-status">Finding restaurants near this day’s stops…</p>' + (window.SidekickUI?.skeleton?.list(3) || ''));
     let result;
     try {
       result = await fetchRestaurants(center, anchorName);
     } catch (error) {
-      setBody(`<p class="budget-picker-status">${esc(error.message || "Restaurant search is unavailable right now.")}</p>`);
+      setBody(`<p class="budget-picker-status">${esc(window.SidekickCore.friendlyError(error, "Restaurant search is unavailable right now."))}</p>`);
       setActions([{ label: "Close", onClick: () => close() }]);
       return;
     }

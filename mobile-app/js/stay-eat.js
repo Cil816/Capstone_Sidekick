@@ -394,6 +394,7 @@
     list.replaceChildren();
     if (more) more.hidden = true;
     setStatus("Finding places near " + destination.name + "…");
+    list.innerHTML = window.SidekickUI?.skeleton?.list(3) || "";
     try {
       const area = await resolveArea(destination);
       if (requestId !== state.requestId) return;
@@ -414,6 +415,7 @@
       const result = state.lists[cacheKey];
       if (result.isDevelopmentMock) {
         state.ranked = null;
+        list.replaceChildren();
         setStatus("Hotel and restaurant search needs live Google Places data, which is not available in development mode.");
         return;
       }
@@ -436,7 +438,8 @@
       }
     } catch (error) {
       if (requestId !== state.requestId) return;
-      setStatus(error?.message || "Unable to load nearby places right now.");
+      list.replaceChildren();
+      setStatus(window.SidekickCore.friendlyError(error, "Unable to load nearby places right now."));
     }
   }
 
@@ -724,7 +727,8 @@
     const mapEl = $("stay-eat-modal-map");
     mapEl.replaceChildren();
     mapEl.style.display = "";
-    mapEl.textContent = "Map loading…";
+    const showMap = async () => {
+    mapEl.innerHTML = '<div class="sk-skel sk-map-skeleton" aria-hidden="true"></div><span class="sr-only">Loading map…</span>';
     try {
       if (typeof loadGoogleMapsForItinerary !== "function") throw new Error("The map is unavailable.");
       await loadGoogleMapsForItinerary();
@@ -736,8 +740,16 @@
       new google.maps.Marker({ map: state.map, position, title: place.name });
       requestAnimationFrame(() => google.maps.event.trigger(state.map, "resize"));
     } catch (error) {
+      if (state.modalPlace !== place) return;
+      // Without internet the skeleton stays and the map loads once the connection is back.
+      if (window.SidekickCore?.isOnline && !window.SidekickCore.isOnline()) {
+        window.SidekickCore.waitForOnline().then(() => { if (state.modalPlace === place) void showMap(); });
+        return;
+      }
       mapEl.textContent = "Interactive map is unavailable. Use “Open in Google Maps” instead.";
     }
+    };
+    void showMap();
   }
 
   // ---- init ----------------------------------------------------------------

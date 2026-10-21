@@ -169,8 +169,7 @@
     cursor: pointer;
     font: inherit;
     font-weight: 600;
-    text-decoration: underline;
-    text-underline-offset: 3px;
+    text-decoration: none;
 }
 
 .register-screen .auth-error {

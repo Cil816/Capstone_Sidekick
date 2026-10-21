@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>Sidekick AI - Profile</title>
     <link rel="stylesheet" href="css/common.css">
     <link rel="stylesheet" href="css/login.css">
@@ -44,6 +44,10 @@
                     </div>
 
                     <div style="margin-top:20px;">
+                        <a href="past-trips.html" class="btn btn-outline btn-full" style="text-decoration:none;">Past trips</a>
+                    </div>
+
+                    <div style="margin-top:12px;">
                         <a href="settings.html" class="btn btn-outline btn-full" style="text-decoration:none;">Open Settings</a>
                     </div>
 
@@ -52,9 +56,10 @@
                     </div>
                 </div>
 
+
                 <section class="profile-review-card" aria-labelledby="profile-review-heading">
                     <h2 id="profile-review-heading">Rate Sidekick</h2>
-                    <p class="profile-review-summary" id="app-review-summary">Loading app ratings…</p>
+                    <p class="profile-review-summary" id="app-review-summary"><span class="sk-skel sk-skel-line" aria-hidden="true" style="width:85%"></span><span class="sr-only">Loading app ratings…</span></p>
                     <p class="profile-review-help">Your feedback helps us improve the app. You can update your rating any time.</p>
                     <div class="app-rating-stars profile-rating-stars" role="group" aria-label="Choose a rating from 1 to 5 stars">
                         <button type="button" data-profile-rating="1" aria-label="1 star" aria-pressed="false">★</button>
@@ -120,5 +125,6 @@
     <script src="js/profile.js"></script>
     <script src="js/nav.js"></script>
     <script src="js/tab-motion.js"></script>
+    <script src="js/pull-refresh.js"></script>
 </body>
 </html>

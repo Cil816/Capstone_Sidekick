@@ -53,17 +53,17 @@
 
         <div id="admin-status-banner" class="admin-status-banner" aria-live="polite"></div>
 
-        <section class="ax-usage-summary" id="usage-summary" aria-label="Spending summary"></section>
+        <section class="ax-usage-summary" id="usage-summary" aria-label="Spending summary"><span class="sr-only">Loading…</span><article class="admin-card ax-usage-tile" aria-hidden="true"><span class="ax-skel ax-skel-line is-sm" aria-hidden="true" style="width:40%"></span><span class="ax-skel ax-skel-line" aria-hidden="true" style="width:55%"></span><span class="ax-skel ax-skel-line is-sm" aria-hidden="true" style="width:70%"></span></article><article class="admin-card ax-usage-tile" aria-hidden="true"><span class="ax-skel ax-skel-line is-sm" aria-hidden="true" style="width:40%"></span><span class="ax-skel ax-skel-line" aria-hidden="true" style="width:55%"></span><span class="ax-skel ax-skel-line is-sm" aria-hidden="true" style="width:70%"></span></article><article class="admin-card ax-usage-tile" aria-hidden="true"><span class="ax-skel ax-skel-line is-sm" aria-hidden="true" style="width:40%"></span><span class="ax-skel ax-skel-line" aria-hidden="true" style="width:55%"></span><span class="ax-skel ax-skel-line is-sm" aria-hidden="true" style="width:70%"></span></article></section>
         <section class="admin-card" aria-labelledby="usage-chart-heading">
           <div class="ax-card-head"><div><h2 class="ax-card-title" id="usage-chart-heading">Estimated cost per day</h2><p class="ax-card-note" id="usage-chart-note">In US dollars.</p></div></div>
-          <div id="usage-chart" class="ax-usage-chart" role="img" aria-label="Estimated cost per day"></div>
+          <div id="usage-chart" class="ax-usage-chart" role="img" aria-label="Estimated cost per day"><div class="ax-skel ax-skel-block" style="height:160px" aria-hidden="true"></div></div>
         </section>
         <section class="admin-card" aria-labelledby="usage-table-heading">
           <div class="ax-card-head"><div><h2 class="ax-card-title" id="usage-table-heading">By API</h2><p class="ax-card-note">Cached results are not counted because they cost nothing. Map views shown inside the phone app are billed to the app’s own key and are not included.</p></div></div>
           <div class="admin-table-wrap">
             <table class="admin-table ax-table">
               <thead><tr><th scope="col">API</th><th scope="col">Calls</th><th scope="col">Blocked</th><th scope="col">AI tokens (in / out)</th><th scope="col">Estimated cost</th></tr></thead>
-              <tbody id="usage-table-body"><tr><td colspan="5" class="empty-state">Loading…</td></tr></tbody>
+              <tbody id="usage-table-body"><tr class="ax-skel-tr"><td colspan="5"><div class="ax-skel-rowline" aria-hidden="true"><span class="ax-skel ax-skel-avatar"></span><span class="ax-skel-text"><span class="ax-skel ax-skel-line" aria-hidden="true" style="width:70%"></span><span class="ax-skel ax-skel-line is-sm" aria-hidden="true" style="width:36%"></span></span></div><span class="sr-only">Loading…</span></td></tr><tr class="ax-skel-tr"><td colspan="5"><div class="ax-skel-rowline" aria-hidden="true"><span class="ax-skel ax-skel-avatar"></span><span class="ax-skel-text"><span class="ax-skel ax-skel-line" aria-hidden="true" style="width:58%"></span><span class="ax-skel ax-skel-line is-sm" aria-hidden="true" style="width:36%"></span></span></div></td></tr><tr class="ax-skel-tr"><td colspan="5"><div class="ax-skel-rowline" aria-hidden="true"><span class="ax-skel ax-skel-avatar"></span><span class="ax-skel-text"><span class="ax-skel ax-skel-line" aria-hidden="true" style="width:64%"></span><span class="ax-skel ax-skel-line is-sm" aria-hidden="true" style="width:36%"></span></span></div></td></tr></tbody>
             </table>
           </div>
           <p class="ax-card-note ax-usage-footnote">Costs are estimates from Google’s published list prices; free monthly allowances are not subtracted. Check Google Cloud Billing for exact charges.</p>

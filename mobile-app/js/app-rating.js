@@ -97,7 +97,7 @@
         statusEl.textContent = "Thank You! Your rating has been saved.";
         window.setTimeout(hideModal, 900);
       } catch (error) {
-        statusEl.textContent = error.message || "Could not save your rating. Please try again.";
+        statusEl.textContent = window.SidekickCore.friendlyError(error, "Could not save your rating. Please try again.");
         setSavingState(false);
       }
     }

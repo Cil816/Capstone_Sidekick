@@ -158,7 +158,7 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: calc(16px + env(safe-area-inset-top)) 16px calc(16px + env(safe-area-inset-bottom));
+    padding: calc(16px + var(--sk-safe-top, env(safe-area-inset-top))) 16px calc(16px + var(--sk-safe-bottom, env(safe-area-inset-bottom)));
 }
 
 @media (min-width: 601px) {
@@ -290,7 +290,7 @@ body {
 .sk-toast {
     position: fixed;
     left: 50%;
-    bottom: calc(var(--bottom-overlay-height, var(--nav-height)) + 24px + env(safe-area-inset-bottom));
+    bottom: calc(var(--bottom-overlay-height, var(--nav-height)) + 24px + var(--sk-safe-bottom, env(safe-area-inset-bottom)));
     transform: translateX(-50%);
     z-index: 30001;
     max-width: calc(100% - 32px);
@@ -312,3 +312,618 @@ body {
 .budget-option.selected { background: #1f7a8c; border-color: #1f7a8c; color: #fff; }
 .dest-search-input:focus { border-color: var(--sk-primary); }
 .toggle-input:checked { background: var(--sk-primary); }
+
+/* ==========================================================================
+   Loading screen with the Sidekick logo (js/ui.js: SidekickUI.loading).
+   A teal ring turns around the logo while the user waits on an action.
+   ========================================================================== */
+.sk-loader {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    max-width: none;
+    max-height: none;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    overflow: hidden;
+}
+
+.sk-loader[open] {
+    display: grid;
+    place-items: center;
+}
+
+.sk-loader::backdrop {
+    background: rgba(13, 32, 54, .45);
+}
+
+.sk-loader-box {
+    display: grid;
+    justify-items: center;
+    gap: 14px;
+    max-width: min(84vw, 300px);
+    padding: 26px 30px 24px;
+    border-radius: 24px;
+    background: #fff;
+    box-shadow: var(--sk-shadow-lg);
+    animation: skPop 260ms var(--sk-ease) backwards;
+}
+
+.sk-loader-mark {
+    position: relative;
+    width: 84px;
+    height: 84px;
+    display: grid;
+    place-items: center;
+}
+
+.sk-loader-logo {
+    width: 60px;
+    height: 60px;
+    border-radius: 50%;
+}
+
+.sk-loader-ring {
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    background: conic-gradient(from 0deg, rgba(44, 145, 176, 0) 0deg, rgba(44, 145, 176, .15) 90deg, #2c91b0 270deg, #68ddd9 360deg);
+    -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 5px), #000 calc(100% - 4px));
+    mask: radial-gradient(farthest-side, transparent calc(100% - 5px), #000 calc(100% - 4px));
+    animation: skLoaderSpin .9s linear infinite;
+}
+
+.sk-loader-text {
+    margin: 0;
+    max-width: 230px;
+    text-align: center;
+    font-size: 15px;
+    font-weight: 700;
+    line-height: 1.45;
+    color: #163457;
+}
+
+@keyframes skLoaderSpin {
+    to { transform: rotate(360deg); }
+}
+
+/* With "reduce motion" on, the ring still turns (slowly): it is the only sign that
+   the app is working. */
+@media (prefers-reduced-motion: reduce) {
+    .sk-loader .sk-loader-ring {
+        animation-duration: 1.8s !important;
+        animation-iteration-count: infinite !important;
+    }
+}
+
+/* ==========================================================================
+   Skeleton placeholders (js/ui.js: SidekickUI.skeleton): grey shapes where
+   content is still loading.
+   ========================================================================== */
+.sk-skel {
+    display: block;
+    border-radius: 8px;
+    background-color: #e3ecf1;
+    background-image: linear-gradient(90deg, #e3ecf1 0%, #f2f7f9 45%, #e3ecf1 90%);
+    background-size: 220% 100%;
+    animation: skShimmer 1.3s ease-in-out infinite;
+}
+
+.sk-skel-line {
+    height: 12px;
+    margin: 8px 0;
+}
+
+.sk-skel-line-sm {
+    height: 10px;
+}
+
+.sk-skel-card {
+    display: flex;
+    flex-direction: column;
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+.sk-skel-card .sk-skel-media {
+    height: 140px;
+    border-radius: 0;
+}
+
+.sk-skel-card-row {
+    flex: 0 0 auto;
+    width: min(250px, 70vw);
+}
+
+.sk-skel-card-grid {
+    border-radius: 16px;
+}
+
+.sk-skel-card-grid .sk-skel-media {
+    height: 110px;
+}
+
+.sk-skel-body {
+    padding: 10px 14px 14px;
+}
+
+.sk-skel-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 0;
+}
+
+.sk-skel-thumb {
+    flex: none;
+    width: 52px;
+    height: 52px;
+    border-radius: 12px;
+}
+
+.sk-skel-row-text {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+@keyframes skShimmer {
+    from { background-position: 100% 0; }
+    to { background-position: -120% 0; }
+}
+
+/* ==========================================================================
+   Pull to refresh (js/pull-refresh.js): the Sidekick logo slides down from
+   the top; the ring fills in teal when letting go will reload the screen.
+   ========================================================================== */
+.sk-ptr {
+    position: fixed;
+    top: calc(var(--sk-safe-top, env(safe-area-inset-top)) + 8px);
+    left: 50%;
+    z-index: 25000;
+    width: 46px;
+    height: 46px;
+    margin-left: -23px;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 6px 18px rgba(13, 32, 54, .18);
+    opacity: 0;
+    transform: translateY(-56px);
+    pointer-events: none;
+    transition: transform 220ms var(--sk-ease), opacity 220ms ease;
+}
+
+.sk-ptr.is-dragging {
+    transition: none;
+}
+
+.sk-ptr img {
+    position: relative;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+}
+
+.sk-ptr-ring {
+    position: absolute;
+    inset: 2px;
+    border-radius: 50%;
+    background: conic-gradient(from 0deg, rgba(44, 145, 176, 0) 0deg, rgba(44, 145, 176, .15) 90deg, #2c91b0 270deg, #68ddd9 360deg);
+    -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px));
+    mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px));
+    opacity: .45;
+}
+
+.sk-ptr.is-ready .sk-ptr-ring {
+    opacity: 1;
+}
+
+.sk-ptr.is-refreshing .sk-ptr-ring {
+    animation: skLoaderSpin .9s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .sk-ptr.is-refreshing .sk-ptr-ring {
+        animation-duration: 1.8s !important;
+        animation-iteration-count: infinite !important;
+    }
+}
+
+/* ==========================================================================
+   "No internet connection" screen (js/ui.js). A full-screen <dialog> in the
+   top layer, so it covers the whole app, the loading screen included.
+   ========================================================================== */
+.sk-offline {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    max-width: none;
+    max-height: none;
+    margin: 0;
+    padding: calc(24px + var(--sk-safe-top, 0px)) 24px calc(24px + var(--sk-safe-bottom, 0px));
+    border: 0;
+    background-color: #f5fbfc;
+    background-image: radial-gradient(120% 60% at 0% 0%, rgba(104, 221, 217, .28), transparent 60%), radial-gradient(100% 50% at 100% 100%, rgba(44, 145, 176, .14), transparent 65%);
+    color: #163457;
+    box-sizing: border-box;
+    overflow: auto;
+}
+
+.sk-offline[open] {
+    display: grid;
+    place-items: center;
+}
+
+.sk-offline::backdrop {
+    background: #f5fbfc;
+}
+
+.sk-offline-screen {
+    width: min(100%, 360px);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+}
+
+.sk-offline-logo {
+    width: 64px;
+    height: 64px;
+    border-radius: 18px;
+    margin-bottom: 26px;
+}
+
+.sk-offline-icon {
+    width: 76px;
+    height: 76px;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    background-color: #e3f4f7;
+    color: #1f6f88;
+    margin-bottom: 18px;
+}
+
+.sk-offline-icon svg {
+    width: 36px;
+    height: 36px;
+}
+
+.sk-offline-title {
+    margin: 0 0 8px;
+    font-family: "Manrope", "Avenir Next", sans-serif;
+    font-size: 22px;
+    font-weight: 800;
+    color: #163457;
+}
+
+.sk-offline-message {
+    margin: 0 0 24px;
+    font-size: 15px;
+    line-height: 1.5;
+    color: #4f6880;
+}
+
+.sk-offline-retry {
+    width: 100%;
+    min-height: 48px;
+}
+
+.sk-offline-status {
+    min-height: 20px;
+    margin: 12px 0 0;
+    font-size: 13px;
+    color: #4f6880;
+}
+
+/* ---- Show / hide password button (js/ui.js) ---- */
+.sk-pw {
+    position: relative;
+    display: block;
+    width: 100%;
+}
+
+.sk-pw > input {
+    width: 100%;
+    padding-right: 52px !important;
+}
+
+.sk-pw-toggle {
+    position: absolute;
+    top: 50%;
+    right: 6px;
+    transform: translateY(-50%);
+    width: 40px;
+    height: 40px;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border: 0;
+    border-radius: 10px;
+    background: transparent;
+    color: #668096;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.sk-pw-toggle:hover,
+.sk-pw-toggle[aria-pressed="true"] {
+    color: #1f6f88;
+}
+
+.sk-pw-toggle:focus-visible {
+    outline: 2px solid #2c91b0;
+    outline-offset: 1px;
+}
+
+.sk-pw-toggle svg {
+    width: 20px;
+    height: 20px;
+}
+
+/* ---- Light / dark mode button on the sign-in screens (js/ui.js) ---- */
+[data-theme-toggle] {
+    display: flex;
+    align-items: center;
+}
+
+.sk-theme-toggle {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 40px;
+    padding: 8px 14px;
+    border: 1px solid #d9eaf0;
+    border-radius: 999px;
+    background-color: rgba(255, 255, 255, .86);
+    color: #1f6f88;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    box-shadow: 0 4px 12px rgba(22, 52, 87, .08);
+    -webkit-tap-highlight-color: transparent;
+}
+
+.sk-theme-toggle svg {
+    width: 18px;
+    height: 18px;
+}
+
+.sk-theme-toggle:focus-visible {
+    outline: 2px solid #2c91b0;
+    outline-offset: 2px;
+}
+
+/* ---- Drop-down lists: the arrow sits inside the box with room on its right ---- */
+select:not([multiple]):not([size]) {
+    -webkit-appearance: none;
+    appearance: none;
+    padding-right: 40px !important;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23668096' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E") !important;
+    background-repeat: no-repeat !important;
+    background-position: right 14px center !important;
+    background-size: 16px 16px !important;
+    text-overflow: ellipsis;
+    cursor: pointer;
+}
+
+/* Pictures waiting for the connection: the card's own placeholder shows instead. */
+.sk-img-waiting {
+    visibility: hidden;
+}
+
+/* Map areas waiting for the connection show a skeleton block. */
+.sk-map-skeleton {
+    width: 100%;
+    height: 100%;
+    min-height: 180px;
+    border-radius: inherit;
+}
+
+/* ==========================================================================
+   "Plan your trip style" (js/trip-style.js), asked before an itinerary is built.
+   ========================================================================== */
+.sk-style-panel {
+    width: min(100%, 480px);
+    display: flex;
+    flex-direction: column;
+    padding-bottom: 16px;
+}
+
+.sk-style-body {
+    margin-top: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+}
+
+.sk-style-group {
+    margin: 0;
+    padding: 0;
+    border: 0;
+    min-width: 0;
+}
+
+.sk-style-group legend {
+    padding: 0;
+    margin-bottom: 10px;
+    font-size: 14px;
+    font-weight: 800;
+    color: #163457;
+}
+
+.sk-style-times {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+}
+
+.sk-style-time,
+.sk-style-pace {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    min-width: 0;
+    padding: 12px;
+    border: 1.5px solid #d9eaf0;
+    border-radius: 14px;
+    background-color: #f7fbfc;
+    color: #163457;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: border-color .15s ease, background-color .15s ease, box-shadow .15s ease;
+}
+
+.sk-style-time svg {
+    flex: none;
+    width: 22px;
+    height: 22px;
+    margin-top: 1px;
+    color: #2c91b0;
+}
+
+.sk-style-time span,
+.sk-style-pace {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+}
+
+.sk-style-time strong,
+.sk-style-pace strong {
+    font-size: 14px;
+    font-weight: 750;
+}
+
+.sk-style-time small,
+.sk-style-pace small {
+    font-size: 12px;
+    line-height: 1.35;
+    color: #5b7489;
+}
+
+.sk-style-time[aria-checked="true"],
+.sk-style-pace[aria-checked="true"] {
+    border-color: #2c91b0;
+    background-color: #e6f6f8;
+    box-shadow: 0 0 0 3px rgba(44, 145, 176, .14);
+}
+
+.sk-style-paces {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+}
+
+.sk-style-pace {
+    align-items: flex-start;
+    padding: 10px;
+}
+
+.sk-style-sub {
+    margin: 4px 0 8px;
+    font-size: 12px;
+    font-weight: 700;
+    color: #5b7489;
+}
+
+.sk-style-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+
+.sk-style-chip {
+    min-height: 36px;
+    padding: 7px 13px;
+    border: 1.5px solid #d9eaf0;
+    border-radius: 999px;
+    background-color: #ffffff;
+    color: #2b4a66;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 650;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.sk-style-chip[aria-pressed="true"] {
+    border-color: #2c91b0;
+    background-color: #2c91b0;
+    color: #ffffff;
+}
+
+.sk-style-time:focus-visible,
+.sk-style-pace:focus-visible,
+.sk-style-chip:focus-visible {
+    outline: 2px solid #2c91b0;
+    outline-offset: 2px;
+}
+
+.sk-style-note {
+    margin: 14px 0 0;
+    font-size: 12px;
+    color: #5b7489;
+    text-align: center;
+}
+
+@media (max-width: 360px) {
+    .sk-style-times { grid-template-columns: 1fr; }
+}
+
+/* The Back / Build buttons stay in view while the choices scroll. */
+.sk-style-panel .sk-dialog-actions {
+    position: sticky;
+    bottom: -16px;
+    margin: 12px -20px -16px;
+    padding: 12px 20px 16px;
+    background: inherit;
+    border-top: 1px solid #e3eef3;
+}
+
+.sk-style-panel:focus {
+    outline: none;
+}
+
+.sk-style-panel:focus-visible {
+    outline: none;
+    box-shadow: var(--sk-shadow-lg);
+}
+
+/* The panel takes focus only so keyboard and screen-reader users start inside it. */
+.sk-dialog .sk-style-panel[tabindex]:focus-visible {
+    outline: none !important;
+}
+
+/* Trip starting today: a note on when day 1 begins, and times of day that are over. */
+.sk-style-late-note {
+    margin: -2px 0 10px;
+    padding: 8px 12px;
+    border-radius: 10px;
+    background-color: #fff6e8;
+    color: #7a4a06;
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+.sk-style-time:disabled {
+    cursor: not-allowed;
+    opacity: .5;
+}
+
+.sk-style-time:disabled svg {
+    color: #8aa0b3;
+}

@@ -65,10 +65,8 @@ async function handleLogin(event) {
   }
 
   try {
-    if (submitBtn) {
-      submitBtn.disabled = true;
-      submitBtn.textContent = "Logging in...";
-    }
+    if (submitBtn) submitBtn.disabled = true;
+    window.SidekickUI?.loading.show();
 
     const result = await window.SidekickCore.apiRequest("/api/login", {
       method: "POST",
@@ -76,7 +74,7 @@ async function handleLogin(event) {
     });
     const user = result.user;
     if (!result.session?.token) {
-      throw new Error("The Sidekick server did not issue an app session. Restart the updated backend, then try signing in again.");
+      throw new Error("We couldn’t sign you in right now. Please try again in a moment.");
     }
 
     window.SidekickCore.setAuthSession({
@@ -94,18 +92,19 @@ async function handleLogin(event) {
       email,
       destination: prefs ? "dashboard.html" : "onboarding.html",
     });
+    // Keep the loading screen up while the next page opens.
+    window.SidekickUI?.loading.show();
     window.location.href = prefs ? "dashboard.html" : "onboarding.html";
   } catch (e) {
     console.error(e);
+    window.SidekickUI?.loading.hide(true);
     if (errEl) {
-      errEl.textContent = e.message || "Login failed. Please try again.";
+      errEl.textContent = window.SidekickCore.friendlyError(e, "Login failed. Please try again.");
       errEl.removeAttribute("hidden");
     }
   } finally {
-    if (submitBtn) {
-      submitBtn.disabled = false;
-      submitBtn.textContent = "Login";
-    }
+    window.SidekickUI?.loading.hide();
+    if (submitBtn) submitBtn.disabled = false;
   }
 
   return false;

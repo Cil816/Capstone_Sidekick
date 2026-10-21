@@ -123,7 +123,7 @@
 }
 
 .see-all:hover {
-    text-decoration: underline;
+    text-decoration: none;
 }
 
 /* Horizontal Scroll */
@@ -684,21 +684,28 @@
 }
 
 /* See-all list screen */
+/* Covers the whole screen (edge to edge); the list itself stays a readable width. */
 .see-all-screen {
     position: fixed;
-    top: 0;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    max-width: 448px;
-    margin: 0 auto;
+    inset: 0;
+    width: 100%;
+    max-width: none;
+    margin: 0;
     z-index: 11000;
     background: #fff;
     display: flex;
     flex-direction: column;
     overflow-y: auto;
+    overscroll-behavior: contain;
     -webkit-overflow-scrolling: touch;
-    padding-bottom: calc(24px + env(safe-area-inset-bottom));
+    padding-bottom: calc(24px + var(--sk-safe-bottom, env(safe-area-inset-bottom)));
+}
+
+.see-all-screen > * {
+    width: 100%;
+    max-width: 760px;
+    margin-left: auto;
+    margin-right: auto;
 }
 
 .see-all-screen[hidden] {
@@ -715,6 +722,14 @@
     padding: 14px 16px;
     background: #fff;
     border-bottom: 1px solid #E5E7EB;
+}
+
+/* The header spans the full width and reaches up behind the status bar. */
+.see-all-screen > .see-all-header {
+    max-width: none;
+    padding-top: calc(14px + var(--sk-safe-top, 0px));
+    padding-left: max(16px, calc((100% - 728px) / 2));
+    padding-right: max(16px, calc((100% - 728px) / 2));
 }
 
 .see-all-back {
@@ -838,8 +853,10 @@
     display: none;
 }
 
-.see-all-more {
-    margin: 8px 16px 0;
+.see-all-screen > .see-all-more {
+    width: calc(100% - 32px);
+    max-width: 728px;
+    margin: 8px auto 0;
 }
 
 .see-all-more[hidden] {
@@ -932,4 +949,10 @@
     overflow: hidden;
     white-space: nowrap;
     text-overflow: ellipsis;
+}
+
+/* Full-screen layout: the hero's soft panel also fills the strip behind the status bar. */
+.dashboard-hero {
+    margin-top: calc(-1 * var(--sk-safe-top, 0px));
+    padding-top: var(--sk-safe-top, 0px);
 }

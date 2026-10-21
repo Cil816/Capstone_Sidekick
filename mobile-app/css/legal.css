@@ -18,7 +18,7 @@
     text-decoration: none;
 }
 
-.legal-page .legal-back:hover { text-decoration: underline; }
+.legal-page .legal-back:hover { text-decoration: none; }
 
 .legal-page h1 {
     margin: 0 0 4px;
@@ -105,8 +105,7 @@
 
 .legal-links a {
     color: #4f6f91;
-    text-decoration: underline;
-    text-underline-offset: 2px;
+    text-decoration: none;
 }
 
 /* Policy viewer inside the registration dialog */

@@ -1038,7 +1038,7 @@ body {
 }
 
 .admin-link:hover {
-  text-decoration: underline;
+  text-decoration: none;
 }
 
 /* Summary cards */

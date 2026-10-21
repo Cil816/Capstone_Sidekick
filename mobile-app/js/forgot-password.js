@@ -40,11 +40,15 @@
       statusEl.hidden = !message;
     }
 
+    // While a step is running the Sidekick loading screen shows; the button keeps
+    // its normal label and is disabled.
     function busy(button, isBusy, busyText, idleText) {
       state.busy = isBusy;
+      if (isBusy) window.SidekickUI?.loading.show();
+      else window.SidekickUI?.loading.hide();
       if (!button) return;
       button.disabled = isBusy;
-      button.textContent = isBusy ? busyText : idleText;
+      button.textContent = idleText;
     }
 
     function showStep(name) {
@@ -105,7 +109,7 @@
         setStatus("If an account exists for this email, a 6-digit code is on its way. Check your inbox and spam folder.");
         otpInput.focus();
       } catch (error) {
-        setError(error.message || "Unable to send a reset code right now.");
+        setError(window.SidekickCore.friendlyError(error, "Unable to send a reset code right now. Please try again."));
       } finally {
         busy(button, false, "Sending…", idleText);
       }
@@ -131,7 +135,7 @@
         showStep("password");
         passwordInput.focus();
       } catch (error) {
-        setError(error.message || "Invalid or expired code. Please try again.");
+        setError(window.SidekickCore.friendlyError(error, "Invalid or expired code. Please try again."));
         otpInput.value = "";
         otpInput.focus();
       } finally {
@@ -170,7 +174,7 @@
         if (loginEmail) loginEmail.value = email;
         $("login-password")?.focus();
       } catch (error) {
-        const message = error.message || "Unable to change the password right now.";
+        const message = window.SidekickCore.friendlyError(error, "Unable to change the password right now. Please try again.");
         if (/code|expired/i.test(message)) {
           state.otp = "";
           otpInput.value = "";

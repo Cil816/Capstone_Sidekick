@@ -124,6 +124,10 @@ html[data-theme="dark"] .reminders-badge {
   background: #e45b68;
   color: #fff;
 }
+html[data-theme="dark"] .bottom-nav .nav-item .reminders-badge {
+  background: #d92d44;
+  color: #ffffff;
+}
 html[data-theme="dark"] .nav-item {
   background: transparent;
   color: #9CA3AF;
@@ -196,12 +200,6 @@ html[data-theme="dark"]:where([data-page="alerts"]) .alerts-field select {
   color: hsl(212, 32%, 84%);
 }
 html[data-theme="dark"]:where([data-page="alerts"]) .alerts-hint {
-  color: hsl(208, 19%, 72%);
-}
-html[data-theme="dark"]:where([data-page="alerts"]) .editor-panel-title {
-  color: hsl(212, 32%, 84%);
-}
-html[data-theme="dark"]:where([data-page="alerts"]) .editor-panel-note {
   color: hsl(208, 19%, 72%);
 }
 html[data-theme="dark"]:where([data-page="alerts"]) .alerts-text-btn {
@@ -308,6 +306,27 @@ html[data-theme="dark"]:where([data-page="alerts"]) .alerts-permission-note {
   background: hsl(35, 38%, 14%);
   border: 1px solid hsl(34, 30%, 29%);
   color: hsl(30, 32%, 83%);
+}
+html[data-theme="dark"]:where([data-page="alerts"]) .sk-day-group {
+  border: 1px solid hsl(196, 30%, 24%);
+  background: hsl(208, 32%, 11%);
+}
+html[data-theme="dark"]:where([data-page="alerts"]) .sk-day-group > summary::after {
+  border-right: 2px solid #4f6880;
+  border-bottom: 2px solid #4f6880;
+}
+html[data-theme="dark"]:where([data-page="alerts"]) .sk-day-group > summary:focus-visible {
+  outline: 2px solid #2c91b0;
+}
+html[data-theme="dark"]:where([data-page="alerts"]) .sk-day-group-date {
+  color: hsl(212, 32%, 84%);
+}
+html[data-theme="dark"]:where([data-page="alerts"]) .sk-day-group-count {
+  background: hsl(194, 38%, 14%);
+  color: hsl(194, 32%, 79%);
+}
+html[data-theme="dark"]:where([data-page="alerts"]) .sk-day-group-body {
+  border-top: 1px solid hsl(199, 30%, 23%);
 }
 
 /* ---- from app-rating.css (chat, dashboard, itinerary, profile) ---- */
@@ -775,9 +794,6 @@ html[data-theme="dark"]:where([data-page="dashboard"]) .dashboard-hero .search-i
 }
 
 /* ---- from itinerary.css (itinerary) ---- */
-html[data-theme="dark"]:where([data-page="itinerary"]) .itinerary-header {
-  border-bottom: 1px solid hsl(220, 13%, 23%);
-}
 html[data-theme="dark"]:where([data-page="itinerary"]) .header-top h1 {
   color: hsl(210, 29%, 83%);
 }
@@ -911,15 +927,7 @@ html[data-theme="dark"]:where([data-page="itinerary"]) .itinerary-screen {
   background: radial-gradient(circle at 88% 2%, rgba(104, 221, 217, .2), transparent 28%), linear-gradient(180deg, hsl(189, 38%, 12%) 0%, hsl(208, 32%, 11%) 38%);
 }
 html[data-theme="dark"]:where([data-page="itinerary"]) .itinerary-header {
-  border-bottom: 1px solid hsla(212, 30%, 24%, 0.8);
-  background: hsla(208, 32%, 11%, 0.82);
-}
-html[data-theme="dark"]:where([data-page="itinerary"]) #remove-all-itinerary {
-  color: hsl(349, 32%, 71%);
-  background: hsla(350, 38%, 20%, 0.12);
-}
-html[data-theme="dark"]:where([data-page="itinerary"]) #remove-all-itinerary:hover {
-  background: hsla(350, 38%, 20%, 0.22);
+  background: linear-gradient(180deg, hsla(208, 32%, 11%, 0.82) 0%, hsla(208, 32%, 11%, 0.6) 70%, hsla(208, 32%, 11%, 0) 100%);
 }
 html[data-theme="dark"]:where([data-page="itinerary"]) .itinerary-budget-summary {
   border: 1px solid hsl(202, 30%, 24%);
@@ -969,6 +977,7 @@ html[data-theme="dark"]:where([data-page="itinerary"]) #itinerary-builder {
   border: 1px solid hsl(210, 30%, 23%);
 }
 html[data-theme="dark"]:where([data-page="itinerary"]) #itinerary-destination,
+html[data-theme="dark"]:where([data-page="itinerary"]) #itinerary-name,
 html[data-theme="dark"]:where([data-page="itinerary"]) #itinerary-origin,
 html[data-theme="dark"]:where([data-page="itinerary"]) #itinerary-start,
 html[data-theme="dark"]:where([data-page="itinerary"]) #itinerary-end,
@@ -1279,6 +1288,224 @@ html[data-theme="dark"]:where([data-page="itinerary"]) #show-builder.is-open {
 html[data-theme="dark"]:where([data-page="itinerary"]) #show-builder.is-open:hover {
   background: #1b6e84;
 }
+html[data-theme="dark"]:where([data-page="itinerary"]) .activity-break {
+  border: 1px dashed hsl(203, 30%, 25%);
+  background: hsla(180, 38%, 13%, 0.7);
+  color: hsl(208, 27%, 77%);
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .activity-break::before {
+  background: hsl(203, 35%, 21%);
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .activity-break.is-rest {
+  background: hsla(220, 38%, 13%, 0.75);
+  border-color: hsl(219, 30%, 25%);
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .activity-break-icon {
+  background: hsl(208, 32%, 11%);
+  color: hsl(194, 32%, 79%);
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .activity-break.is-rest .activity-break-icon {
+  color: hsl(226, 32%, 74%);
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .activity-break-text strong {
+  color: hsl(212, 32%, 84%);
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .activity-break-text small {
+  color: hsl(207, 20%, 74%);
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .place-field-results {
+  border: 1px solid hsl(208, 19%, 25%);
+  background: hsl(208, 32%, 11%);
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .place-field-result {
+  border-bottom: 1px solid hsl(207, 30%, 22%);
+  background: transparent;
+  color: hsl(212, 32%, 84%);
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .place-field-result:hover,
+html[data-theme="dark"]:where([data-page="itinerary"]) .place-field-result:focus-visible {
+  background: hsl(190, 38%, 13%);
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .place-field-result small {
+  color: hsl(208, 19%, 72%);
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .place-field-chosen {
+  border: 1px solid hsl(177, 30%, 26%);
+  background: hsl(180, 38%, 13%);
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .place-field-chosen img,
+html[data-theme="dark"]:where([data-page="itinerary"]) .place-field-pin {
+  background: hsl(188, 38%, 15%);
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .place-field-chosen strong {
+  color: hsl(212, 32%, 84%);
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .place-field-chosen small {
+  color: hsl(208, 19%, 72%);
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .planned-trips h2 {
+  color: var(--itinerary-ink, hsl(212, 32%, 84%));
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .planned-trip-row {
+  border: 1px solid hsl(202, 30%, 24%);
+  background: hsl(208, 32%, 11%);
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .planned-trip-row.is-open {
+  border-color: hsl(190, 30%, 29%);
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .planned-trip-name {
+  color: hsl(212, 32%, 84%);
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .planned-trip-head small {
+  color: hsl(207, 20%, 74%);
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .planned-trip-badge {
+  background: hsl(37, 38%, 14%);
+  color: hsl(33, 32%, 82%);
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .planned-trip-chevron {
+  border-right: 2px solid #4f6880;
+  border-bottom: 2px solid #4f6880;
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .planned-trip-row:focus-visible {
+  outline: 2px solid #2c91b0;
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .itinerary-edit-chip.danger {
+  color: hsl(352, 32%, 75%);
+  border-color: hsl(351, 30%, 25%);
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .itinerary-save-bar {
+  border: 1px solid hsl(38, 30%, 28%);
+  background: hsl(40, 38%, 12%);
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .itinerary-save-bar p {
+  color: hsl(38, 32%, 83%);
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .itinerary-edit-chip.danger {
+  background: transparent;
+  color: hsl(352, 32%, 75%);
+  border-color: hsl(351, 30%, 25%);
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .itinerary-edit-chip.danger:hover {
+  background: rgba(180, 35, 54, .06);
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .active-trip-view #remove-all-itinerary.itinerary-edit-chip.danger {
+  color: hsl(352, 32%, 75%);
+  border-color: #e2687a;
+  background: hsl(353, 38%, 13%);
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .active-trip-view #remove-all-itinerary.itinerary-edit-chip.danger:hover {
+  background: hsl(352, 38%, 15%);
+}
+html[data-theme="dark"]:where([data-page="itinerary"])[data-theme="dark"] .active-trip-view #remove-all-itinerary.itinerary-edit-chip.danger {
+  color: #ff8593;
+  border-color: #e0566a;
+  background: rgba(224, 86, 106, .16);
+}
+html[data-theme="dark"]:where([data-page="itinerary"])[data-theme="dark"] .active-trip-view #remove-all-itinerary.itinerary-edit-chip.danger:hover {
+  background: rgba(224, 86, 106, .26);
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .activity-status {
+  border: 1px solid hsl(202, 30%, 24%);
+  background: hsl(200, 38%, 12%);
+  color: hsl(194, 32%, 79%);
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .activity-status-box {
+  border: 2px solid #8fb3c4;
+  background-color: hsl(208, 32%, 11%);
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .activity-status[data-status="upcoming"] {
+  background: none;
+  color: hsl(207, 16%, 72%);
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .activity-status[data-status="ask"],
+html[data-theme="dark"]:where([data-page="itinerary"]) .activity-status[data-status="now"] {
+  background: none;
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .activity-status-choice.done {
+  border: 1px solid #0f9d8a;
+  background: #0f9d8a;
+  color: #ffffff;
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .activity-status-choice.missed {
+  border: 1px solid #e2687a;
+  background: hsl(208, 32%, 11%);
+  color: hsl(352, 32%, 75%);
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .activity-status-choice:focus-visible,
+html[data-theme="dark"]:where([data-page="itinerary"]) .activity-status-change:focus-visible {
+  outline: 2px solid #2c91b0;
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .activity-status-change {
+  background: none;
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .activity-status[data-status="done"] {
+  border-color: hsl(165, 30%, 28%);
+  background: hsl(163, 38%, 14%);
+  color: hsl(175, 32%, 82%);
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .activity-status[data-status="done"] .activity-status-box {
+  border-color: #0f9d8a;
+  background-color: #0f9d8a;
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .activity-status[data-status="missed"] {
+  border-color: hsl(352, 30%, 26%);
+  background: hsl(353, 38%, 13%);
+  color: hsl(352, 32%, 75%);
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .activity-status[data-status="missed"] .activity-status-box {
+  border-color: #d9475b;
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .activity-card.is-missed {
+  border-color: hsl(352, 30%, 26%);
+}
+html[data-theme="dark"]:where([data-page="itinerary"])[data-theme="dark"] .activity-status {
+  border-color: rgba(143, 179, 196, .28);
+  background: hsla(208, 32%, 11%, 0.04);
+  color: #8fd3e3;
+}
+html[data-theme="dark"]:where([data-page="itinerary"])[data-theme="dark"] .activity-status-box {
+  border-color: #6f97aa;
+  background-color: transparent;
+}
+html[data-theme="dark"]:where([data-page="itinerary"])[data-theme="dark"] .activity-status[data-status="upcoming"] {
+  background: none;
+  color: #9fb2c0;
+}
+html[data-theme="dark"]:where([data-page="itinerary"])[data-theme="dark"] .activity-status[data-status="ask"],
+html[data-theme="dark"]:where([data-page="itinerary"])[data-theme="dark"] .activity-status[data-status="now"] {
+  background: none;
+}
+html[data-theme="dark"]:where([data-page="itinerary"])[data-theme="dark"] .activity-status-choice.done {
+  border-color: #14b8a6;
+  background: #14b8a6;
+  color: hsl(171, 32%, 90%);
+}
+html[data-theme="dark"]:where([data-page="itinerary"])[data-theme="dark"] .activity-status-choice.missed {
+  border-color: #e0566a;
+  background: rgba(224, 86, 106, .16);
+  color: #ff8593;
+}
+html[data-theme="dark"]:where([data-page="itinerary"])[data-theme="dark"] .activity-status[data-status="done"] {
+  border-color: rgba(45, 212, 191, .45);
+  background: rgba(45, 212, 191, .12);
+  color: #5eead4;
+}
+html[data-theme="dark"]:where([data-page="itinerary"])[data-theme="dark"] .activity-status[data-status="done"] .activity-status-box {
+  border-color: #14b8a6;
+  background-color: #14b8a6;
+}
+html[data-theme="dark"]:where([data-page="itinerary"])[data-theme="dark"] .activity-status[data-status="missed"] {
+  border-color: rgba(224, 86, 106, .55);
+  background: rgba(224, 86, 106, .14);
+  color: #ff8593;
+}
+html[data-theme="dark"]:where([data-page="itinerary"])[data-theme="dark"] .activity-status[data-status="missed"] .activity-status-box {
+  border-color: hsl(353, 30%, 28%);
+}
+html[data-theme="dark"]:where([data-page="itinerary"])[data-theme="dark"] .activity-card.is-missed {
+  border-color: rgba(224, 86, 106, .5);
+}
 
 /* ---- from legal.css (404, cookies, index, login, privacy, register, terms) ---- */
 html[data-theme="dark"]:where([data-page="404"], [data-page="cookies"], [data-page="index"], [data-page="login"], [data-page="privacy"], [data-page="register"], [data-page="terms"]) .legal-page {
@@ -1470,6 +1697,103 @@ html[data-theme="dark"]:where([data-page="login"], [data-page="register"], [data
   color: hsl(150, 32%, 82%);
 }
 
+/* ---- from past-trips.css (past-trips) ---- */
+html[data-theme="dark"]:where([data-page="past-trips"]) .past-trips-empty {
+  border: 1px dashed hsl(203, 30%, 25%);
+  background: hsla(208, 32%, 11%, 0.7);
+  color: hsl(209, 24%, 76%);
+}
+html[data-theme="dark"]:where([data-page="past-trips"]) .past-trip-skel {
+  border: 1px solid hsl(202, 30%, 24%);
+  background: hsl(208, 32%, 11%);
+}
+html[data-theme="dark"]:where([data-page="past-trips"]) .past-trip {
+  border: 1px solid hsl(202, 30%, 24%);
+  background: hsl(208, 32%, 11%);
+}
+html[data-theme="dark"]:where([data-page="past-trips"]) .past-trip > summary::after {
+  border-right: 2px solid #4f6880;
+  border-bottom: 2px solid #4f6880;
+}
+html[data-theme="dark"]:where([data-page="past-trips"]) .past-trip-name {
+  color: hsl(212, 32%, 84%);
+}
+html[data-theme="dark"]:where([data-page="past-trips"]) .past-trip > summary small {
+  color: hsl(207, 20%, 74%);
+}
+html[data-theme="dark"]:where([data-page="past-trips"]) .past-trip-body {
+  border-top: 1px solid hsl(199, 30%, 23%);
+}
+html[data-theme="dark"]:where([data-page="past-trips"]) .past-trip-meta {
+  color: hsl(207, 20%, 74%);
+}
+html[data-theme="dark"]:where([data-page="past-trips"]) .past-trip-day h3 {
+  color: hsl(194, 32%, 79%);
+}
+html[data-theme="dark"]:where([data-page="past-trips"]) .past-trip-time {
+  color: hsl(201, 32%, 79%);
+}
+html[data-theme="dark"]:where([data-page="past-trips"]) .past-trip-stop strong {
+  color: hsl(212, 32%, 84%);
+}
+html[data-theme="dark"]:where([data-page="past-trips"]) .past-trip-stop small {
+  color: hsl(215, 16%, 73%);
+}
+html[data-theme="dark"]:where([data-page="past-trips"]) .past-trip-remove {
+  border: 1px solid hsl(351, 30%, 25%);
+  background: hsl(208, 32%, 11%);
+  color: hsl(352, 32%, 75%);
+}
+html[data-theme="dark"]:where([data-page="past-trips"]) .past-trip-remove:hover {
+  background: hsl(350, 38%, 13%);
+}
+html[data-theme="dark"]:where([data-page="past-trips"]) .past-trip-repeat {
+  border: 1px solid #1f6f88;
+  background: #1f6f88;
+  color: #ffffff;
+}
+html[data-theme="dark"]:where([data-page="past-trips"]) .past-trip-repeat:hover {
+  background: #195d73;
+}
+html[data-theme="dark"]:where([data-page="past-trips"]) .past-trips-edit {
+  border: 1px solid hsl(197, 30%, 26%);
+  background-color: hsl(208, 32%, 11%);
+  color: hsl(194, 32%, 79%);
+}
+html[data-theme="dark"]:where([data-page="past-trips"]) .past-trips-select-all {
+  color: hsl(212, 32%, 84%);
+}
+html[data-theme="dark"]:where([data-page="past-trips"]) .past-trips-select-all input {
+  border: 2px solid #9fb6c6;
+  background-color: hsl(208, 32%, 11%);
+}
+html[data-theme="dark"]:where([data-page="past-trips"]) .past-trips-select-all input:checked {
+  border-color: #2c91b0;
+  background-color: #2c91b0;
+}
+html[data-theme="dark"]:where([data-page="past-trips"]) .past-trips-select-all input:indeterminate {
+  border-color: #2c91b0;
+  background-color: #2c91b0;
+}
+html[data-theme="dark"]:where([data-page="past-trips"]) .past-trips-select-all input:focus-visible {
+  outline: 2px solid #2c91b0;
+}
+html[data-theme="dark"]:where([data-page="past-trips"]) .past-trips-delete {
+  border: 1px solid #b42336;
+  background-color: #b42336;
+  color: #ffffff;
+}
+html[data-theme="dark"]:where([data-page="past-trips"]) .past-trips-delete:disabled {
+  border-color: hsl(351, 30%, 27%);
+  background-color: hsl(351, 38%, 16%);
+  color: #ffffff;
+}
+html[data-theme="dark"]:where([data-page="past-trips"]) .past-trips-done {
+  border: 1px solid hsl(197, 30%, 26%);
+  background-color: hsl(208, 32%, 11%);
+  color: hsl(194, 32%, 79%);
+}
+
 /* ---- from register.css (login, register, verify) ---- */
 html[data-theme="dark"]:where([data-page="login"], [data-page="register"], [data-page="verify"]) .register-screen .content {
   border: 1px solid hsl(210, 30%, 22%);
@@ -1539,108 +1863,108 @@ html[data-theme="dark"]:where([data-page="login"], [data-page="register"], [data
   color: hsl(214, 15%, 73%);
 }
 
-/* ---- from settings.css (settings) ---- */
-html[data-theme="dark"]:where([data-page="settings"]) .settings-card {
+/* ---- from settings.css (past-trips, settings) ---- */
+html[data-theme="dark"]:where([data-page="past-trips"], [data-page="settings"]) .settings-card {
   background: hsl(208, 32%, 11%);
   border: 1px solid hsl(210, 28%, 22%);
 }
-html[data-theme="dark"]:where([data-page="settings"]) .settings-card-featured {
+html[data-theme="dark"]:where([data-page="past-trips"], [data-page="settings"]) .settings-card-featured {
   background: linear-gradient(180deg, hsl(214, 38%, 12%) 0%, hsl(208, 32%, 11%) 68%);
 }
-html[data-theme="dark"]:where([data-page="settings"]) .settings-card h2 {
+html[data-theme="dark"]:where([data-page="past-trips"], [data-page="settings"]) .settings-card h2 {
   color: hsl(215, 28%, 86%);
 }
-html[data-theme="dark"]:where([data-page="settings"]) .settings-chip {
+html[data-theme="dark"]:where([data-page="past-trips"], [data-page="settings"]) .settings-chip {
   background: hsl(213, 38%, 14%);
   color: hsl(209, 32%, 79%);
 }
-html[data-theme="dark"]:where([data-page="settings"]) .setting-row {
+html[data-theme="dark"]:where([data-page="past-trips"], [data-page="settings"]) .setting-row {
   border-top: 1px solid hsl(220, 14%, 21%);
 }
-html[data-theme="dark"]:where([data-page="settings"]) .setting-title {
+html[data-theme="dark"]:where([data-page="past-trips"], [data-page="settings"]) .setting-title {
   color: hsl(215, 28%, 86%);
 }
-html[data-theme="dark"]:where([data-page="settings"]) .setting-row small {
+html[data-theme="dark"]:where([data-page="past-trips"], [data-page="settings"]) .setting-row small {
   color: hsl(220, 9%, 74%);
 }
-html[data-theme="dark"]:where([data-page="settings"]) .toggle-input {
+html[data-theme="dark"]:where([data-page="past-trips"], [data-page="settings"]) .toggle-input {
   border: 1px solid hsl(215, 30%, 26%);
   background: hsl(214, 38%, 14%);
 }
-html[data-theme="dark"]:where([data-page="settings"]) .toggle-input::before {
+html[data-theme="dark"]:where([data-page="past-trips"], [data-page="settings"]) .toggle-input::before {
   background: hsl(208, 32%, 11%);
 }
-html[data-theme="dark"]:where([data-page="settings"]) .toggle-input:checked {
+html[data-theme="dark"]:where([data-page="past-trips"], [data-page="settings"]) .toggle-input:checked {
   background: #6b8cae;
   border-color: #5f7f9f;
 }
-html[data-theme="dark"]:where([data-page="settings"]) .toggle-input:focus-visible {
+html[data-theme="dark"]:where([data-page="past-trips"], [data-page="settings"]) .toggle-input:focus-visible {
   outline: 3px solid rgba(107, 140, 174, 0.25);
 }
-html[data-theme="dark"]:where([data-page="settings"]) .settings-card.danger .btn {
+html[data-theme="dark"]:where([data-page="past-trips"], [data-page="settings"]) .settings-card.danger .btn {
   background: #334155;
 }
-html[data-theme="dark"]:where([data-page="settings"]) .settings-message {
+html[data-theme="dark"]:where([data-page="past-trips"], [data-page="settings"]) .settings-message {
   color: hsl(163, 32%, 85%);
   background: hsl(152, 38%, 13%);
   border: 1px solid hsl(152, 30%, 27%);
 }
-html[data-theme="dark"]:where([data-page="settings"]) .settings-card {
+html[data-theme="dark"]:where([data-page="past-trips"], [data-page="settings"]) .settings-card {
   border-color: hsl(212, 30%, 23%);
 }
-html[data-theme="dark"]:where([data-page="settings"]) .settings-card-featured {
+html[data-theme="dark"]:where([data-page="past-trips"], [data-page="settings"]) .settings-card-featured {
   background: linear-gradient(135deg, hsla(184, 38%, 15%, 0.96), hsla(196, 38%, 12%, 0.96));
 }
-html[data-theme="dark"]:where([data-page="settings"]) .settings-chip {
+html[data-theme="dark"]:where([data-page="past-trips"], [data-page="settings"]) .settings-chip {
   background: linear-gradient(135deg, rgba(67, 191, 208, .18), rgba(127, 223, 225, .24));
   color: hsl(193, 32%, 78%);
 }
-html[data-theme="dark"]:where([data-page="settings"]) .toggle-input:checked {
+html[data-theme="dark"]:where([data-page="past-trips"], [data-page="settings"]) .toggle-input:checked {
   background: linear-gradient(135deg, #2c91b0, #68ddd9);
   border-color: #2c91b0;
 }
-html[data-theme="dark"]:where([data-page="settings"]) .settings-card.danger .btn-primary {
+html[data-theme="dark"]:where([data-page="past-trips"], [data-page="settings"]) .settings-card.danger .btn-primary {
   background: #334155 !important;
 }
-html[data-theme="dark"]:where([data-page="settings"]) .settings-card.danger .btn-danger-outline {
+html[data-theme="dark"]:where([data-page="past-trips"], [data-page="settings"]) .settings-card.danger .btn-danger-outline {
   background: hsl(208, 32%, 11%);
   color: hsl(349, 32%, 74%);
   border: 2px solid #9e4757;
 }
-html[data-theme="dark"]:where([data-page="settings"]) .settings-card.danger .btn-danger-outline:hover {
+html[data-theme="dark"]:where([data-page="past-trips"], [data-page="settings"]) .settings-card.danger .btn-danger-outline:hover {
   background: hsl(347, 38%, 12%);
 }
-html[data-theme="dark"]:where([data-page="settings"]) .settings-legal-links a,
-html[data-theme="dark"]:where([data-page="settings"]) .settings-legal-note a {
+html[data-theme="dark"]:where([data-page="past-trips"], [data-page="settings"]) .settings-legal-links a,
+html[data-theme="dark"]:where([data-page="past-trips"], [data-page="settings"]) .settings-legal-note a {
   color: hsl(190, 32%, 79%);
 }
-html[data-theme="dark"]:where([data-page="settings"]) .settings-legal-note {
+html[data-theme="dark"]:where([data-page="past-trips"], [data-page="settings"]) .settings-legal-note {
   color: hsl(210, 23%, 75%);
 }
-html[data-theme="dark"]:where([data-page="settings"]) .delete-account-dialog {
+html[data-theme="dark"]:where([data-page="past-trips"], [data-page="settings"]) .delete-account-dialog {
   border: 1px solid hsl(206, 30%, 23%);
   color: hsl(212, 32%, 85%);
 }
-html[data-theme="dark"]:where([data-page="settings"]) .delete-account-dialog::backdrop {
+html[data-theme="dark"]:where([data-page="past-trips"], [data-page="settings"]) .delete-account-dialog::backdrop {
   background: rgb(20 35 50 / 48%);
 }
-html[data-theme="dark"]:where([data-page="settings"]) .delete-account-dialog h2 {
+html[data-theme="dark"]:where([data-page="past-trips"], [data-page="settings"]) .delete-account-dialog h2 {
   color: hsl(212, 32%, 84%);
 }
-html[data-theme="dark"]:where([data-page="settings"]) .delete-account-dialog input {
+html[data-theme="dark"]:where([data-page="past-trips"], [data-page="settings"]) .delete-account-dialog input {
   border: 1px solid hsl(210, 26%, 25%);
 }
-html[data-theme="dark"]:where([data-page="settings"]) .btn-danger {
+html[data-theme="dark"]:where([data-page="past-trips"], [data-page="settings"]) .btn-danger {
   background: #9e4757;
   color: #fff;
 }
-html[data-theme="dark"]:where([data-page="settings"]) .btn-danger:hover:not(:disabled) {
+html[data-theme="dark"]:where([data-page="past-trips"], [data-page="settings"]) .btn-danger:hover:not(:disabled) {
   background: #873a49;
 }
-html[data-theme="dark"]:where([data-page="settings"]) .settings-test-status {
+html[data-theme="dark"]:where([data-page="past-trips"], [data-page="settings"]) .settings-test-status {
   color: hsl(150, 32%, 83%);
 }
-html[data-theme="dark"]:where([data-page="settings"]) .settings-test-status.is-error {
+html[data-theme="dark"]:where([data-page="past-trips"], [data-page="settings"]) .settings-test-status.is-error {
   color: hsl(351, 32%, 76%);
 }
 
@@ -1664,77 +1988,198 @@ html[data-theme="dark"]:where([data-page="index"]) .tagline {
   color: hsl(220, 9%, 74%);
 }
 
-/* ---- from theme.css (alerts, chat, cookies, dashboard, index, itinerary, login, onboarding, privacy, profile, register, settings, terms, verify) ---- */
-html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) body {
+/* ---- from theme.css (alerts, chat, cookies, dashboard, index, itinerary, login, onboarding, past-trips, privacy, profile, register, settings, terms, verify) ---- */
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) body {
   background: radial-gradient(circle at 12% 0%, rgba(104, 221, 217, .18), transparent 34%),
                 radial-gradient(circle at 100% 100%, rgba(44, 145, 176, .08), transparent 40%),
                 var(--sk-bg);
 }
-html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .screen {
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .screen {
   background: transparent;
 }
-html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .btn-primary,
-html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .send-btn {
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .btn-primary,
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .send-btn {
   color: #fff;
 }
-html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .btn-primary:hover {
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .btn-primary:hover {
   background: linear-gradient(135deg, #24819e, #55cfcb);
 }
-html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .btn-outline {
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .btn-outline {
   background: hsla(208, 32%, 11%, 0.9);
   border: 1.5px solid hsl(191, 30%, 26%);
 }
-html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .btn-outline:hover {
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .btn-outline:hover {
   border-color: hsl(190, 30%, 29%);
 }
-html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .btn:focus-visible,
-html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .nav-item:focus-visible {
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .btn:focus-visible,
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .nav-item:focus-visible {
   outline: 3px solid rgba(44, 145, 176, .35);
 }
-html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-dialog-backdrop {
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-dialog-backdrop {
   background: rgba(13, 32, 54, .5);
 }
-html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-dialog-panel {
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-dialog-panel {
   background: hsl(208, 32%, 11%);
 }
-html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-dialog-message {
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-dialog-message {
   color: hsl(211, 29%, 79%);
 }
-html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-dialog-details li {
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-dialog-details li {
   border-bottom: 1px solid rgba(44, 145, 176, .12);
 }
-html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-dialog-field input,
-html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-dialog-field select {
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-dialog-field input,
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-dialog-field select {
   background: hsl(192, 38%, 12%);
 }
-html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-dialog-actions .btn-danger {
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-dialog-actions .btn-danger {
   color: #fff;
 }
-html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-toast {
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-toast {
   color: #fff;
 }
-html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .budget-option.selected {
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .budget-option.selected {
   background: #1f7a8c;
   border-color: #1f7a8c;
   color: #fff;
 }
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-loader {
+  background: transparent;
+}
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-loader::backdrop {
+  background: rgba(13, 32, 54, .45);
+}
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-loader-box {
+  background: hsl(208, 32%, 11%);
+}
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-loader-ring {
+  background: conic-gradient(from 0deg, rgba(44, 145, 176, 0) 0deg, rgba(44, 145, 176, .15) 90deg, #2c91b0 270deg, #68ddd9 360deg);
+}
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-loader-text {
+  color: hsl(212, 32%, 84%);
+}
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-skel {
+  background-color: hsl(201, 33%, 15%);
+  background-image: linear-gradient(90deg, hsl(201, 33%, 15%) 0%, hsl(197, 37%, 13%) 45%, hsl(201, 33%, 15%) 90%);
+}
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-skel-card {
+  background: hsl(208, 32%, 11%);
+  border: 1px solid hsl(220, 13%, 23%);
+}
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-ptr {
+  background: hsl(208, 32%, 11%);
+}
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-ptr-ring {
+  background: conic-gradient(from 0deg, rgba(44, 145, 176, 0) 0deg, rgba(44, 145, 176, .15) 90deg, #2c91b0 270deg, #68ddd9 360deg);
+}
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-offline {
+  background-color: hsl(189, 38%, 12%);
+  background-image: radial-gradient(120% 60% at 0% 0%, rgba(104, 221, 217, .28), transparent 60%), radial-gradient(100% 50% at 100% 100%, rgba(44, 145, 176, .14), transparent 65%);
+  color: hsl(212, 32%, 84%);
+}
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-offline::backdrop {
+  background: hsl(189, 38%, 12%);
+}
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-offline-icon {
+  background-color: hsl(189, 38%, 15%);
+  color: hsl(194, 32%, 79%);
+}
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-offline-title {
+  color: hsl(212, 32%, 84%);
+}
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-offline-message {
+  color: hsl(209, 24%, 76%);
+}
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-offline-status {
+  color: hsl(209, 24%, 76%);
+}
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-pw-toggle {
+  background: transparent;
+  color: hsl(208, 19%, 72%);
+}
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-pw-toggle:hover,
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-pw-toggle[aria-pressed="true"] {
+  color: hsl(194, 32%, 79%);
+}
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-pw-toggle:focus-visible {
+  outline: 2px solid #2c91b0;
+}
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-theme-toggle {
+  border: 1px solid hsl(196, 30%, 24%);
+  background-color: hsla(208, 32%, 11%, 0.86);
+  color: hsl(194, 32%, 79%);
+}
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-theme-toggle:focus-visible {
+  outline: 2px solid #2c91b0;
+}
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-style-group legend {
+  color: hsl(212, 32%, 84%);
+}
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-style-time,
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-style-pace {
+  border: 1.5px solid hsl(196, 30%, 24%);
+  background-color: hsl(192, 38%, 12%);
+  color: hsl(212, 32%, 84%);
+}
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-style-time svg {
+  color: hsl(194, 32%, 75%);
+}
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-style-time small,
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-style-pace small {
+  color: hsl(207, 20%, 74%);
+}
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-style-time[aria-checked="true"],
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-style-pace[aria-checked="true"] {
+  border-color: #2c91b0;
+  background-color: hsl(187, 38%, 14%);
+}
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-style-sub {
+  color: hsl(207, 20%, 74%);
+}
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-style-chip {
+  border: 1.5px solid hsl(196, 30%, 24%);
+  background-color: hsl(208, 32%, 11%);
+  color: hsl(208, 32%, 81%);
+}
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-style-chip[aria-pressed="true"] {
+  border-color: #2c91b0;
+  background-color: #2c91b0;
+  color: #ffffff;
+}
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-style-time:focus-visible,
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-style-pace:focus-visible,
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-style-chip:focus-visible {
+  outline: 2px solid #2c91b0;
+}
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-style-note {
+  color: hsl(207, 20%, 74%);
+}
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-style-panel .sk-dialog-actions {
+  border-top: 1px solid hsl(199, 30%, 23%);
+}
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-style-late-note {
+  background-color: hsl(37, 38%, 13%);
+  color: hsl(35, 32%, 82%);
+}
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-style-time:disabled svg {
+  color: #8aa0b3;
+}
 
-/* ---- from tab-motion.css (alerts, chat, dashboard, itinerary, profile, settings) ---- */
-html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="dashboard"], [data-page="itinerary"], [data-page="profile"], [data-page="settings"]) .sk-tab-bg {
+/* ---- from tab-motion.css (alerts, chat, dashboard, itinerary, past-trips, profile, settings) ---- */
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="dashboard"], [data-page="itinerary"], [data-page="past-trips"], [data-page="profile"], [data-page="settings"]) .sk-tab-bg {
   background: radial-gradient(120% 60% at 0% 0%, rgba(104, 221, 217, .30), transparent 60%),
         radial-gradient(100% 50% at 100% 100%, rgba(44, 145, 176, .14), transparent 65%),
         linear-gradient(180deg, hsl(186, 38%, 16%) 0%, hsl(186, 38%, 14%) 32%, hsl(180, 38%, 13%) 58%, hsl(189, 38%, 15%) 82%, hsl(190, 38%, 16%) 100%);
 }
-html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="dashboard"], [data-page="itinerary"], [data-page="profile"], [data-page="settings"]) .sk-tab-bg span:nth-child(1) {
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="dashboard"], [data-page="itinerary"], [data-page="past-trips"], [data-page="profile"], [data-page="settings"]) .sk-tab-bg span:nth-child(1) {
   background: radial-gradient(circle, rgba(104, 221, 217, .30) 0%, rgba(104, 221, 217, 0) 62%);
 }
-html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="dashboard"], [data-page="itinerary"], [data-page="profile"], [data-page="settings"]) .sk-tab-bg span:nth-child(2) {
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="dashboard"], [data-page="itinerary"], [data-page="past-trips"], [data-page="profile"], [data-page="settings"]) .sk-tab-bg span:nth-child(2) {
   background: radial-gradient(circle, rgba(44, 145, 176, .20) 0%, rgba(44, 145, 176, 0) 62%);
 }
-html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="dashboard"], [data-page="itinerary"], [data-page="profile"], [data-page="settings"]) .sk-tab-bg span:nth-child(3) {
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="dashboard"], [data-page="itinerary"], [data-page="past-trips"], [data-page="profile"], [data-page="settings"]) .sk-tab-bg span:nth-child(3) {
   background: radial-gradient(circle, hsla(208, 32%, 11%, 0.55) 0%, hsla(208, 32%, 11%, 0) 62%);
 }
-html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="dashboard"], [data-page="itinerary"], [data-page="profile"], [data-page="settings"]) .sk-tab-bg span:nth-child(4) {
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="dashboard"], [data-page="itinerary"], [data-page="past-trips"], [data-page="profile"], [data-page="settings"]) .sk-tab-bg span:nth-child(4) {
   background-image: radial-gradient(circle at 12% 18%, hsla(208, 32%, 11%, 0.9) 0 1.5px, transparent 2.5px),
         radial-gradient(circle at 78% 26%, hsla(208, 32%, 11%, 0.8) 0 1.5px, transparent 2.5px),
         radial-gradient(circle at 34% 62%, hsla(208, 32%, 11%, 0.8) 0 2px, transparent 3px),
@@ -1742,24 +2187,24 @@ html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-pa
         radial-gradient(circle at 56% 88%, hsla(208, 32%, 11%, 0.8) 0 1.5px, transparent 2.5px),
         radial-gradient(circle at 20% 92%, hsla(208, 32%, 11%, 0.7) 0 2px, transparent 3px);
 }
-html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="dashboard"], [data-page="itinerary"], [data-page="profile"], [data-page="settings"]) body[data-tab] .dashboard-hero {
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="dashboard"], [data-page="itinerary"], [data-page="past-trips"], [data-page="profile"], [data-page="settings"]) body[data-tab] .dashboard-hero {
   background: linear-gradient(180deg, hsla(186, 38%, 16%, 0.85) 0%, hsla(186, 38%, 16%, 0) 100%);
 }
-html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="dashboard"], [data-page="itinerary"], [data-page="profile"], [data-page="settings"]) body[data-tab] .bottom-nav .nav-item,
-html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="dashboard"], [data-page="itinerary"], [data-page="profile"], [data-page="settings"]) body[data-tab] .bottom-nav .nav-item.active {
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="dashboard"], [data-page="itinerary"], [data-page="past-trips"], [data-page="profile"], [data-page="settings"]) body[data-tab] .bottom-nav .nav-item,
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="dashboard"], [data-page="itinerary"], [data-page="past-trips"], [data-page="profile"], [data-page="settings"]) body[data-tab] .bottom-nav .nav-item.active {
   background: transparent;
 }
-html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="dashboard"], [data-page="itinerary"], [data-page="profile"], [data-page="settings"]) body[data-tab] .bottom-nav .nav-item svg {
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="dashboard"], [data-page="itinerary"], [data-page="past-trips"], [data-page="profile"], [data-page="settings"]) body[data-tab] .bottom-nav .nav-item svg {
   background-color: transparent;
 }
-html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="dashboard"], [data-page="itinerary"], [data-page="profile"], [data-page="settings"]) body[data-tab] .bottom-nav .nav-item:not(.active):hover svg {
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="dashboard"], [data-page="itinerary"], [data-page="past-trips"], [data-page="profile"], [data-page="settings"]) body[data-tab] .bottom-nav .nav-item:not(.active):hover svg {
   background-color: rgba(44, 145, 176, .08);
 }
-html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="dashboard"], [data-page="itinerary"], [data-page="profile"], [data-page="settings"]) body[data-tab] .bottom-nav .nav-item.active svg {
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="dashboard"], [data-page="itinerary"], [data-page="past-trips"], [data-page="profile"], [data-page="settings"]) body[data-tab] .bottom-nav .nav-item.active svg {
   background-color: #1f7a8c;
   background-image: linear-gradient(135deg, #1b6e84 0%, #2c91b0 100%);
 }
-html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="dashboard"], [data-page="itinerary"], [data-page="profile"], [data-page="settings"]) body[data-tab] .bottom-nav .nav-item.active span {
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="dashboard"], [data-page="itinerary"], [data-page="past-trips"], [data-page="profile"], [data-page="settings"]) body[data-tab] .bottom-nav .nav-item.active span {
   color: hsl(194, 32%, 79%);
 }
 
@@ -1893,6 +2338,17 @@ html[data-theme="dark"] body[data-map-stop="index"] .sk-map-wash {
 @media (max-width: 599px) {
   html[data-theme="dark"] .chat-input-container { box-shadow: 0 -10px 18px hsla(190, 38%, 12%, .95); }
 }
+
+/* Logo loading screen: a slightly lighter box so it stands out on the dimmed page */
+html[data-theme="dark"] .sk-loader-box { background: #1a2e40; border: 1px solid #2c4659; }
+html[data-theme="dark"] .sk-loader::backdrop { background: rgba(0, 0, 0, .55); }
+html[data-theme="dark"] .sk-offline::backdrop { background: #0c1722; }
+
+/* Drop-down arrow in a light colour */
+html[data-theme="dark"] select:not([multiple]):not([size]) {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%239db3c5' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E") !important;
+}
+html[data-theme="dark"] .sk-ptr { background: #1a2e40; border: 1px solid #2c4659; box-shadow: 0 6px 18px rgba(0, 0, 0, .45); }
 
 /* Profile picture placeholder (inline light background in profile.html) */
 html[data-theme="dark"] .profile-card div[style*="#F5F7FA"] { background: #1a2d3d !important; color: #9db3c5; }

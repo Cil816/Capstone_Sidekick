@@ -43,7 +43,7 @@ document.addEventListener('DOMContentLoaded', () => {
       try {
         result = await window.SidekickCore.sendTestNotification(session.email);
       } catch (error) {
-        result = { ok: false, message: error?.message || 'The test notification could not be sent.' };
+        result = { ok: false, message: window.SidekickCore.friendlyError(error, 'The test notification could not be sent.') };
       }
       if (result?.ok) {
         // Brief pause between tests: Android drops notifications an app posts in
@@ -99,15 +99,22 @@ document.addEventListener('DOMContentLoaded', () => {
   const clearItineraryBtn = document.getElementById('clear-itinerary-btn');
   if (clearItineraryBtn) {
     clearItineraryBtn.addEventListener('click', async () => {
-      const ok = await window.SidekickUI.confirm('Your itinerary and its reminders will be removed. This cannot be undone.', { title: 'Remove itinerary?', confirmText: 'Remove', tone: 'danger' });
+      const ok = await window.SidekickUI.confirm('All your planned trips, any unsaved itinerary, and their reminders will be removed. This cannot be undone.', { title: 'Remove all trips?', confirmText: 'Remove', tone: 'danger' });
       if (!ok) return;
       clearItineraryBtn.disabled = true;
       try {
-        await window.SidekickCore.clearItineraryForEmail(session.email);
+        // Each planned trip is opened, then deleted (on the server too); then the draft.
+        for (const trip of window.SidekickCore.getPlannedTrips?.(session.email) || []) {
+          if (window.SidekickCore.openTripForEmail?.(session.email, trip.meta?.planId)) {
+            await window.SidekickCore.clearItineraryForEmail(session.email);
+          }
+        }
+        window.SidekickCore.discardItineraryDraft?.(session.email);
+        if (window.SidekickCore.getItineraryByEmail()[session.email]) await window.SidekickCore.clearItineraryForEmail(session.email);
         window.SidekickCore.clearRemindersForEmail(session.email);
-        showMessage('Itinerary removed.');
+        showMessage('All trips removed.');
       } catch (error) {
-        showMessage(error.message || 'The itinerary could not be removed. Please try again.');
+        showMessage(window.SidekickCore.friendlyError(error, 'The itinerary could not be removed. Please try again.'));
       } finally {
         clearItineraryBtn.disabled = false;
       }
@@ -131,7 +138,8 @@ document.addEventListener('DOMContentLoaded', () => {
     logoutBtn.addEventListener('click', async () => {
       try {
         if (session?.apiToken) {
-          await window.SidekickCore.apiRequest('/api/app-session/logout', { method: 'POST' });
+          // Logging out also works offline: no waiting for the connection.
+          await window.SidekickCore.apiRequest('/api/app-session/logout', { method: 'POST', waitForConnection: false });
         }
       } catch (error) {
         console.warn('Unable to revoke app session on the server:', error.message);
@@ -165,6 +173,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const perEmailKeys = [
       'sidekick.chatByEmail.v1',
       'sidekick.itineraryByEmail.v1',
+      'sidekick.plannedTripsByEmail.v1',
+      'sidekick.itineraryDraftByEmail.v1',
+      'sidekick.finishedTripsByEmail.v1',
       'sidekick.pendingItineraryByEmail.v1',
       'sidekick.preferencesByEmail.v1',
       'sidekick.remindersByEmail.v1',
@@ -229,7 +240,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       setDeleteError('');
       deleteConfirm.disabled = true;
-      deleteConfirm.textContent = 'Deleting…';
+      window.SidekickUI?.loading.show('Deleting your account…');
       try {
         await window.SidekickCore.apiRequest('/api/account/delete', {
           method: 'POST',
@@ -239,9 +250,9 @@ document.addEventListener('DOMContentLoaded', () => {
         window.SidekickCore.clearAuthSession();
         window.location.href = 'login.html?account=deleted';
       } catch (error) {
-        setDeleteError(error.message || 'Your account could not be deleted. Please try again.');
+        window.SidekickUI?.loading.hide(true);
+        setDeleteError(window.SidekickCore.friendlyError(error, 'Your account could not be deleted. Please try again.'));
         deleteConfirm.disabled = false;
-        deleteConfirm.textContent = 'Delete permanently';
       }
     });
   }

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>Sidekick AI - Dashboard</title>
     <link rel="stylesheet" href="css/common.css">
     <link rel="stylesheet" href="css/dashboard.css">
@@ -36,7 +36,7 @@
                         <circle cx="11" cy="11" r="8"></circle>
                         <path d="m21 21-4.35-4.35"></path>
                     </svg>
-                    <input type="text" id="destination-search" placeholder="Search destinations..." aria-label="Search destinations" autocomplete="off" aria-autocomplete="list" aria-controls="destination-search-suggestions" aria-expanded="false">
+                    <input type="text" id="destination-search" placeholder="Search places in Batangas..." aria-label="Search destinations" autocomplete="off" aria-autocomplete="list" aria-controls="destination-search-suggestions" aria-expanded="false">
                 </div>
                 <div id="destination-search-suggestions" class="destination-search-suggestions" role="listbox" aria-label="Destination suggestions" hidden></div>
                 <p id="destination-search-status" class="destination-search-status" aria-live="polite"></p>
@@ -81,7 +81,7 @@
                         <div id="destination-origin-results" class="destination-origin-results" role="listbox" aria-label="Starting location suggestions" hidden></div>
                         <button id="destination-calculate-route" class="btn btn-outline" type="button">Calculate route</button>
                     </div>
-                    <div id="destination-map" class="destination-map">Map loading...</div>
+                    <div id="destination-map" class="destination-map"><div class="sk-skel sk-map-skeleton" aria-hidden="true"></div><span class="sr-only">Loading map…</span></div>
                     <div class="destination-meta-grid">
                         <div class="meta-card">
                             <span class="meta-label">Distance</span>
@@ -178,6 +178,7 @@
     <script src="js/app-rating.js"></script>
     <script src="js/dashboard.js"></script>
     <script src="js/nav.js"></script>
-    <script src="js/tab-motion.js"></script>
+    <script src="js/tab-motion.js"></script>
+    <script src="js/pull-refresh.js"></script>
 </body>
 </html>

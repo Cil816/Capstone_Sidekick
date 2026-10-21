@@ -5,7 +5,7 @@ const PENDING_CHAT_MESSAGE_KEY = "sidekick.pendingChatMessage.v1";
 const CHAT_SCROLL_POSITION_KEY = "sidekick.chatScrollPosition.v1";
 
 const TRAINING_CONTEXT = [
-  "You are Sidekick Companion, trained to help users plan Philippines travel inside the Sidekick app.",
+  "You are Sidekick Companion, trained to help users plan trips in the province of Batangas, Philippines inside the Sidekick app. Sidekick covers Batangas only.",
   "App modules: dashboard (discover), itinerary (view/edit generated plan), alerts (reminders), settings (cleanup and preferences).",
   "When user asks to generate itinerary, produce practical plan and trigger in-app itinerary generation flow.",
   "Sound like a helpful local travel companion: warm, direct, and natural. Avoid canned greetings, repeated 'How can I help?' questions, stiff phrases, and unnecessary summaries. If a destination is already known, respond to it with a useful next step instead of asking what the user wants to do.",
@@ -140,7 +140,7 @@ function buildItineraryDraftReply(draft) {
   const days = Array.isArray(draft.itinerary) ? draft.itinerary : [];
   const budget = draft.meta?.liveTripBudget || null;
   const activityCosts = new Map((draft.meta?.liveActivityCosts || []).map((item) => [String(item.placeId), item]));
-  const lines = [`I’ve prepared a ${days.length}-day itinerary for **${draft.meta?.destination || "your trip"}**. It has already been recorded for Sidekick account monitoring. Take a look at the schedule and estimates below.`];
+  const lines = [`I’ve prepared a ${days.length}-day itinerary for **${draft.meta?.destination || "your trip"}**. Take a look at the schedule and estimates below.`];
 
   for (const [index, day] of days.entries()) {
     const activities = Array.isArray(day.activities) ? day.activities : [];
@@ -182,7 +182,7 @@ function buildItineraryDraftReply(draft) {
     ? " This is development sample data, not a live verified estimate."
     : budget?.sources?.length ? " These ranges use current web sources; prices can change. Route durations are estimates and traffic can change."
       : " Live price sources were unavailable, so I have not filled in unsupported prices.";
-  return `${lines.join("\n")}${totalBudget}${enteredBudget}${sourcesNote}\n\nWould you like to keep this plan in your app’s My Itinerary tab? Reply **Save itinerary** or **Discard**. Either choice leaves the generated record available to the admin.`;
+  return `${lines.join("\n")}${totalBudget}${enteredBudget}${sourcesNote}\n\nWould you like to keep this plan? Reply **Save itinerary** to add it to your planned trips on the Itinerary tab, or **Discard**.`;
 }
 
 function normalizeBudget(value) {
@@ -374,7 +374,12 @@ async function continueIncompleteReply(reply, prefs, state, email) {
 
 async function generateItineraryWithBackend(prefs, state, userText) {
   const session = window.SidekickCore.getAuthSession();
-  const startDate = state.startDate || new Date().toISOString().slice(0, 10);
+  // "Today" on this phone (the UTC date was a day behind in the early morning).
+  const startDate = state.startDate || window.SidekickCore.localDateValue?.() || new Date().toISOString().slice(0, 10);
+  // A trip starting today begins about half an hour from now; late in the day the
+  // first day becomes an evening plan instead of a full day that has already passed.
+  const firstDayStart = window.SidekickCore.firstDayStartMinute?.(startDate) ?? null;
+  const lateStyle = Number.isFinite(firstDayStart) && firstDayStart > 19 * 60 + 30 ? { tripStyle: { timeOfDay: "night", pace: "packed" } } : {};
   const end = new Date(`${startDate}T00:00:00`);
   end.setDate(end.getDate() + Math.max(1, Number(state.dayCount) || 3) - 1);
   const localEnd = new Date(end.getTime() - end.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
@@ -396,6 +401,9 @@ async function generateItineraryWithBackend(prefs, state, userText) {
         pace: state.pace || "",
         mustSee: state.mustSee || [],
         avoid: state.avoid || [],
+        ...(Number.isFinite(firstDayStart) ? { firstDayStartMinute: firstDayStart } : {}),
+        ...lateStyle,
+        clientToday: window.SidekickCore.localDateValue?.() || "",
       },
     }),
   });
@@ -435,7 +443,7 @@ async function researchDraftBudget(email, draft, state) {
   } catch (error) {
     draft.meta.liveTripBudget = null;
     draft.meta.liveActivityCosts = [];
-    draft.meta.budgetEstimateError = error.message || "Price research is unavailable.";
+    draft.meta.budgetEstimateError = window.SidekickCore.friendlyError(error, "Price research is unavailable.");
     return draft;
   }
 }
@@ -487,27 +495,18 @@ function buildPrefsForGenerator(prefs, state) {
   };
 }
 
-async function ensureItineraryMonitored(generated) {
-  if (generated.meta?.serverTripId || generated.tripId) return generated;
-  return window.SidekickCore.ensureItineraryMonitored(
-    window.SidekickCore.getAuthSession()?.email,
-    generated,
-  );
-}
-
+// Saves a chat itinerary as a planned trip (its dates must not overlap another planned
+// trip). Only now is it recorded on the server, with reminders for its activities.
 async function saveGeneratedItinerary(email, generated) {
-  const monitored = await ensureItineraryMonitored(generated);
-  const byEmail = window.SidekickCore.getItineraryByEmail();
-  byEmail[email] = {
-    itinerary: monitored.itinerary,
-    meta: {
-      ...monitored.meta,
-      source: "sidekick-companion",
-      startDate: monitored.meta?.startDate || new Date().toISOString(),
-      serverTripId: monitored.meta?.serverTripId || monitored.tripId,
-    },
+  const meta = {
+    ...(generated.meta || {}),
+    source: "sidekick-companion",
+    startDate: generated.meta?.startDate || window.SidekickCore.localDateValue?.() || new Date().toISOString().slice(0, 10),
   };
-  window.SidekickCore.setItineraryByEmail(byEmail);
+  delete meta.serverTripId;
+  delete meta.isDraft;
+  delete meta.planId;
+  await window.SidekickCore.savePlannedTrip(email, { itinerary: generated.itinerary, meta });
 
   try {
     if (window.SidekickCore.syncRemindersFromItinerary) window.SidekickCore.syncRemindersFromItinerary(email);
@@ -1067,20 +1066,18 @@ async function sendMessage() {
           reply = "I couldn’t retrieve current Google review details for this place. Please try again in a moment.";
         }
       } else if (pendingDraft && isDraftRejection(userText)) {
-        try {
-          await ensureItineraryMonitored(pendingDraft);
-          setPendingItinerary(session.email, null);
-          reply = "I removed the draft from your app. Its generated itinerary remains available to the admin for monitoring.";
-        } catch (error) {
-          reply = `I couldn’t confirm that the itinerary was recorded for admin monitoring, so I kept the draft in your app. ${String(error?.message || "")}`;
-        }
+        // A draft that is never saved isn't recorded anywhere.
+        setPendingItinerary(session.email, null);
+        reply = "Okay, I discarded that itinerary.";
       } else if (pendingDraft && isSaveConfirmation(userText)) {
         try {
           await saveGeneratedItinerary(session.email, pendingDraft);
           setPendingItinerary(session.email, null);
-          reply = `Added to your app’s My Itinerary tab. This itinerary is recorded for admin monitoring.`;
+          reply = `Saved! It’s now in your planned trips on the Itinerary tab, with reminders for each activity.`;
         } catch (error) {
-          reply = `I couldn’t confirm that the itinerary was recorded for admin monitoring, so I kept the draft. ${String(error?.message || "")}`;
+          reply = error?.overlap
+            ? `I couldn’t save it: ${error.message} Ask me for the trip on other dates.`
+            : `I couldn’t save the itinerary right now, so I kept the draft here. ${window.SidekickCore.friendlyError(error, "Please try again in a moment.")}`;
         }
       } else if (merged.signals.wantsGenerate && !companionNeedsEssentials(companionState)) {
         try {
@@ -1103,13 +1100,13 @@ async function sendMessage() {
           reply = buildItineraryDraftReply(draft);
           generatedItineraryThisReply = true;
         } catch (error) {
-          reply = `I couldn’t prepare a verified itinerary right now. ${String(error?.message || "Please check the destination and try again.")}`;
+          reply = `I couldn’t prepare a verified itinerary right now. ${window.SidekickCore.friendlyError(error, "Please check the destination and try again.")}`;
         }
       } else if (merged.signals.wantsGenerate && companionNeedsEssentials(companionState)) {
         const missing = [!companionState.destination ? "destination" : "", !companionState.dayCount ? "number of days" : ""].filter(Boolean).join(" and ");
         reply = `I can prepare a detailed itinerary. What ${missing} would you like?`;
       } else if (pendingDraft) {
-        reply = `I have an itinerary for **${pendingDraft.meta?.destination || "your trip"}** ready for review. It is recorded for admin monitoring. Reply **Save itinerary** to add it to My Itinerary, or **Discard** to remove it from the app.`;
+        reply = `I have an itinerary for **${pendingDraft.meta?.destination || "your trip"}** ready for review. Reply **Save itinerary** to add it to your planned trips, or **Discard** to remove it.`;
       } else {
         try {
         const backendReply = await askSidekickBackend(history, prefs, companionState, userText);

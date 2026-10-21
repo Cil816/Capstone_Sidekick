@@ -47,10 +47,10 @@ body {
     display: flex;
     flex-direction: column;
     /* padding-bottom equals runtime overlay height (nav/input/footer) + safe area + small gap */
-    padding: 0 clamp(12px, 3vw, 40px) calc(var(--bottom-overlay-height, var(--nav-height)) + env(safe-area-inset-bottom)) ;
+    padding: 0 clamp(12px, 3vw, 40px) calc(var(--bottom-overlay-height, var(--nav-height)) + var(--sk-safe-bottom, env(safe-area-inset-bottom))) ;
     margin: 0 auto;
     /* Use dynamic viewport height to account for mobile keyboards */
-    min-height: calc(100dvh - (var(--bottom-overlay-height, var(--nav-height)) + env(safe-area-inset-bottom)));
+    min-height: calc(100dvh - (var(--bottom-overlay-height, var(--nav-height)) + var(--sk-safe-bottom, env(safe-area-inset-bottom))));
     background: white;
     position: relative;
     max-height: none;
@@ -322,6 +322,11 @@ img, svg, video, canvas {
 .bottom-nav .nav-item svg {
     width: 22px;
     height: 22px;
+    /* The icons are drawn for round line ends and corners; without them the house,
+       calendar and bell corners look clipped. */
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    overflow: visible;
 }
 
 .bottom-nav .nav-item span {
@@ -426,6 +431,14 @@ html, body { -webkit-tap-highlight-color: transparent; }
     text-align: center;
     z-index: 2;
     pointer-events: none;
+}
+/* The count is a span inside the nav item, so the label rules (grey text) would
+   otherwise reach it: keep it white on a strong red. */
+.bottom-nav .nav-item .reminders-badge {
+    background: #d92d44;
+    color: #ffffff;
+    font-size: 10px;
+    line-height: 12px !important;
 }
 
 /* (Removed hidden state to keep overlay nav always visible while scrolling) */
@@ -657,8 +670,44 @@ input:focus, select:focus, textarea:focus {
 
     /* Keep the floating nav fully on screen, above any device gesture area. */
     .bottom-nav.overlay {
-        bottom: calc(8px + env(safe-area-inset-bottom));
+        bottom: calc(8px + var(--sk-safe-bottom, env(safe-area-inset-bottom)));
         width: calc(100% - 24px);
         max-width: none;
     }
 }
+
+/* ---- Full-screen (edge-to-edge) layout -------------------------------------------
+   The app draws behind the phone's status bar and gesture bar (viewport-fit=cover),
+   so its background reaches every edge and corner of the screen. Content keeps clear
+   of those bars with the safe-area sizes: env() from the WebView, or the
+   --safe-area-inset-* values Capacitor sets on Android; whichever is larger. */
+:root {
+    --sk-safe-top: max(env(safe-area-inset-top, 0px), var(--safe-area-inset-top, 0px));
+    --sk-safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--safe-area-inset-bottom, 0px));
+}
+
+.app-container {
+    padding-top: var(--sk-safe-top);
+    padding-bottom: calc(var(--bottom-overlay-height, var(--nav-height)) + var(--sk-safe-bottom));
+}
+
+.maintenance-banner {
+    padding-top: calc(10px + var(--sk-safe-top));
+}
+
+/* The floating tab bar sits above the gesture bar with a comfortable gap, and its
+   rounder corners follow the curve of modern phone screens. */
+.bottom-nav.overlay {
+    bottom: calc(10px + var(--sk-safe-bottom));
+    border-radius: 22px;
+}
+
+@media (max-width: 600px) {
+    .bottom-nav.overlay {
+        bottom: calc(10px + var(--sk-safe-bottom));
+    }
+}
+
+/* Links: no underline anywhere in the app (they keep their colour, and keyboard focus
+   keeps its outline from a11y.css). */
+a, a:hover { text-decoration: none; }

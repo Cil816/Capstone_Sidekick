@@ -255,7 +255,7 @@ async function selectSuggestedDestination(suggestion) {
     const dest = {
         name: suggestion.name,
         placeId: suggestion.placeId,
-        region: secondary[0] || 'Philippines',
+        region: secondary[0] || 'Batangas',
     };
     try {
         const data = await window.SidekickCore.apiRequest('/api/maps/place-details', {
@@ -332,9 +332,9 @@ function runDestinationSearch(query) {
 function renderDestinationStep(content) {
     content.innerHTML = `
         <h1>Where do you want to go?</h1>
-        <p>Search any destination in the Philippines. Choose up to ${MAX_DESTINATIONS} (optional).</p>
+        <p>Search any destination in Batangas. Choose up to ${MAX_DESTINATIONS} (optional).</p>
         <div class="dest-search-wrap">
-            <input type="text" id="dest-search" class="dest-search-input" placeholder="Search places, cities, islands…" autocomplete="off" aria-label="Search destinations" />
+            <input type="text" id="dest-search" class="dest-search-input" placeholder="Search places in Batangas…" autocomplete="off" aria-label="Search destinations" />
             <div class="dest-suggestions" id="dest-suggestions" hidden></div>
         </div>
         <div class="dest-status" id="dest-status" role="status" aria-live="polite"></div>
@@ -457,12 +457,17 @@ async function handleNext() {
             window.SidekickCore.setItineraryByEmail(itinMap);
         } catch (e) {}
 
-        // Remove itinerary-derived reminders tied to prior generated plans.
+        // Itinerary reminders are rebuilt from the saved (planned) trips, which stay; with
+        // none saved, reminders from earlier generated plans are removed.
         try {
-            const all = JSON.parse(localStorage.getItem('sidekick.remindersByEmail.v1') || '{}');
-            const current = Array.isArray(all[session.email]) ? all[session.email] : [];
-            all[session.email] = current.filter((r) => !(r.type === 'Itinerary' || typeof r.parentDueAt !== 'undefined'));
-            localStorage.setItem('sidekick.remindersByEmail.v1', JSON.stringify(all));
+            if (window.SidekickCore.getPlannedTrips?.(session.email)?.length && window.SidekickCore.syncRemindersFromItinerary) {
+                window.SidekickCore.syncRemindersFromItinerary(session.email);
+            } else {
+                const all = JSON.parse(localStorage.getItem('sidekick.remindersByEmail.v1') || '{}');
+                const current = Array.isArray(all[session.email]) ? all[session.email] : [];
+                all[session.email] = current.filter((r) => !(r.type === 'Itinerary' || typeof r.parentDueAt !== 'undefined'));
+                localStorage.setItem('sidekick.remindersByEmail.v1', JSON.stringify(all));
+            }
             document.dispatchEvent(new CustomEvent('sidekick:reminders-updated', { detail: { email: session.email } }));
         } catch (e) {}
 

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>Sidekick AI - Itinerary</title>
     <link rel="stylesheet" href="css/common.css">
     <link rel="stylesheet" href="css/itinerary.css">
@@ -24,20 +24,9 @@
                         </svg>
                     </a>
                     <h1>My Itinerary</h1>
-                    <button id="show-builder" class="btn btn-outline" type="button">Customize</button>
-                    <button id="remove-all-itinerary" class="btn btn-ghost" type="button" aria-label="Remove all itinerary activities" title="Remove all itinerary activities">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2m3 0-1 14H6L5 6m4 4v6m6-6v6"/></svg>
-                    </button>
+                    <button id="show-builder" class="btn btn-outline" type="button">+ New trip</button>
                 </div>
                 <p id="itinerary-monitoring-status" class="itinerary-budget-note" role="status" aria-live="polite" hidden></p>
-                <div id="itinerary-edit-bar" class="itinerary-edit-bar" hidden>
-                    <strong id="itinerary-title-text" class="itinerary-title-text"></strong>
-                    <div class="itinerary-edit-actions">
-                        <button id="itinerary-rename-btn" class="itinerary-edit-chip" type="button">Rename</button>
-                        <button id="itinerary-shift-btn" class="itinerary-edit-chip" type="button">Change dates</button>
-                        <button id="itinerary-add-btn" class="itinerary-edit-chip primary" type="button">+ Add activity</button>
-                    </div>
-                </div>
                 <div class="itinerary-date">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
@@ -51,10 +40,11 @@
                     <div class="itinerary-builder-fields">
                         <div class="itinerary-field itinerary-field-destination">
                             <label for="itinerary-destination">Destination</label>
-                            <input id="itinerary-destination" type="text" maxlength="180" placeholder="Search tourist places" required role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="itinerary-destination-suggestions" />
+                            <input id="itinerary-destination" type="text" maxlength="180" placeholder="Search places in Batangas" required role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="itinerary-destination-suggestions" />
                             <div id="itinerary-destination-suggestions" class="destination-suggestions" role="listbox" hidden></div>
                             <div class="destination-suggestions-attribution" hidden><img src="https://maps.gstatic.com/mapfiles/api-3/images/google4.png" alt="Google" /></div>
                         </div>
+                        <div class="itinerary-field"><label for="itinerary-name">Trip name</label><input id="itinerary-name" type="text" maxlength="100" placeholder="Named after your destination" autocomplete="off" /></div>
                         <div class="itinerary-field"><label for="itinerary-origin">Starting location (optional)</label><input id="itinerary-origin" type="text" maxlength="180" placeholder="City or address for travel estimate" autocomplete="street-address" /></div>
                         <div class="itinerary-field"><label for="itinerary-start">Start date</label><input id="itinerary-start" type="date" required /></div>
                         <div class="itinerary-field"><label for="itinerary-end">End date</label><input id="itinerary-end" type="date" required /></div>
@@ -65,39 +55,63 @@
                 <details id="itinerary-place-search" class="itinerary-place-search">
                     <summary>Explore places</summary>
                     <div class="itinerary-place-search-content">
-                        <input id="place-search" placeholder="Search places" aria-label="Search places" />
+                        <input id="place-search" placeholder="Search places in Batangas" aria-label="Search places in Batangas" />
                         <div id="itinerary-map" class="itinerary-map" aria-label="Map of searched places"></div>
                         <div id="map" class="itinerary-place-results" aria-live="polite"></div>
                     </div>
                 </details>
             </div>
-            
-            <details id="stay-eat" class="stay-eat">
-                <summary>
-                    <span class="stay-eat-summary-title">Recommended hotels &amp; restaurants</span>
-                    <span id="stay-eat-summary-stay" class="stay-eat-summary-stay"></span>
-                </summary>
-                <div class="stay-eat-body">
-                    <p id="stay-eat-area" class="stay-eat-area">Enter a destination and budget to see places that fit, best rated first.</p>
-                    <p id="stay-eat-rates-note" class="stay-eat-rates-note" role="status" aria-live="polite" hidden></p>
-                    <div id="stay-eat-banner" class="stay-eat-banner" hidden></div>
-                    <div class="stay-eat-tabs" role="tablist">
-                        <button type="button" class="stay-eat-tab active" role="tab" aria-selected="true" data-kind="hotels">Hotels</button>
-                        <button type="button" class="stay-eat-tab" role="tab" aria-selected="false" data-kind="restaurants">Restaurants</button>
-                    </div>
-                    <p id="stay-eat-status" class="stay-eat-status" role="status" aria-live="polite"></p>
-                    <div id="stay-eat-list" class="stay-eat-list" role="list"></div>
-                    <button id="stay-eat-more" class="btn btn-outline stay-eat-more" type="button" hidden>Show more</button>
-                    <p class="data-attribution">Places, photos and ratings from Google Maps.</p>
-                </div>
-            </details>
 
-            <section id="itinerary-budget-summary" class="itinerary-budget-summary" aria-live="polite" hidden></section>
-            <div class="itinerary-content" id="itinerary-content">
-                <!-- Empty by default. Users build an itinerary using the builder above. -->
-                <div id="no-itinerary-message" style="padding:24px;color:#6B7280">Your itinerary will appear here.</div>
-                <button class="add-activity-btn" id="add-activity-btn" type="button" style="display:none">+ Add Activity</button>
+            <section id="planned-trips" class="planned-trips" aria-labelledby="planned-trips-heading" hidden>
+                <h2 id="planned-trips-heading">Planned trips</h2>
+                <div id="planned-trips-list" class="planned-trips-list"></div>
+            </section>
+
+            <!-- The open trip: placed under its drop-down in the Planned trips list (js/planned-trips.js). -->
+            <div id="active-trip-view" class="active-trip-view">
+                <div id="itinerary-edit-bar" class="itinerary-edit-bar" hidden>
+                    <strong id="itinerary-title-text" class="itinerary-title-text"></strong>
+                    <div class="itinerary-edit-actions">
+                        <button id="itinerary-rename-btn" class="itinerary-edit-chip" type="button">Rename</button>
+                        <button id="itinerary-shift-btn" class="itinerary-edit-chip" type="button">Change dates</button>
+                        <button id="itinerary-add-btn" class="itinerary-edit-chip primary" type="button">+ Add activity</button>
+                        <button id="remove-all-itinerary" class="itinerary-edit-chip danger" type="button">Delete trip</button>
+                    </div>
+                </div>
+                <details id="stay-eat" class="stay-eat">
+                    <summary>
+                        <span class="stay-eat-summary-title">Recommended hotels &amp; restaurants</span>
+                        <span id="stay-eat-summary-stay" class="stay-eat-summary-stay"></span>
+                    </summary>
+                    <div class="stay-eat-body">
+                        <p id="stay-eat-area" class="stay-eat-area">Enter a destination and budget to see places that fit, best rated first.</p>
+                        <p id="stay-eat-rates-note" class="stay-eat-rates-note" role="status" aria-live="polite" hidden></p>
+                        <div id="stay-eat-banner" class="stay-eat-banner" hidden></div>
+                        <div class="stay-eat-tabs" role="tablist">
+                            <button type="button" class="stay-eat-tab active" role="tab" aria-selected="true" data-kind="hotels">Hotels</button>
+                            <button type="button" class="stay-eat-tab" role="tab" aria-selected="false" data-kind="restaurants">Restaurants</button>
+                        </div>
+                        <p id="stay-eat-status" class="stay-eat-status" role="status" aria-live="polite"></p>
+                        <div id="stay-eat-list" class="stay-eat-list" role="list"></div>
+                        <button id="stay-eat-more" class="btn btn-outline stay-eat-more" type="button" hidden>Show more</button>
+                        <p class="data-attribution">Places, photos and ratings from Google Maps.</p>
+                    </div>
+                </details>
+                <section id="itinerary-budget-summary" class="itinerary-budget-summary" aria-live="polite" hidden></section>
+                <div class="itinerary-content" id="itinerary-content">
+                    <!-- Empty by default. Users build an itinerary using the builder above. -->
+                    <div id="no-itinerary-message" style="padding:24px;color:#6B7280">Your itinerary will appear here.</div>
+                    <button class="add-activity-btn" id="add-activity-btn" type="button" style="display:none">+ Add Activity</button>
+                </div>
+                <div id="itinerary-save-bar" class="itinerary-save-bar" hidden>
+                    <p>This itinerary isn’t saved yet. Look through it and make any changes, then save it to your planned trips. Reminders start once it’s saved.</p>
+                    <div class="itinerary-save-actions">
+                        <button id="itinerary-discard-btn" class="btn btn-outline" type="button">Discard</button>
+                        <button id="itinerary-save-btn" class="btn btn-primary" type="button">Save itinerary</button>
+                    </div>
+                </div>
             </div>
+
             
         </div>
     </div>
@@ -147,9 +161,12 @@
     <script src="js/app-rating.js"></script>
     <script src="js/itinerary.js"></script>
     <script src="js/budget-pickers.js"></script>
+    <script src="js/trip-style.js"></script>
     <script src="js/itinerary-edit.js"></script>
     <script src="js/stay-eat.js"></script>
+    <script src="js/planned-trips.js"></script>
     <script src="js/nav.js"></script>
     <script src="js/tab-motion.js"></script>
+    <script src="js/pull-refresh.js"></script>
 </body>
 </html>

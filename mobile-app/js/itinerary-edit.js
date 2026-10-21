@@ -10,7 +10,7 @@
   const MAX_PER_DAY = 30;
   const DAY_MS = 86400000;
   const SLOT_HOURS = { Morning: 9, Afternoon: 14, Evening: 18, Night: 21 };
-  const ROUTE_FIELDS = ["travelDistanceKm", "travelMinutes", "transportMode", "routeStatus"];
+  const ROUTE_FIELDS = ["travelDistanceKm", "travelMinutes", "transportMode", "routeStatus", "routeNoneKey", "routeRetryKey", "routeRetryAfter"];
 
   let current = null;
   let activeForm = null;
@@ -123,6 +123,36 @@
     return localMidnight(ts) < localMidnight(Date.now());
   }
 
+  // First and last day of the trip (local midnights).
+  function tripRange() {
+    return { first: dayDate(0), last: dayDate(current.itinerary.length - 1) };
+  }
+
+  function shortDay(ts) {
+    return new Date(Number(ts)).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+  }
+
+  // Why an activity can't be planned at this time ("" when it can): not in the past
+  // (a day or a time that has already gone by today) and within the trip's dates.
+  // The trip itself is lengthened or moved with "Change dates".
+  function scheduleProblem(dueAt) {
+    if (isBeforeToday(dueAt)) return "Choose today or a later date.";
+    if (dueAt < Date.now()) return "That time has already passed today. Choose a later time.";
+    const { first, last } = tripRange();
+    const day = localMidnight(dueAt);
+    if (day < first || day > last) {
+      const range = first === last ? shortDay(first) : `${shortDay(first)} – ${shortDay(last)}`;
+      return `Choose a date within your trip (${range}). To move your trip to other dates, use “Change dates” at the top.`;
+    }
+    return "";
+  }
+
+  // The trip's dates for a date picker: today at the earliest, the trip's last day at the latest.
+  function tripDateLimits() {
+    const { first, last } = tripRange();
+    return { min: dateValue(Math.max(first, localMidnight(Date.now()))), max: dateValue(last) };
+  }
+
   function ensureIds() {
     current.itinerary.forEach((day) => (day.activities || []).forEach((activity) => {
       if (!activity.id) activity.id = newActivityId();
@@ -230,15 +260,167 @@
       const values = {};
       for (const field of activeForm.fields) {
         const raw = activeForm.inputs[field.name].value;
-        const value = field.type === "textarea" || field.type === "text" ? raw.trim() : raw;
+        const value = field.type === "textarea" || field.type === "text" || field.type === "place" ? raw.trim() : raw;
         if (field.required && !value) return showFormError(`${field.label} is required.`);
         values[field.name] = value;
+        // The place picked from the search results (null when only a name was typed).
+        if (field.type === "place") values[`${field.name}Place`] = activeForm.inputs[field.name]._place || null;
       }
       const message = activeForm.onSubmit(values);
       if (message) return showFormError(message);
       closeForm();
     });
     return modal;
+  }
+
+  // ---- place search field ---------------------------------------------------------
+  // A "Where is it?" box that searches Google Maps as the traveler types. Picking a
+  // result attaches the place (ID, address, map pin and photo) to the activity; a typed
+  // name without picking still works for places that aren't on the map.
+  function tripCenter() {
+    for (const day of current?.itinerary || []) {
+      for (const activity of day.activities || []) {
+        const coords = activity.locationCoords;
+        if (coords && Number.isFinite(Number(coords.lat)) && Number.isFinite(Number(coords.lng))) return { lat: Number(coords.lat), lng: Number(coords.lng) };
+      }
+    }
+    const stay = current?.meta?.stay;
+    return stay && Number.isFinite(Number(stay.lat)) && Number.isFinite(Number(stay.lng)) ? { lat: Number(stay.lat), lng: Number(stay.lng) } : null;
+  }
+
+  function newSessionToken() {
+    const bytes = new Uint8Array(16);
+    (window.crypto || window.msCrypto).getRandomValues(bytes);
+    return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  }
+
+  function placePhotoUrl(place) {
+    const resource = String(place?.photoResource || "").trim();
+    let base = "";
+    try { base = core()?.getApiBaseUrl?.() || ""; } catch (error) { return ""; }
+    // An empty base means the API is on this same site (a web preview): use a relative URL.
+    if (!resource || (!base && !window.location.protocol.startsWith("http")) || String(window.SIDEKICK_CONFIG?.apiMode || "").toLowerCase() === "development") return "";
+    return `${base}/api/maps/photo?name=${encodeURIComponent(resource)}`;
+  }
+
+  function buildPlaceField(input, field) {
+    const esc = (value) => core().escapeHtml(String(value ?? ""));
+    const box = document.createElement("div");
+    box.className = "place-field";
+    const results = document.createElement("div");
+    results.className = "place-field-results";
+    results.setAttribute("role", "listbox");
+    results.hidden = true;
+    const chosen = document.createElement("div");
+    chosen.className = "place-field-chosen";
+    chosen.hidden = true;
+    const status = document.createElement("small");
+    status.className = "place-field-status";
+    status.setAttribute("aria-live", "polite");
+    input.type = "search";
+    input.autocomplete = "off";
+    input.setAttribute("role", "combobox");
+    input.setAttribute("aria-autocomplete", "list");
+    input.placeholder = field.placeholder || "Search a place, e.g. Laiya Beach";
+    input._place = field.place || null;
+    const sessionToken = newSessionToken();
+    let timer = 0;
+    let requestId = 0;
+
+    function showChosen(place) {
+      if (!place) { chosen.hidden = true; chosen.replaceChildren(); return; }
+      const photo = placePhotoUrl(place);
+      chosen.innerHTML = `${photo ? `<img src="${esc(photo)}" alt="" loading="lazy">` : '<span class="place-field-pin" aria-hidden="true">📍</span>'}<span><strong>${esc(place.name)}</strong><small>${esc(place.address || "Pinned on the map")}</small></span>`;
+      chosen.querySelector("img")?.addEventListener("error", (event) => event.target.remove());
+      chosen.hidden = false;
+    }
+
+    async function choose(suggestion) {
+      results.hidden = true;
+      results.replaceChildren();
+      input.value = suggestion.name || suggestion.text || "";
+      status.textContent = "Getting the place’s details…";
+      try {
+        const data = await core().apiRequest("/api/maps/place-details", {
+          method: "POST",
+          body: JSON.stringify({ placeId: suggestion.placeId, sessionToken }),
+        });
+        const place = data?.place || {};
+        // Sidekick covers Batangas only.
+        if (place.inBatangas === false) {
+          input._place = null;
+          input.value = "";
+          status.textContent = "That place isn’t in Batangas. Sidekick covers the province of Batangas only, so choose a place there.";
+          return;
+        }
+        input._place = {
+          placeId: suggestion.placeId,
+          name: suggestion.name || place.name || input.value,
+          address: place.address || suggestion.secondaryText || "",
+          lat: Number.isFinite(Number(place.lat)) ? Number(place.lat) : null,
+          lng: Number.isFinite(Number(place.lng)) ? Number(place.lng) : null,
+          photoResource: place.photoResource || "",
+          photoAttribution: place.photoAttribution || null,
+          photoAttributions: Array.isArray(place.photoAttributions) ? place.photoAttributions : [],
+          photoGoogleMapsUri: place.photoGoogleMapsUri || "",
+        };
+        status.textContent = "";
+        showChosen(input._place);
+      } catch (error) {
+        // Still use the place without its details (no photo or pin).
+        input._place = { placeId: suggestion.placeId, name: suggestion.name || input.value, address: suggestion.secondaryText || "" };
+        status.textContent = "Couldn’t load this place’s photo right now, but it was added.";
+        showChosen(input._place);
+      }
+    }
+
+    async function search(text) {
+      const id = ++requestId;
+      if (text.length < 2) { results.hidden = true; results.replaceChildren(); status.textContent = ""; return; }
+      status.textContent = "Searching…";
+      try {
+        const near = tripCenter();
+        const data = await core().apiRequest("/api/maps/place-suggestions", {
+          method: "POST",
+          body: JSON.stringify({ input: text, sessionToken, scope: "activity", ...(near ? { near } : {}) }),
+        });
+        if (id !== requestId) return; // a newer search is on its way
+        const suggestions = Array.isArray(data?.suggestions) ? data.suggestions.slice(0, 5) : [];
+        status.textContent = suggestions.length ? "" : "No places found. You can keep the name you typed.";
+        results.replaceChildren(...suggestions.map((suggestion) => {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "place-field-result";
+          button.setAttribute("role", "option");
+          button.innerHTML = `<strong>${esc(suggestion.name || suggestion.text)}</strong><small>${esc(suggestion.secondaryText || "")}</small>`;
+          button.addEventListener("click", () => { void choose(suggestion); });
+          return button;
+        }));
+        results.hidden = !suggestions.length;
+      } catch (error) {
+        if (id !== requestId) return;
+        results.hidden = true;
+        status.textContent = core().friendlyError(error, "Place search isn’t available right now. You can type the name instead.");
+      }
+    }
+
+    input.addEventListener("input", () => {
+      input._place = null; // typing again means a new place
+      showChosen(null);
+      clearTimeout(timer);
+      const text = input.value.trim();
+      timer = setTimeout(() => { void search(text); }, 350);
+    });
+    input.addEventListener("keydown", (event) => {
+      // Enter picks the first result instead of submitting the form half-filled.
+      if (event.key === "Enter" && !results.hidden && results.firstElementChild) {
+        event.preventDefault();
+        results.firstElementChild.click();
+      }
+    });
+    if (input._place) showChosen(input._place);
+    box.append(input, results, chosen, status);
+    return box;
   }
 
   function showFormError(message) {
@@ -279,10 +461,12 @@
       if (field.type === "textarea") input.rows = 3;
       else input.type = field.type;
       if (field.maxLength) input.maxLength = field.maxLength;
+      if (field.min) input.min = field.min;
+      if (field.max) input.max = field.max;
       if (field.placeholder) input.placeholder = field.placeholder;
       input.value = field.value ?? "";
       if (field.readOnly) input.readOnly = true;
-      wrap.append(label, input);
+      wrap.append(label, field.type === "place" && !field.readOnly ? buildPlaceField(input, field) : input);
       if (field.hint) {
         const hint = document.createElement("small");
         hint.textContent = field.hint;
@@ -319,6 +503,21 @@
     return "10:00";
   }
 
+  // Copies a place picked in the search box onto an activity: name and address as its
+  // location, plus the Google place ID, map pin and photo (with its credit).
+  function attachPlace(activity, place) {
+    const name = String(place.name || "").trim();
+    const address = String(place.address || "").trim();
+    activity.location = (address && !address.toLowerCase().startsWith(name.toLowerCase()) ? `${name}, ${address}` : address || name).slice(0, 500);
+    activity.placeId = String(place.placeId || "");
+    if (address) activity.locationAddress = address;
+    if (Number.isFinite(place.lat) && Number.isFinite(place.lng)) activity.locationCoords = { lat: place.lat, lng: place.lng };
+    if (place.photoResource) activity.photoResource = place.photoResource;
+    if (place.photoAttribution) activity.photoAttribution = place.photoAttribution;
+    if (Array.isArray(place.photoAttributions) && place.photoAttributions.length) activity.photoAttributions = place.photoAttributions;
+    if (place.photoGoogleMapsUri) activity.photoGoogleMapsUri = place.photoGoogleMapsUri;
+  }
+
   // Adds an activity. `place` (a hotel/restaurant from the nearby list) pre-fills the form.
   function openAdd({ dayIndex = 0, place = null, kind = "" } = {}) {
     if (!hasItinerary()) return;
@@ -327,11 +526,13 @@
     const fields = [
       { name: "title", label: "Activity", type: "text", required: true, maxLength: 200, value: place ? `${label} ${place.name}`.trim() : "" },
       {
-        name: "date", label: "Date", type: "date", required: true, value: dateValue(dayDate(safeDay)),
-        hint: `Trip: ${dateValue(dayDate(0))} to ${dateValue(dayDate(current.itinerary.length - 1))}`,
+        name: "date", label: "Date", type: "date", required: true, value: dateValue(Math.max(dayDate(safeDay), localMidnight(Date.now()))),
+        ...tripDateLimits(),
+        hint: `Your trip: ${tripRange().first === tripRange().last ? shortDay(tripRange().first) : `${shortDay(tripRange().first)} – ${shortDay(tripRange().last)}`}`,
       },
       { name: "time", label: "Time", type: "time", required: true, value: defaultTimeFor(kind) },
-      { name: "location", label: "Location", type: "text", required: true, maxLength: 500, value: place ? place.name : "", readOnly: Boolean(place) },
+      { name: "location", label: "Where is it?", type: "place", required: true, maxLength: 500, value: place ? place.name : "", readOnly: Boolean(place),
+        hint: place ? "" : "Search and pick a place to add its photo and map pin." },
       { name: "note", label: "Notes", type: "textarea", maxLength: 300, value: place ? String(place.note || place.address || "") : "" },
     ];
     openForm({
@@ -341,7 +542,8 @@
       onSubmit: (values) => {
         const dueAt = buildDueAt(values.date, values.time);
         if (dueAt === null) return "Enter a valid date and time.";
-        if (isBeforeToday(dueAt)) return "Choose today or a later date.";
+        const problem = scheduleProblem(dueAt);
+        if (problem) return problem;
         const activity = {
           id: newActivityId(),
           title: values.title.slice(0, 200),
@@ -358,6 +560,8 @@
             activity.locationCoords = { lat: Number(place.lat), lng: Number(place.lng) };
           }
           activity.photoResource = place.photoResource || "";
+        } else if (values.locationPlace) {
+          attachPlace(activity, values.locationPlace);
         }
         const planError = checkPlan([...allDueAts(), dueAt]);
         if (planError) return planError;
@@ -380,16 +584,25 @@
       title: "Edit activity",
       fields: [
         { name: "title", label: "Activity", type: "text", required: true, maxLength: 200, value: activity.title || "" },
-        { name: "date", label: "Date", type: "date", required: true, value: dateValue(originalDueAt) },
+        { name: "date", label: "Date", type: "date", required: true, value: dateValue(originalDueAt), max: tripDateLimits().max },
         { name: "time", label: "Time", type: "time", required: true, value: timeValue(originalDueAt) },
-        { name: "location", label: "Location", type: "text", required: true, maxLength: 500, value: originalLocation },
+        {
+          name: "location", label: "Where is it?", type: "place", required: true, maxLength: 500, value: originalLocation,
+          // The stop's current place stays attached unless a different one is searched.
+          place: activity.placeId ? { placeId: activity.placeId, name: originalLocation, address: activity.locationAddress || "", photoResource: activity.photoResource || "" } : null,
+          hint: "Search and pick a place to add its photo and map pin.",
+        },
         { name: "note", label: "Notes", type: "textarea", maxLength: 300, value: activity.note || "" },
       ],
       onSubmit: (values) => {
         const dueAt = buildDueAt(values.date, values.time);
         if (dueAt === null) return "Enter a valid date and time.";
-        // Only block moving to a past date when the date itself was changed.
-        if (localMidnight(dueAt) !== localMidnight(originalDueAt) && isBeforeToday(dueAt)) return "Choose today or a later date.";
+        // An activity whose time isn't changed can always be edited (even one that has
+        // already happened); a new time must be ahead and within the trip.
+        if (dueAt !== originalDueAt) {
+          const problem = scheduleProblem(dueAt);
+          if (problem) return problem;
+        }
         const planError = checkPlan(allDueAts(new Map([[activity, dueAt]])));
         if (planError) return planError;
         ensureIds();
@@ -399,10 +612,13 @@
         activity.note = values.note.slice(0, 300);
         activity.dueAt = dueAt;
         activity.iso = new Date(dueAt).toISOString();
-        if (values.location !== originalLocation) {
-          // A different place invalidates the saved coordinates, photo and travel estimates.
-          activity.location = values.location.slice(0, 500);
-          ["locationCoords", "locationAddress", "placeId", "photoResource"].forEach((field) => { delete activity[field]; });
+        const pickedPlace = values.locationPlace;
+        const placeChanged = pickedPlace ? pickedPlace.placeId !== activity.placeId : values.location !== originalLocation;
+        if (placeChanged) {
+          // A different place replaces the saved coordinates, photo and travel estimates.
+          ["locationCoords", "locationAddress", "placeId", "photoResource", "photoAttribution", "photoAttributions", "photoGoogleMapsUri"].forEach((field) => { delete activity[field]; });
+          if (pickedPlace) attachPlace(activity, pickedPlace);
+          else activity.location = values.location.slice(0, 500);
           reset.add(activity.id);
         }
         if (!normalizeAndReset(before, reset)) return "Could not save this activity.";
@@ -449,6 +665,17 @@
     return true;
   }
 
+  const PASSED_TIMES_MESSAGE = "Some activities would be at times that have already passed today. Choose a later date.";
+
+  // Moving days must not run into another planned trip's dates.
+  function overlapProblem(dueAts) {
+    if (!dueAts.length) return "";
+    const first = dateValue(Math.min(...dueAts));
+    const last = dateValue(Math.max(...dueAts));
+    const clash = core()?.findOverlappingTrip?.(email(), first, last, current?.meta?.planId || null);
+    return clash ? core().tripOverlapMessage(clash) : "";
+  }
+
   function changeDayDate(dayIndex) {
     const day = current?.itinerary?.[dayIndex];
     if (!day?.activities?.length) return;
@@ -456,7 +683,7 @@
     openForm({
       title: `Change date for Day ${day.dayNumber || dayIndex + 1}`,
       intro: "All activities on this day move to the new date and keep their times. If that date already has activities, they are combined.",
-      fields: [{ name: "date", label: "New date", type: "date", required: true, value: dateValue(oldMidnight) }],
+      fields: [{ name: "date", label: "New date", type: "date", required: true, value: dateValue(oldMidnight), min: dateValue(Date.now()) }],
       onSubmit: ({ date }) => {
         const target = parseDateValue(date);
         if (!target) return "Enter a valid date.";
@@ -465,7 +692,8 @@
         if (isBeforeToday(target.getTime())) return "Choose today or a later date.";
         const overrides = new Map();
         shiftActivities(day.activities, dayIndex, delta, overrides);
-        const planError = checkPlan(allDueAts(overrides));
+        if (Array.from(overrides.values()).some((dueAt) => dueAt < Date.now())) return PASSED_TIMES_MESSAGE;
+        const planError = checkPlan(allDueAts(overrides)) || overlapProblem(allDueAts(overrides));
         if (planError) return planError;
         return applyOverrides(overrides) ? "" : "Could not change this date.";
       },
@@ -478,7 +706,7 @@
     openForm({
       title: "Change trip dates",
       intro: "Move the whole itinerary to a new start date. Every activity keeps its time and its day order.",
-      fields: [{ name: "date", label: "New start date", type: "date", required: true, value: dateValue(oldMidnight) }],
+      fields: [{ name: "date", label: "New start date", type: "date", required: true, value: dateValue(oldMidnight), min: dateValue(Date.now()) }],
       onSubmit: ({ date }) => {
         const target = parseDateValue(date);
         if (!target) return "Enter a valid date.";
@@ -487,6 +715,9 @@
         if (isBeforeToday(target.getTime())) return "Choose today or a later date.";
         const overrides = new Map();
         current.itinerary.forEach((d, index) => shiftActivities(d.activities || [], index, delta, overrides));
+        if (Array.from(overrides.values()).some((dueAt) => dueAt < Date.now())) return PASSED_TIMES_MESSAGE;
+        const clash = overlapProblem(allDueAts(overrides));
+        if (clash) return clash;
         return applyOverrides(overrides) ? "" : "Could not change the trip dates.";
       },
     });
@@ -529,9 +760,85 @@
     return button;
   }
 
+  // ---- done / missed checklist (saved trips only) ---------------------------------
+  // Each stop of a saved trip shows how it went. Before it starts: "Upcoming". From its
+  // start time the traveler is asked "Did you do this?" and chooses Done or Missed
+  // (nothing is decided for them); the answer shows on the card, with "Change" to pick
+  // again. Kept with the trip on this phone (activity.doneAt / activity.missedAt).
+  const DEFAULT_STOP_MINUTES = 60; // a stop without a planned length
+
+  function isSavedTrip() {
+    return hasItinerary() && !current.meta?.isDraft && Boolean(current.meta?.planId || current.meta?.serverTripId);
+  }
+
+  // upcoming | now (started, not over) | ask (over, no answer yet) | done | missed
+  function activityStatus(activity, dayIndex) {
+    if (Number(activity?.doneAt) > 0) return "done";
+    if (Number(activity?.missedAt) > 0) return "missed";
+    const start = activityDueAt(activity, dayIndex);
+    const now = Date.now();
+    if (now < start) return "upcoming";
+    const minutes = Number(activity?.durationMinutes) > 0 ? Number(activity.durationMinutes) : DEFAULT_STOP_MINUTES;
+    return now > start + minutes * 60000 ? "ask" : "now";
+  }
+
+  function paintStatus(row, activity, dayIndex) {
+    const status = activityStatus(activity, dayIndex);
+    if (row.dataset.status === status) return;
+    row.dataset.status = status;
+    const name = core().escapeHtml(String(activity?.title || "this activity"));
+    if (status === "upcoming") {
+      row.innerHTML = '<span class="activity-status-text">Upcoming</span>';
+    } else if (status === "done" || status === "missed") {
+      row.innerHTML = `<span class="activity-status-box" aria-hidden="true"></span><span class="activity-status-text">${status === "done" ? "Done" : "Missed"}</span>`
+        + `<button type="button" class="activity-status-change" data-edit-action="status-clear" aria-label="Change whether you did ${name}">Change</button>`;
+    } else {
+      // Just the two buttons; the question is read out to screen readers.
+      row.innerHTML = '<span class="activity-status-choices">'
+        + `<button type="button" class="activity-status-choice done" data-edit-action="status-done" aria-label="Done: I did ${name}">Done</button>`
+        + `<button type="button" class="activity-status-choice missed" data-edit-action="status-missed" aria-label="Missed: I didn’t do ${name}">Missed</button>`
+        + '</span>';
+    }
+    if (status === "now" || status === "ask") row.setAttribute("aria-label", `Did you do ${String(activity?.title || "this activity")}?`);
+    else row.removeAttribute("aria-label");
+    const card = row.closest(".activity-card");
+    card?.classList.toggle("is-done", status === "done");
+    card?.classList.toggle("is-missed", status === "missed");
+  }
+
+  function statusRow() {
+    const row = document.createElement("div");
+    row.className = "activity-status";
+    row.setAttribute("role", "group");
+    row.setAttribute("aria-live", "polite");
+    return row;
+  }
+
+  // answer: "done", "missed", or "" to choose again.
+  function setActivityResult(dayIndex, activityIndex, answer, row) {
+    const activity = current?.itinerary?.[dayIndex]?.activities?.[activityIndex];
+    if (!activity || !row || !isSavedTrip()) return;
+    if (answer && activityStatus({ ...activity, doneAt: 0, missedAt: 0 }, dayIndex) === "upcoming") return;
+    const before = { doneAt: activity.doneAt, missedAt: activity.missedAt };
+    delete activity.doneAt;
+    delete activity.missedAt;
+    if (answer === "done") activity.doneAt = Date.now();
+    if (answer === "missed") activity.missedAt = Date.now();
+    try {
+      setItineraryForEmail(email(), current);
+    } catch (error) {
+      Object.entries(before).forEach(([key, value]) => { if (value) activity[key] = value; else delete activity[key]; });
+      window.SidekickUI.alert("This couldn’t be saved on this device. Free up some storage and try again.", { title: "Not saved" });
+      return;
+    }
+    paintStatus(row, activity, dayIndex);
+    row.querySelector("button")?.focus({ preventScroll: true });
+  }
+
   function enhance() {
     const container = $("itinerary-content");
     if (!container || !hasItinerary()) return;
+    const saved = isSavedTrip();
     container.querySelectorAll(".day-section").forEach((section, dayIndex) => {
       const day = current.itinerary[dayIndex];
       if (!day) return;
@@ -548,7 +855,17 @@
         actions.appendChild(makeButton("Change date", "day-date", "itinerary-edit-link"));
         info.appendChild(actions);
       }
-      cards.forEach((card) => {
+      cards.forEach((card, activityIndex) => {
+        let row = card.querySelector(":scope > .activity-status");
+        if (saved) {
+          if (!row) {
+            row = statusRow();
+            card.insertBefore(row, card.querySelector(":scope > .activity-edit-actions"));
+          }
+          paintStatus(row, day.activities[activityIndex], dayIndex);
+        } else if (row) {
+          row.remove();
+        }
         if (card.querySelector(".activity-edit-actions")) return;
         const actions = document.createElement("div");
         actions.className = "activity-edit-actions";
@@ -582,6 +899,9 @@
     const cards = Array.from(section.querySelectorAll(".activities-list > .activity-card"));
     const activityIndex = cards.indexOf(card);
     if (activityIndex < 0) return;
+    if (action === "status-done") return setActivityResult(dayIndex, activityIndex, "done", button.closest(".activity-status"));
+    if (action === "status-missed") return setActivityResult(dayIndex, activityIndex, "missed", button.closest(".activity-status"));
+    if (action === "status-clear") return setActivityResult(dayIndex, activityIndex, "", button.closest(".activity-status"));
     if (action === "edit") return edit(dayIndex, activityIndex);
     if (action === "remove") return remove(dayIndex, activityIndex);
   }
@@ -594,6 +914,8 @@
     if (container) {
       container.addEventListener("click", handleClick);
       new MutationObserver(() => enhance()).observe(container, { childList: true });
+      // Upcoming stops become "Mark as done", then "Missed", as time passes.
+      window.setInterval(() => { if (document.visibilityState === "visible") enhance(); }, 60000);
     }
   });
 
@@ -606,6 +928,12 @@
     hasItinerary,
     openAddPlace(place, kind, dayIndex = 0) {
       if (place) openAdd({ dayIndex: Number.isInteger(dayIndex) ? dayIndex : 0, place, kind });
+    },
+    // The "Add activity" form with its place search (used by the + Add Activity button).
+    openAddActivity(dayIndex = 0) {
+      if (!hasItinerary()) return false;
+      openAdd({ dayIndex: Number.isInteger(dayIndex) ? dayIndex : 0 });
+      return true;
     },
   };
 })();

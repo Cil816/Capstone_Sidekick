@@ -42,11 +42,19 @@
     node.classList.toggle('is-info', kind !== 'error');
   }
 
+  // Messages written for people pass through; anything technical (browser, network,
+  // database or library text) is replaced with a plain message.
+  const TECHNICAL_ERROR_PATTERN = /\b(?:typeerror|referenceerror|syntaxerror|rangeerror|undefined|is not a function|is not defined|cannot read|cannot set|unexpected token|json|fetch failed|econn\w*|etimedout|enotfound|socket|sql|tedious|mssql|constraint|deadlock|invalid column|invalid object|stack|status code|http \d{3}|api key|api_key|backend|endpoint|not configured|quota|errno|exception)\b|\b[A-Z]{2,}_[A-Z_]{2,}\b|https?:\/\//i;
+
   function getReadableError(error) {
-    if (error instanceof TypeError || /failed to fetch|networkerror/i.test(String(error?.message || ''))) {
+    const message = String(error?.message || '').trim();
+    if (error instanceof TypeError || /failed to fetch|networkerror|load failed/i.test(message)) {
       return "We couldn't connect to Sidekick. Check your connection and try again.";
     }
-    return error?.message || "Something went wrong. Please try again.";
+    if (!message || message.length > 300 || TECHNICAL_ERROR_PATTERN.test(message)) {
+      return 'Something went wrong. Please try again.';
+    }
+    return message;
   }
 
   function getLoginErrorMessage(error) {
@@ -54,7 +62,7 @@
     if (message === 'Admin authentication failed.') {
       return "We couldn't sign you in. Check your username and password, then try again.";
     }
-    if (message.startsWith('Admin authentication is not configured.')) {
+    if (message.startsWith('Admin authentication is not configured.') || message.startsWith('Admin sign-in isn’t set up')) {
       return "Admin sign-in isn't set up yet. Contact your system administrator.";
     }
     return getReadableError(error);
@@ -70,16 +78,156 @@
     })[character]);
   }
 
-  async function request(path, options = {}) {
-    const token = sessionStorage.getItem(ADMIN_TOKEN_KEY);
-    const response = await fetch(`${getApiBaseUrl()}${path}`, {
-      ...options,
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { 'X-Admin-Token': token } : {}),
-        ...(options.headers || {}),
-      },
+  // ---- Loading screen with the Sidekick logo ---------------------------------------
+  // Shown while the admin waits on an action (signing in, deleting an account). It is
+  // a <dialog> opened with showModal(), so it also covers other open dialogs.
+  let loaderEl = null;
+  let loaderCount = 0;
+
+  function showLoading(text = '') {
+    if (!loaderEl || !loaderEl.isConnected) {
+      loaderEl = document.createElement('dialog');
+      loaderEl.className = 'ax-loader';
+      loaderEl.setAttribute('aria-label', 'Loading');
+      loaderEl.innerHTML = `
+        <div class="ax-loader-box" role="status" aria-live="polite">
+          <div class="ax-loader-mark" aria-hidden="true">
+            <span class="ax-loader-ring"></span>
+            <img class="ax-loader-logo" src="assets/sidekick-logo-192.png" alt="" width="60" height="60">
+          </div>
+          <p class="ax-loader-text" hidden></p>
+          <span class="sr-only">Loading, please wait.</span>
+        </div>`;
+      loaderEl.addEventListener('cancel', (event) => event.preventDefault());
+      document.body.appendChild(loaderEl);
+    }
+    loaderCount += 1;
+    const label = loaderEl.querySelector('.ax-loader-text');
+    label.textContent = String(text || '');
+    label.hidden = !label.textContent;
+    if (!loaderEl.open) {
+      try { loaderEl.showModal(); } catch (error) { loaderEl.setAttribute('open', ''); }
+    }
+  }
+
+  // A page restored with the Back button (back/forward cache) must not come back
+  // still showing the loading screen it had while opening the next page.
+  window.addEventListener('pageshow', (event) => {
+    if (event.persisted) hideLoading(true);
+  });
+
+  // hideLoading() undoes one showLoading(); hideLoading(true) closes it right away.
+  function hideLoading(all = false) {
+    loaderCount = all ? 0 : Math.max(0, loaderCount - 1);
+    if (loaderCount > 0 || !loaderEl) return;
+    if (loaderEl.open) {
+      try { loaderEl.close(); } catch (error) { loaderEl.removeAttribute('open'); }
+    }
+  }
+
+  // ---- "No internet connection" pop-up -----------------------------------------------
+  // Shown when the website opens without internet or the connection drops. It closes
+  // by itself when the connection is back; pages keep their loading placeholders until
+  // then, because request() waits for the connection.
+  let offlineEl = null;
+
+  function showOfflineNotice() {
+    if (navigator.onLine !== false || !document.body) return;
+    if (offlineEl?.open) return;
+    if (!offlineEl || !offlineEl.isConnected) {
+      offlineEl = document.createElement('dialog');
+      offlineEl.className = 'ax-offline';
+      offlineEl.setAttribute('aria-labelledby', 'ax-offline-title');
+      offlineEl.innerHTML = `
+        <div class="ax-offline-box" role="alertdialog" aria-describedby="ax-offline-message">
+          <span class="ax-offline-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 2l20 20"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><path d="M2 8.82a15 15 0 0 1 4.17-2.65"/><path d="M10.66 5c4.01-.36 8.14.9 11.34 3.76"/><path d="M16.85 11.25a10 10 0 0 1 2.22 1.68"/><path d="M5 13a10 10 0 0 1 5.24-2.76"/><path d="M12 20h.01"/></svg></span>
+          <h2 class="ax-offline-title" id="ax-offline-title">No internet connection</h2>
+          <p class="ax-offline-text" id="ax-offline-message">Check your Wi-Fi or network cable. This page will finish loading as soon as you’re back online.</p>
+          <button type="button" class="admin-button" data-ax-offline-ok>OK</button>
+        </div>`;
+      offlineEl.querySelector('[data-ax-offline-ok]').addEventListener('click', () => closeOfflineNotice());
+      document.body.appendChild(offlineEl);
+    }
+    try { offlineEl.showModal(); } catch (error) { offlineEl.setAttribute('open', ''); }
+  }
+
+  function closeOfflineNotice() {
+    if (!offlineEl?.open) return;
+    try { offlineEl.close(); } catch (error) { offlineEl.removeAttribute('open'); }
+  }
+
+  window.addEventListener('offline', showOfflineNotice);
+  window.addEventListener('online', closeOfflineNotice);
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', showOfflineNotice);
+  else showOfflineNotice();
+
+  // Keeps a copy of the website's pages and files in this browser (never any account
+  // data), so it can still open and show the pop-up above without internet.
+  if ('serviceWorker' in navigator && window.isSecureContext) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('sw.js').catch(() => { /* optional: works without it */ });
     });
+  }
+
+  // ---- Skeleton placeholders: grey shapes where content is still loading ----------
+  const SKEL_LABEL = '<span class="sr-only">Loading…</span>';
+  const SKEL_WIDTHS = ['88%', '72%', '64%', '80%', '56%', '76%'];
+  const skelLine = (width, small = false) => `<span class="ax-skel ax-skel-line${small ? ' is-sm' : ''}" style="width:${width}"></span>`;
+  const skel = {
+    // Lines of text (panels, drawers, chart lists).
+    lines(count = 3) {
+      return `<div class="ax-skel-lines" aria-hidden="true">${Array.from({ length: count }, (_, i) => skelLine(SKEL_WIDTHS[i % SKEL_WIDTHS.length])).join('')}</div>${SKEL_LABEL}`;
+    },
+    // Number tiles like the dashboard's key numbers.
+    kpis(count = 4) {
+      return SKEL_LABEL + Array.from({ length: count }, () => `<article class="ax-kpi ax-skel-kpi" aria-hidden="true"><span class="ax-skel ax-skel-icon"></span><div class="ax-kpi-body">${skelLine('46%', true)}${skelLine('32%')}${skelLine('62%', true)}</div></article>`).join('');
+    },
+    // Rows of a feed list (<li> items).
+    feed(count = 5) {
+      return Array.from({ length: count }, (_, i) => `<li class="ax-skel-item"${i ? ' aria-hidden="true"' : ''}><span class="ax-skel ax-skel-icon" aria-hidden="true"></span><span class="ax-skel-text" aria-hidden="true">${skelLine(SKEL_WIDTHS[i % SKEL_WIDTHS.length])}${skelLine('34%', true)}</span>${i ? '' : SKEL_LABEL}</li>`).join('');
+    },
+    // Table rows: one cell across all columns, so it fits whichever columns are shown.
+    rows(columns, count = 5) {
+      return Array.from({ length: count }, (_, i) => `<tr class="ax-skel-tr"><td colspan="${columns}"><div class="ax-skel-rowline" aria-hidden="true"><span class="ax-skel ax-skel-avatar"></span><span class="ax-skel-text">${skelLine(SKEL_WIDTHS[i % SKEL_WIDTHS.length])}${skelLine('38%', true)}</span></div>${i ? '' : SKEL_LABEL}</td></tr>`).join('');
+    },
+    // Cards with a few lines (reviews, status tiles).
+    cards(count = 3, extraClass = '') {
+      return SKEL_LABEL + Array.from({ length: count }, () => `<div class="admin-card ax-skel-card ${extraClass}" aria-hidden="true">${skelLine('42%')}${skelLine('86%', true)}${skelLine('64%', true)}</div>`).join('');
+    },
+    // A chart-sized block.
+    block(height = 200) {
+      return `<div class="ax-skel ax-skel-block" style="height:${Number(height) || 200}px" aria-hidden="true"></div>${SKEL_LABEL}`;
+    },
+  };
+
+  // ---- Internet connection --------------------------------------------------------------
+  // Without internet, requests wait for the connection to come back instead of failing,
+  // so pages keep their loading placeholders and finish loading by themselves.
+  const isOffline = () => navigator.onLine === false;
+
+  function waitForOnline() {
+    if (!isOffline()) return Promise.resolve();
+    return new Promise((resolve) => window.addEventListener('online', () => resolve(), { once: true }));
+  }
+
+  async function request(path, options = {}) {
+    await waitForOnline();
+    const token = sessionStorage.getItem(ADMIN_TOKEN_KEY);
+    let response;
+    try {
+      response = await fetch(`${getApiBaseUrl()}${path}`, {
+        ...options,
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'X-Admin-Token': token } : {}),
+          ...(options.headers || {}),
+        },
+      });
+    } catch (error) {
+      // The connection dropped during the request: try again once it is back.
+      if (isOffline()) return request(path, options);
+      throw error;
+    }
 
     const payloadText = await response.text();
     let payload = {};
@@ -609,9 +757,9 @@
     const present = PLAN_CHARTS.filter((chart) => document.getElementById(ids[chart.key]));
     if (!present.length) return;
     if (!silent) {
-      present.forEach((chart) => { document.getElementById(ids[chart.key]).innerHTML = '<div class="empty-state">Loading…</div>'; });
+      present.forEach((chart) => { document.getElementById(ids[chart.key]).innerHTML = skel.lines(4); });
       const medians = document.getElementById('plan-medians');
-      if (medians && prefix === 'plan') medians.innerHTML = '<div class="ax-empty" style="grid-column:1/-1">Loading…</div>';
+      if (medians && prefix === 'plan') medians.innerHTML = skel.cards(2);
     }
     try {
       const insights = await request(`/api/admin/insights?limit=${encodeURIComponent(limit)}`);
@@ -687,11 +835,11 @@
     if (!summaryTarget) return;
     updateRangeControls(dashboardRangeDays);
     if (!silent) {
-      summaryTarget.innerHTML = '<div class="ax-empty" style="grid-column:1/-1">Loading…</div>';
+      summaryTarget.innerHTML = skel.kpis(5);
       const chart = document.getElementById('chart-main');
-      if (chart) chart.innerHTML = '<div class="empty-state chart-empty">Loading graph…</div>';
-      if (userBase) userBase.innerHTML = '<div class="ax-empty">Loading…</div>';
-      if (activityList) activityList.innerHTML = '<li class="ax-empty" style="display:block">Loading…</li>';
+      if (chart) chart.innerHTML = skel.block(220);
+      if (userBase) userBase.innerHTML = skel.lines(4);
+      if (activityList) activityList.innerHTML = skel.feed(5);
     }
 
     const requestedRange = dashboardRangeDays;
@@ -751,7 +899,7 @@
     const activityList = document.getElementById('recent-activity-list');
     if (!activityList) return;
     const today = document.getElementById('activity-today');
-    activityList.innerHTML = '<li class="ax-empty" style="display:block">Loading…</li>';
+    activityList.innerHTML = skel.feed(6);
     try {
       const activities = await request('/api/admin/activity');
       activityCache = activityItems(activities);
@@ -804,7 +952,7 @@
     const tableBody = document.getElementById('user-table-body');
     if (!tableBody) return;
     const token = ++userSearchToken;
-    if (!tableBody.children.length) tableBody.innerHTML = '<tr><td colspan="5" class="empty-state">Loading users…</td></tr>';
+    if (!tableBody.children.length) tableBody.innerHTML = skel.rows(5, 6);
     try {
       const search = document.getElementById('user-search')?.value.trim() || '';
       const status = document.getElementById('user-status-filter')?.value || 'all';
@@ -917,7 +1065,7 @@
     const target = document.getElementById('user-detail-content');
     if (!panel || !target) return;
     openDrawer(panel);
-    target.innerHTML = '<div class="empty-state">Loading user profile…</div>';
+    target.innerHTML = skel.lines(7);
     try {
       const payload = await request(`/api/admin/users/${encodeURIComponent(userId)}`);
       renderUserDetails({
@@ -972,16 +1120,209 @@
     });
   }
 
+  // ---- Show / hide password -------------------------------------------------------------
+  const EYE_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>';
+  const EYE_OFF_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.4 10.4 0 0 1 12 5c6.4 0 10 7 10 7a17.6 17.6 0 0 1-2.16 3.19"/><path d="M6.61 6.61A17.5 17.5 0 0 0 2 12s3.6 7 10 7a9.7 9.7 0 0 0 5.39-1.61"/><path d="M2 2l20 20"/></svg>';
+
+  // Wraps each password box with an eye button that shows or hides what was typed.
+  function addPasswordToggles(root = document) {
+    root.querySelectorAll('input[type="password"]').forEach((input) => {
+      if (input.dataset.revealReady) return;
+      input.dataset.revealReady = '1';
+      const wrap = document.createElement('span');
+      wrap.className = 'ax-pw';
+      input.parentNode.insertBefore(wrap, input);
+      wrap.appendChild(input);
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'ax-pw-toggle';
+      const sync = () => {
+        const shown = input.type === 'text';
+        button.innerHTML = shown ? EYE_OFF_ICON : EYE_ICON;
+        button.setAttribute('aria-label', shown ? 'Hide password' : 'Show password');
+        button.setAttribute('aria-pressed', String(shown));
+      };
+      button.addEventListener('mousedown', (event) => event.preventDefault()); // keep the cursor in the box
+      button.addEventListener('click', () => {
+        input.type = input.type === 'password' ? 'text' : 'password';
+        sync();
+      });
+      input.form?.addEventListener('submit', () => { input.type = 'password'; sync(); });
+      sync();
+      wrap.appendChild(button);
+    });
+  }
+
+  // Themed form pop-up. fields: [{ name, label, type, value, autocomplete, hint, maxLength }].
+  // onSubmit(values) returns an error message to show, or '' when done.
+  function openFormDialog({ title, message = '', fields, confirmText = 'Save', onSubmit }) {
+    return new Promise((resolve) => {
+      const root = document.createElement('div');
+      root.className = 'ax-dialog';
+      root.innerHTML = `
+        <div class="ax-dialog-backdrop" data-dialog-cancel></div>
+        <form class="ax-dialog-panel" role="dialog" aria-modal="true" aria-labelledby="ax-form-title" novalidate>
+          <h2 id="ax-form-title">${escapeHtml(title)}</h2>
+          ${message ? `<p>${escapeHtml(message)}</p>` : ''}
+          ${fields.map((field, index) => `
+            <label for="ax-form-${index}">${escapeHtml(field.label)}</label>
+            <input id="ax-form-${index}" name="${escapeHtml(field.name)}" type="${escapeHtml(field.type || 'text')}"
+              value="${escapeHtml(field.value || '')}" autocomplete="${escapeHtml(field.autocomplete || 'off')}"
+              ${field.maxLength ? `maxlength="${Number(field.maxLength)}"` : ''} />
+            ${field.hint ? `<small class="ax-dialog-hint">${escapeHtml(field.hint)}</small>` : ''}`).join('')}
+          <p class="ax-dialog-error" role="alert" hidden></p>
+          <div class="ax-dialog-actions">
+            <button type="button" class="admin-button-secondary" data-dialog-cancel>Cancel</button>
+            <button type="submit" class="admin-button">${escapeHtml(confirmText)}</button>
+          </div>
+        </form>`;
+      const form = root.querySelector('form');
+      const error = root.querySelector('.ax-dialog-error');
+      const submit = form.querySelector('[type="submit"]');
+      let busy = false;
+      const finish = (value) => { document.removeEventListener('keydown', onKey, true); root.remove(); resolve(value); };
+      const onKey = (event) => { if (event.key === 'Escape' && !busy) { event.preventDefault(); finish(false); } };
+      root.addEventListener('click', (event) => { if (!busy && event.target.closest('[data-dialog-cancel]')) finish(false); });
+      form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        if (busy) return;
+        const values = Object.fromEntries(fields.map((field) => [field.name, form.elements[field.name].value]));
+        busy = true;
+        submit.disabled = true;
+        error.hidden = true;
+        try {
+          const problem = await onSubmit(values);
+          if (problem) {
+            error.textContent = problem;
+            error.hidden = false;
+            return;
+          }
+          finish(true);
+        } finally {
+          busy = false;
+          submit.disabled = false;
+        }
+      });
+      document.addEventListener('keydown', onKey, true);
+      document.body.appendChild(root);
+      addPasswordToggles(root);
+      form.querySelector('input')?.focus();
+    });
+  }
+
+  // ---- The administrator's own profile (Settings page) -----------------------------------
+  let adminProfile = null;
+
+  function showAdminName(displayName) {
+    document.querySelectorAll('.ax-brand-role').forEach((node) => {
+      node.textContent = displayName || 'Administrator';
+      node.title = displayName ? `${displayName} · Administrator` : '';
+    });
+  }
+
+  // Shows the administrator's name in the sidebar on every page.
+  async function loadAdminIdentity() {
+    try {
+      const session = await request('/api/admin/session');
+      showAdminName(String(session?.user?.displayName || '').trim());
+    } catch (error) {
+      // The sidebar keeps "Administrator".
+    }
+  }
+
+  function renderAdminProfile() {
+    const summary = document.getElementById('profile-summary');
+    const avatar = document.getElementById('profile-avatar');
+    const nameButton = document.getElementById('profile-edit-name');
+    const passwordButton = document.getElementById('profile-change-password');
+    if (!summary || !adminProfile) return;
+    const name = adminProfile.displayName;
+    if (avatar) avatar.textContent = (name || adminProfile.username || 'A').trim().charAt(0).toUpperCase();
+    const passwordNote = adminProfile.passwordChangedAt
+      ? `Password changed ${relativeTime(adminProfile.passwordChangedAt)}`
+      : 'Using the password from the server setup';
+    summary.innerHTML = `<b>${escapeHtml(name || 'No name set')}</b><span>Signs in as ${escapeHtml(adminProfile.username || 'admin')} · ${escapeHtml(passwordNote)}</span>`;
+    const canEdit = adminProfile.available !== false;
+    if (nameButton) nameButton.disabled = !canEdit;
+    if (passwordButton) passwordButton.disabled = !canEdit;
+    if (!canEdit) summary.insertAdjacentHTML('beforeend', '<span>Profile changes need the settings database update (migration 006).</span>');
+    showAdminName(name);
+  }
+
+  async function loadAdminProfile() {
+    const summary = document.getElementById('profile-summary');
+    if (!summary) return;
+    try {
+      adminProfile = await request('/api/admin/profile');
+      renderAdminProfile();
+    } catch (error) {
+      summary.textContent = 'Your profile couldn’t be loaded. Reload the page to try again.';
+    }
+  }
+
+  function initProfileCard() {
+    document.getElementById('profile-edit-name')?.addEventListener('click', () => {
+      void openFormDialog({
+        title: 'Edit your name',
+        message: 'Shown in the sidebar of this website. You still sign in with the same username.',
+        fields: [{ name: 'displayName', label: 'Your name', value: adminProfile?.displayName || '', autocomplete: 'name', maxLength: 60 }],
+        confirmText: 'Save name',
+        onSubmit: async ({ displayName }) => {
+          const name = String(displayName || '').replace(/\s+/g, ' ').trim();
+          if (name.length > 60) return 'Use a name of 60 characters or fewer.';
+          try {
+            const result = await request('/api/admin/profile', { method: 'PUT', body: JSON.stringify({ displayName: name }) });
+            adminProfile = { ...adminProfile, displayName: result.displayName };
+            renderAdminProfile();
+            setStatus(result.message || 'Your name was saved.', 'success');
+            return '';
+          } catch (error) {
+            return getReadableError(error);
+          }
+        },
+      });
+    });
+    document.getElementById('profile-change-password')?.addEventListener('click', () => {
+      void openFormDialog({
+        title: 'Change your password',
+        message: 'Other browsers signed in to this admin account will be signed out.',
+        fields: [
+          { name: 'currentPassword', label: 'Current password', type: 'password', autocomplete: 'current-password', maxLength: 128 },
+          { name: 'newPassword', label: 'New password', type: 'password', autocomplete: 'new-password', maxLength: 128, hint: 'At least 12 characters, with a letter and a number.' },
+          { name: 'confirmPassword', label: 'Type the new password again', type: 'password', autocomplete: 'new-password', maxLength: 128 },
+        ],
+        confirmText: 'Change password',
+        onSubmit: async ({ currentPassword, newPassword, confirmPassword }) => {
+          if (!currentPassword.trim() || !newPassword.trim()) return 'Enter your current password and a new password.';
+          if (newPassword.trim().length < 12) return 'Use a new password of at least 12 characters.';
+          if (!/[A-Za-z]/.test(newPassword) || !/\d/.test(newPassword)) return 'Use at least one letter and one number in the new password.';
+          if (newPassword !== confirmPassword) return 'The new passwords don’t match.';
+          try {
+            const result = await request('/api/admin/profile/password', { method: 'POST', body: JSON.stringify({ currentPassword, newPassword }) });
+            adminProfile = { ...adminProfile, passwordChangedAt: new Date().toISOString() };
+            renderAdminProfile();
+            setStatus(result.message || 'Your password was changed.', 'success');
+            return '';
+          } catch (error) {
+            return getReadableError(error);
+          }
+        },
+      });
+    });
+    void loadAdminProfile();
+  }
+
   async function deleteUserPermanently(userId, userEmail) {
     const confirmationEmail = await askTypedConfirmation({
       title: 'Delete this account?',
-      message: `This permanently deletes ${userEmail} and their linked Sidekick data (trips, reviews, preferences). This cannot be undone.`,
+      message: `This deletes ${userEmail} and their linked Sidekick data (trips, reviews, preferences). The user can no longer sign in. A copy is kept in the archive (see Settings) for the retention period, then removed for good.`,
       label: 'Type the account email to confirm',
       expected: userEmail,
-      confirmText: 'Delete permanently',
+      confirmText: 'Delete account',
     });
     if (confirmationEmail === null) return;
 
+    showLoading('Deleting the account…');
     try {
       await request(`/api/admin/users/${encodeURIComponent(userId)}`, {
         method: 'DELETE',
@@ -989,9 +1330,11 @@
       });
       closeDrawer(document.getElementById('user-detail-panel'));
       await loadUserTable(userTableState.page);
-      setStatus('The account and its linked Sidekick data were permanently deleted.', 'info');
+      setStatus('The account and its linked Sidekick data were deleted. A copy is kept in the archive.', 'info');
     } catch (error) {
       setStatus(getReadableError(error), 'error');
+    } finally {
+      hideLoading();
     }
   }
 
@@ -1009,8 +1352,8 @@
     const list = document.getElementById('app-reviews-list');
     const summary = document.getElementById('review-summary');
     if (!list || !summary) return;
-    list.innerHTML = '<div class="admin-card ax-empty">Loading reviews…</div>';
-    summary.innerHTML = '<div class="admin-card ax-empty" style="grid-column:1/-1">Loading rating summary…</div>';
+    list.innerHTML = skel.cards(3);
+    summary.innerHTML = skel.cards(2);
     try {
       const params = new URLSearchParams({ page: String(page), limit: String(appReviewTableState.limit) });
       const payload = await request(`/api/admin/app-reviews?${params}`);
@@ -1054,7 +1397,7 @@
     const tableBody = document.getElementById('itinerary-table-body');
     if (!tableBody) return;
     const token = ++itinerarySearchToken;
-    if (!tableBody.children.length) tableBody.innerHTML = '<tr><td colspan="5" class="empty-state">Loading saved travel plans…</td></tr>';
+    if (!tableBody.children.length) tableBody.innerHTML = skel.rows(5, 5);
     try {
       const search = document.getElementById('itinerary-search')?.value.trim() || '';
       const params = new URLSearchParams({ page: String(page), limit: String(itineraryTableState.limit), search });
@@ -1125,7 +1468,7 @@
     if (!panel || !target) return;
     selectedItineraryTripId = String(tripId);
     openDrawer(panel);
-    target.innerHTML = '<div class="empty-state">Loading travel plan…</div>';
+    target.innerHTML = skel.lines(7);
     try {
       const payload = await request(`/api/admin/itineraries/${encodeURIComponent(tripId)}`);
       renderItineraryDetails(payload?.itinerary || {});
@@ -1156,7 +1499,7 @@
   async function loadReportTable(page = reportTableState.page) {
     const tableBody = document.getElementById('report-table-body');
     if (!tableBody) return;
-    tableBody.innerHTML = '<tr><td colspan="10" class="empty-state">Loading user reports…</td></tr>';
+    tableBody.innerHTML = skel.rows(10, 5);
     try {
       const search = document.getElementById('report-search')?.value.trim() || '';
       const status = document.getElementById('report-status-filter')?.value || 'all';
@@ -1402,7 +1745,7 @@
     panel.hidden = false;
     selectReportTab('summary');
     USER_REPORT_CHART_IDS.forEach((id) => chartRegistry.delete(id));
-    summaryPanel.innerHTML = '<div class="empty-state">Loading user report…</div>';
+    summaryPanel.innerHTML = skel.lines(4);
     document.getElementById('report-panel-itineraries').innerHTML = '';
     document.getElementById('report-panel-preferences').innerHTML = '';
     try {
@@ -1480,8 +1823,8 @@
     const target = document.getElementById('integration-grid');
     if (!target) return;
     const auditList = document.getElementById('admin-audit-list');
-    target.innerHTML = '<div class="admin-card ax-empty" style="grid-column:1/-1">Checking Sidekick services…</div>';
-    if (auditList) auditList.innerHTML = '<li class="ax-empty" style="display:block">Loading…</li>';
+    target.innerHTML = skel.cards(6);
+    if (auditList) auditList.innerHTML = skel.feed(4);
     const [statusResult, auditResult] = await Promise.allSettled([
       request('/api/admin/integrations'),
       auditList ? request('/api/admin/audit') : Promise.resolve(null),
@@ -1522,7 +1865,10 @@
           : events.length
             ? events.map((event) => {
               const ok = /success/i.test(String(event.outcome));
-              const what = /logout/i.test(String(event.eventType)) ? 'signed out' : ok ? 'signed in' : 'failed sign-in attempt';
+              const type = String(event.eventType);
+              const what = /password_change/i.test(type) ? (ok ? 'changed the admin password' : 'entered a wrong current password')
+                : /profile_update/i.test(type) ? 'updated the admin name'
+                  : /logout/i.test(type) ? 'signed out' : ok ? 'signed in' : 'failed sign-in attempt';
               return `<li>
                 <span class="ax-feed-icon ${ok ? 'k-signup' : 'k-trip'}" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${FEED_ICONS.sign_in}</svg></span>
                 <span class="ax-feed-text"><b>${escapeHtml(event.actor || 'Administrator')}</b> ${escapeHtml(what)}</span>
@@ -1613,24 +1959,24 @@
     if (!list) return;
     try {
       const data = await request('/api/admin/archive');
-      const names = { users: 'accounts', trips: 'trips', trip_days: 'trip days', itinerary_activities: 'activities', reminders: 'reminders', app_reviews: 'app reviews', user_preferences: 'preference sets' };
+      const kinds = { account: 'Account', trip: 'Itinerary', expired: 'Expired itinerary', stops: 'Removed stops' };
       if (!data.available) {
         if (counts) counts.textContent = '';
-        list.innerHTML = '<li class="ax-empty" style="display:block">The archive isn’t set up yet. Run migration 006 to start keeping copies of deleted data.</li>';
+        list.innerHTML = '<li class="ax-empty" style="display:block">The archive isn’t set up yet. Run migration 007 to start keeping copies of deleted accounts and itineraries.</li>';
         return;
       }
       if (counts) {
         counts.innerHTML = data.counts.length
-          ? data.counts.map((item) => `<span class="ax-pill">${escapeHtml(formatNumber(item.total))} ${escapeHtml(names[item.table] || item.table)}</span>`).join('')
+          ? data.counts.map((item) => `<span class="ax-pill">${escapeHtml(formatNumber(item.total))} ${escapeHtml(item.label)}</span>`).join('')
           : '';
       }
       list.innerHTML = data.recent.length
         ? data.recent.map((item) => `<li>
-            <span class="ax-feed-icon ${item.deletedByType === 'admin' ? 'k-trip' : 'k-chat'}" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2m3 0-1 14H6L5 6"/></svg></span>
-            <span class="ax-feed-text"><b>${escapeHtml(names[item.table] || item.table)} #${escapeHtml(item.sourceId)}</b> — ${escapeHtml(item.reason || 'Deleted')}${item.deletedBy ? ` <span class="ax-muted">(${escapeHtml(item.deletedBy)})</span>` : ''}</span>
+            <span class="ax-feed-icon ${item.kind === 'account' ? 'k-chat' : 'k-trip'}" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2m3 0-1 14H6L5 6"/></svg></span>
+            <span class="ax-feed-text"><b>${escapeHtml(kinds[item.kind] || 'Deleted')}: ${escapeHtml(item.title || 'Untitled')}</b>${item.detail ? ` <span class="ax-muted">${escapeHtml(item.detail)}</span>` : ''}<br><span class="ax-muted">${escapeHtml(item.reason || 'Deleted')}${item.deletedBy ? ` (${escapeHtml(item.deletedBy)})` : ''}</span></span>
             <time class="ax-feed-time" title="${escapeHtml(formatDate(item.deletedAt))}">${escapeHtml(relativeTime(item.deletedAt))}</time>
           </li>`).join('')
-        : `<li class="ax-empty" style="display:block">Nothing has been deleted in the last ${escapeHtml(String(data.retentionDays))} days.</li>`;
+        : `<li class="ax-empty" style="display:block">Nothing has been archived in the last ${escapeHtml(String(data.retentionDays))} days.</li>`;
     } catch (error) {
       list.innerHTML = `<li class="ax-empty" style="display:block">${escapeHtml(getReadableError(error))}</li>`;
     }
@@ -1641,6 +1987,11 @@
       renderSettings(await request('/api/admin/app-settings'));
     } catch (error) {
       setStatus(getReadableError(error), 'error');
+      // The switches stay disabled: their real state is unknown, so they can't be changed.
+      const detail = document.getElementById('maintenance-detail');
+      if (detail?.querySelector('.ax-skel')) detail.textContent = 'The current settings couldn’t be loaded. Reload the page to try again.';
+      const meter = document.getElementById('budget-meter');
+      if (meter?.querySelector('.ax-skel')) meter.innerHTML = '';
     }
     void loadArchive();
   }
@@ -1676,6 +2027,7 @@
       if (!Number.isInteger(value) || value < 1 || value > 3650) { setStatus('Enter a whole number of days from 1 to 3650.', 'error'); return; }
       if (await saveSettings({ archiveRetentionDays: value }, `Deleted data will be kept for ${value} day${value === 1 ? '' : 's'}.`)) void loadArchive();
     });
+    initProfileCard();
     void loadSettings();
   }
 
@@ -1736,6 +2088,10 @@
     } catch (error) {
       setStatus(getReadableError(error), 'error');
       if (body) body.innerHTML = `<tr><td colspan="5" class="empty-state">${escapeHtml(getReadableError(error))}</td></tr>`;
+      // Loading placeholders that never got real data are cleared instead of shimmering forever.
+      if (summary?.querySelector('[aria-hidden="true"] .ax-skel')) summary.innerHTML = '';
+      const chart = document.getElementById('usage-chart');
+      if (chart?.querySelector('.ax-skel')) chart.innerHTML = '';
     }
   }
 
@@ -1758,7 +2114,7 @@
     const body = document.getElementById('engaged-table-body');
     if (!body) return;
     const sortSelect = document.getElementById('engaged-sort');
-    body.innerHTML = '<tr><td colspan="5" class="empty-state">Loading…</td></tr>';
+    body.innerHTML = skel.rows(5, 5);
     try {
       const params = new URLSearchParams({ page: '1', limit: '10', search: '', status: 'all', sort: sortSelect?.value || 'chat' });
       let payload;
@@ -1790,7 +2146,7 @@
 
   async function initReportsPage() {
     const audience = document.getElementById('report-audience');
-    if (audience) audience.innerHTML = '<div class="admin-card ax-empty" style="grid-column:1/-1">Loading…</div>';
+    if (audience) audience.innerHTML = skel.cards(3);
     document.getElementById('engaged-sort')?.addEventListener('change', () => void loadEngagedUsers());
     void loadPlanInsights('picks', 8);
     void loadEngagedUsers();
@@ -1831,6 +2187,7 @@
   document.addEventListener('DOMContentLoaded', () => {
     localStorage.removeItem(LEGACY_ADMIN_TOKEN_KEY);
     sessionStorage.removeItem(LEGACY_ADMIN_TOKEN_KEY);
+    addPasswordToggles();
 
     const logoutButton = document.querySelector('[data-admin-logout]');
     if (logoutButton) {
@@ -1845,7 +2202,9 @@
         const password = document.getElementById('admin-password')?.value || '';
         const submitButton = document.getElementById('admin-login-submit');
         if (submitButton) submitButton.disabled = true;
+        showLoading();
         try {
+          await waitForOnline(); // without internet, sign-in continues once it is back
           const payload = await fetch(`${getApiBaseUrl()}/api/admin/login`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1854,10 +2213,13 @@
           const data = await payload.json().catch(() => ({}));
           if (!payload.ok) throw new Error(data?.error || 'Admin login failed.');
           sessionStorage.setItem(ADMIN_TOKEN_KEY, data.token);
+          showLoading(); // stays up while the dashboard opens
           window.location.href = 'admin.html';
         } catch (error) {
+          hideLoading(true);
           setStatus(getLoginErrorMessage(error), 'error');
         } finally {
+          hideLoading();
           if (submitButton) submitButton.disabled = false;
         }
       });
@@ -1866,6 +2228,7 @@
 
     const currentPage = document.body.dataset.page;
     if (!ensureAdminSession()) return;
+    if (currentPage !== 'settings') void loadAdminIdentity(); // Settings loads the full profile instead
 
     // On phones the page links are one sideways-scrolling row: start with the
     // current page's link in view. (Only the row scrolls, never the page.)

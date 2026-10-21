@@ -47,7 +47,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
     async function loadAppReview() {
         if (!reviewSummary || !reviewInput || !session?.apiToken) {
-            if (reviewSummary) reviewSummary.textContent = 'App ratings need a server session. Restart the updated Sidekick backend, then sign out and sign in again.';
+            if (reviewSummary) reviewSummary.textContent = 'To rate Sidekick, please log out and log in again.';
             updateRatingStars();
             return;
         }
@@ -66,7 +66,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 : 'No app ratings yet. Be the first to share yours.';
             updateRatingStars();
         } catch (error) {
-            reviewSummary.textContent = error.message || 'Unable to load app ratings.';
+            reviewSummary.textContent = window.SidekickCore.friendlyError(error, 'Unable to load app ratings.');
         }
     }
 
@@ -83,7 +83,7 @@ document.addEventListener('DOMContentLoaded', function () {
             await loadAppReview();
             if (reviewStatus) reviewStatus.textContent = 'Thank You! Your rating has been saved.';
         } catch (error) {
-            if (reviewStatus) reviewStatus.textContent = error.message || 'Could not save your rating. Please try again.';
+            if (reviewStatus) reviewStatus.textContent = window.SidekickCore.friendlyError(error, 'Could not save your rating. Please try again.');
         } finally {
             reviewSaving = false;
             updateRatingStars();
@@ -97,7 +97,8 @@ document.addEventListener('DOMContentLoaded', function () {
         logoutBtn.addEventListener('click', async function () {
             try {
                 if (session?.apiToken) {
-                    await window.SidekickCore.apiRequest('/api/app-session/logout', { method: 'POST' });
+                    // Logging out also works offline: no waiting for the connection.
+                    await window.SidekickCore.apiRequest('/api/app-session/logout', { method: 'POST', waitForConnection: false });
                 }
             } catch (error) {
                 console.warn('Unable to revoke app session on the server:', error.message);

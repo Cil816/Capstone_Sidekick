@@ -161,7 +161,7 @@
     right: 0;
     max-width: 448px;
     margin: 0 auto;
-    padding: 16px;
+    padding: 16px 16px calc(16px + var(--sk-safe-bottom, 0px));
     background: white;
     box-shadow: 0 -6px 18px rgba(44,62,80,0.04);
     border-top: 1px solid #E5E7EB;

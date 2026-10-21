@@ -270,7 +270,47 @@ function getApiBaseUrl() {
   return isLocalDevelopment ? "http://localhost:3001" : "";
 }
 
+// Messages written for people pass through; anything technical (browser, network,
+// database or library text) is replaced with a plain message the traveler understands.
+const TECHNICAL_ERROR_PATTERN = /\b(?:typeerror|referenceerror|syntaxerror|rangeerror|undefined|is not a function|is not defined|cannot read|cannot set|unexpected token|json|failed to fetch|fetch failed|networkerror|load failed|econn\w*|etimedout|enotfound|socket|sql|tedious|mssql|constraint|deadlock|invalid column|invalid object|stack|status code|http \d{3}|api key|api_key|backend|endpoint|server address|not configured|config\.local|quota|errno|exception|no api)\b|\b[A-Z]{2,}_[A-Z_]{2,}\b|https?:\/\//i;
+
+function friendlyError(error, fallback = "Something went wrong. Please try again.") {
+  const message = String(error?.message || error || "").trim();
+  if (!message || message.length > 300 || TECHNICAL_ERROR_PATTERN.test(message)) return fallback;
+  return message;
+}
+
+// ---- Internet connection ---------------------------------------------------------
+// Without internet, requests wait for the connection to come back instead of failing,
+// so screens keep their loading placeholders and finish loading by themselves.
+function isOnline() {
+  return navigator.onLine !== false;
+}
+
+// Resolves when the device is online (right away if it already is). Rejects with an
+// AbortError if the given AbortSignal is aborted first.
+function waitForOnline(signal) {
+  if (isOnline()) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      window.removeEventListener("online", onOnline);
+      signal?.removeEventListener?.("abort", onAbort);
+    };
+    const onOnline = () => { cleanup(); resolve(); };
+    const onAbort = () => {
+      cleanup();
+      reject(signal.reason || new DOMException("The request was cancelled.", "AbortError"));
+    };
+    if (signal?.aborted) { onAbort(); return; }
+    window.addEventListener("online", onOnline);
+    signal?.addEventListener?.("abort", onAbort);
+  });
+}
+
 async function apiRequest(path, options = {}) {
+  // options.waitForConnection = false makes a request fail right away when offline.
+  const waitForConnection = options.waitForConnection !== false;
+  if (waitForConnection) await waitForOnline(options.signal);
   const apiBaseUrl = getApiBaseUrl();
   const sessionToken = String(getAuthSession()?.apiToken || "");
   let response;
@@ -285,7 +325,9 @@ async function apiRequest(path, options = {}) {
     });
   } catch (error) {
     if (error?.name === "AbortError") throw error;
-    throw new Error("Unable to connect to the Sidekick server. Check the API server address and your connection.");
+    // The connection dropped during the request: try again once it is back.
+    if (waitForConnection && !isOnline()) return apiRequest(path, options);
+    throw new Error("We couldn’t connect to Sidekick. Check your internet connection and try again.");
   }
 
   const responseText = await response.text();
@@ -297,11 +339,16 @@ async function apiRequest(path, options = {}) {
   }
   if (!response.ok) {
     if (payload.maintenance === true) showMaintenanceBanner(payload.error);
-    const message = typeof payload.error === "string" && payload.error.trim()
-      ? payload.error
-      : response.status === 404
-        ? `The configured server does not provide this API endpoint (HTTP 404): ${path}. Deploy the current Sidekick backend and set SIDEKICK_CONFIG.apiBaseUrl to its public URL.`
-        : `The Sidekick server returned HTTP ${response.status} for ${path}.`;
+    const fallback = response.status === 404
+      ? "This feature isn’t available right now. Please try again later."
+      : response.status >= 500
+        ? "Something went wrong on our side. Please try again in a moment."
+        : "Something went wrong. Please try again.";
+    const serverMessage = typeof payload.error === "string" ? payload.error.trim() : "";
+    // The maintenance message is written by the administrator, so it is shown as is.
+    const message = payload.maintenance === true && serverMessage
+      ? serverMessage
+      : friendlyError({ message: serverMessage }, fallback);
     const error = new Error(message);
     error.statusCode = response.status;
     if (response.status === 401 && sessionToken && !window.location.pathname.endsWith("/login.html")) {
@@ -353,6 +400,23 @@ function showFeatureNotice(features) {
   showMaintenanceBanner(message);
 }
 
+// While the monthly API budget has paused AI and Maps, travelers are told once per
+// visit that Sidekick isn't available, and a banner stays at the top of each screen.
+const PAUSED_MESSAGE = "Sidekick isn’t available right now. Please try again later.";
+const PAUSED_SHOWN_KEY = "sidekick.pausedNoticeShown";
+
+function showPausedNotice() {
+  showMaintenanceBanner(PAUSED_MESSAGE);
+  let shown = false;
+  try { shown = sessionStorage.getItem(PAUSED_SHOWN_KEY) === "1"; } catch (error) {}
+  if (shown || !window.SidekickUI?.alert) return;
+  try { sessionStorage.setItem(PAUSED_SHOWN_KEY, "1"); } catch (error) {}
+  window.SidekickUI.alert("Please try again later. Your saved trips and reminders still work.", {
+    title: "Sidekick isn’t available right now",
+    confirmText: "OK",
+  });
+}
+
 async function checkMaintenanceStatus() {
   try {
     const status = await apiRequest("/api/maintenance-status");
@@ -360,7 +424,11 @@ async function checkMaintenanceStatus() {
       try { sessionStorage.setItem(FEATURES_KEY, JSON.stringify(status.features)); } catch (error) {}
     }
     if (status?.maintenance) showMaintenanceBanner(status.message);
+    else if (status?.paused) showPausedNotice();
     else showFeatureNotice(status?.features);
+    if (!status?.paused) {
+      try { sessionStorage.removeItem(PAUSED_SHOWN_KEY); } catch (error) {}
+    }
   } catch (error) {
     // Older backend or offline: nothing to show.
   }
@@ -425,6 +493,10 @@ function getItineraryByEmail() {
 
 function getItinerarySyncPayload(itineraryData) {
   const meta = itineraryData?.meta || {};
+  const clock = (timestamp) => `${String(new Date(timestamp).getHours()).padStart(2, "0")}:${String(new Date(timestamp).getMinutes()).padStart(2, "0")}`;
+  // The trip's own local dates (from its activities). A saved start date can be a UTC
+  // timestamp, whose first 10 characters are the day before in the Philippines.
+  const range = tripDateRange(itineraryData);
   return {
     itinerary: (Array.isArray(itineraryData?.itinerary) ? itineraryData.itinerary : []).map((day, index) => ({
       dayNumber: Number(day?.dayNumber) || index + 1,
@@ -437,13 +509,21 @@ function getItinerarySyncPayload(itineraryData) {
         startTime: activity?.dueAt != null && Number.isFinite(Number(activity.dueAt))
           ? `${String(new Date(Number(activity.dueAt)).getHours()).padStart(2, "0")}:${String(new Date(Number(activity.dueAt)).getMinutes()).padStart(2, "0")}`
           : "",
+        // When the stop ends: its start plus the time planned there (same day only).
+        endTime: (() => {
+          const start = Number(activity?.dueAt);
+          const minutes = Number(activity?.durationMinutes);
+          if (!Number.isFinite(start) || !(minutes > 0)) return "";
+          const end = start + minutes * 60000;
+          return localDateValue(new Date(end)) === localDateValue(new Date(start)) ? clock(end) : "";
+        })(),
         estimatedTotalCostPhp: activity?.estimatedTotalCostPhp ?? activity?.estimatedActivityCostPhp ?? null,
       })),
     })),
     meta: {
       destination: meta.destination || meta.focusedPlace || "",
-      startDate: String(meta.startDate || new Date().toISOString()).slice(0, 10),
-      endDate: meta.endDate ? String(meta.endDate).slice(0, 10) : "",
+      startDate: range.start || String(meta.startDate || new Date().toISOString()).slice(0, 10),
+      endDate: range.end || (meta.endDate ? String(meta.endDate).slice(0, 10) : ""),
       budget: meta.budget || "",
       title: meta.title ? String(meta.title).slice(0, 200) : "",
     },
@@ -451,6 +531,8 @@ function getItinerarySyncPayload(itineraryData) {
 }
 
 function ensureItineraryMonitored(email, itineraryData) {
+  // An unsaved draft is not recorded on the server until it is saved.
+  if (itineraryData?.meta?.isDraft) return Promise.resolve(itineraryData);
   const currentTripId = Number(itineraryData?.meta?.serverTripId);
   if (Number.isSafeInteger(currentTripId) && currentTripId > 0) {
     return Promise.resolve({ ...itineraryData, meta: { ...itineraryData.meta, serverTripId: currentTripId } });
@@ -489,7 +571,7 @@ function ensureItineraryMonitored(email, itineraryData) {
 function reportItinerarySyncError(error, tripId) {
   console.error("Unable to sync itinerary changes to the server:", error);
   document.dispatchEvent(new CustomEvent("sidekick:itinerary-sync-error", {
-    detail: { tripId, message: error?.message || "The itinerary could not be synced to the server." },
+    detail: { tripId, message: friendlyError(error, "The itinerary could not be saved online. It is still saved on this phone.") },
   }));
 }
 
@@ -506,8 +588,8 @@ function scheduleItinerarySync(email, itineraryData, delay = 500) {
   state.timer = window.setTimeout(async () => {
     state.timer = null;
     if (state.inFlight) return;
-    const current = getItineraryByEmail()[email];
-    if (Number(current?.meta?.serverTripId) !== tripId) return;
+    const current = findTripByServerId(email, tripId);
+    if (!current) return;
     const latestPayload = getItinerarySyncPayload(current);
     const latestSnapshot = JSON.stringify(latestPayload);
     if (latestSnapshot === state.lastSynced) return;
@@ -530,8 +612,8 @@ function scheduleItinerarySync(email, itineraryData, delay = 500) {
       }
     } finally {
       state.inFlight = false;
-      const latest = getItineraryByEmail()[email];
-      if (Number(latest?.meta?.serverTripId) === tripId
+      const latest = findTripByServerId(email, tripId);
+      if (latest
         && JSON.stringify(getItinerarySyncPayload(latest)) !== state.lastSynced
         && !state.timer) {
         scheduleItinerarySync(email, latest);
@@ -545,6 +627,7 @@ function setItineraryByEmail(map) {
   localStorage.setItem(SIDEKICK_KEYS.itineraryByEmail, JSON.stringify(map));
   const session = getAuthSession();
   const email = session?.email;
+  if (email && map?.[email]) mirrorOpenItinerary(email, map[email]);
   if (email && JSON.stringify(priorMap[email]) !== JSON.stringify(map?.[email]) && map?.[email]) {
     scheduleItinerarySync(email, map[email]);
   }
@@ -553,9 +636,393 @@ function setItineraryByEmail(map) {
   } catch (e) {}
 }
 
+// ---- Planned trips ---------------------------------------------------------------------
+// A traveler can keep several saved ("planned") trips and one unsaved draft:
+//   sidekick.plannedTripsByEmail.v1    email -> [itinerary, ...]  saved (meta.planId)
+//   sidekick.itineraryDraftByEmail.v1  email -> itinerary         not saved yet (meta.isDraft)
+// The itinerary the rest of the app works with (sidekick.itineraryByEmail.v1) is the one
+// open on the Itinerary tab: the draft or one planned trip. Changes to it are copied back
+// to its planned trip or to the draft (mirrorOpenItinerary), so editing, reminders, server
+// sync, Alerts, chat and the hotel and restaurant lists keep working on it as before.
+// A draft has no server record and no reminders until it is saved.
+const PLANNED_TRIPS_KEY = "sidekick.plannedTripsByEmail.v1";
+const ITINERARY_DRAFT_KEY = "sidekick.itineraryDraftByEmail.v1";
+
+function readEmailMap(key) {
+  const map = safeJsonParse(localStorage.getItem(key), {});
+  return map && typeof map === "object" ? map : {};
+}
+
+function isItineraryData(value) {
+  return Boolean(value && Array.isArray(value.itinerary));
+}
+
+// "2026-10-21" for a date-only value; a timestamp or ISO date-time -> its local date.
+function localDayText(value) {
+  const text = String(value || "");
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+  const date = new Date(text);
+  return Number.isFinite(date.getTime()) ? localDateValue(date) : "";
+}
+
+// The trip's first and last day (local dates, YYYY-MM-DD), from its activities' times
+// when it has any, otherwise from its saved dates.
+function tripDateRange(data) {
+  const dueAts = (data?.itinerary || []).flatMap((day) => (day?.activities || []).map((activity) => Number(activity?.dueAt)))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  if (dueAts.length) {
+    return { start: localDateValue(new Date(Math.min(...dueAts))), end: localDateValue(new Date(Math.max(...dueAts))) };
+  }
+  const start = localDayText(data?.meta?.startDate);
+  let end = localDayText(data?.meta?.endDate);
+  if (start && !end) {
+    const [y, m, d] = start.split("-").map(Number);
+    end = localDateValue(new Date(y, m - 1, d + Math.max(0, (data?.itinerary?.length || 1) - 1)));
+  }
+  return { start, end: end || start };
+}
+
+function tripDisplayName(data) {
+  const title = String(data?.meta?.title || "").trim();
+  if (title) return title;
+  const destination = String(data?.meta?.destination || data?.meta?.focusedPlace || "").trim();
+  return destination ? `${destination} trip` : "My trip";
+}
+
+function shortDateRangeText(range) {
+  const show = (text) => {
+    const [y, m, d] = String(text || "").split("-").map(Number);
+    return y ? new Date(y, m - 1, d).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "";
+  };
+  if (!range?.start) return "";
+  return range.end && range.end !== range.start ? `${show(range.start)} – ${show(range.end)}` : show(range.start);
+}
+
+function getPlannedTrips(email) {
+  const list = readEmailMap(PLANNED_TRIPS_KEY)[email];
+  return Array.isArray(list) ? list.filter(isItineraryData) : [];
+}
+
+function setPlannedTrips(email, list) {
+  const map = readEmailMap(PLANNED_TRIPS_KEY);
+  const sorted = (Array.isArray(list) ? list.filter(isItineraryData) : [])
+    .sort((a, b) => String(tripDateRange(a).start).localeCompare(String(tripDateRange(b).start)));
+  if (sorted.length) map[email] = sorted;
+  else delete map[email];
+  localStorage.setItem(PLANNED_TRIPS_KEY, JSON.stringify(map));
+  try { document.dispatchEvent(new CustomEvent("sidekick:planned-trips-updated", { detail: { email } })); } catch (e) {}
+}
+
+function getItineraryDraft(email) {
+  const draft = readEmailMap(ITINERARY_DRAFT_KEY)[email];
+  return isItineraryData(draft) ? draft : null;
+}
+
+function setItineraryDraft(email, data) {
+  const map = readEmailMap(ITINERARY_DRAFT_KEY);
+  if (isItineraryData(data)) map[email] = data;
+  else delete map[email];
+  localStorage.setItem(ITINERARY_DRAFT_KEY, JSON.stringify(map));
+  try { document.dispatchEvent(new CustomEvent("sidekick:planned-trips-updated", { detail: { email } })); } catch (e) {}
+}
+
+function newPlanId() {
+  return `plan_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+// Copies the open itinerary back to where it belongs: its planned trip, or the draft.
+function mirrorOpenItinerary(email, data) {
+  if (!isItineraryData(data)) return;
+  const planId = data.meta?.planId;
+  if (planId) {
+    const list = getPlannedTrips(email);
+    const index = list.findIndex((trip) => trip.meta?.planId === planId);
+    if (index >= 0 && JSON.stringify(list[index]) !== JSON.stringify(data)) {
+      list[index] = data;
+      setPlannedTrips(email, list);
+    }
+  } else if (data.meta?.isDraft) {
+    if (JSON.stringify(getItineraryDraft(email)) !== JSON.stringify(data)) setItineraryDraft(email, data);
+  }
+}
+
+// Makes a planned trip (by planId) or the draft (planId "draft") the open itinerary.
+function openTripForEmail(email, planId) {
+  const trip = planId === "draft" ? getItineraryDraft(email) : getPlannedTrips(email).find((item) => item.meta?.planId === planId);
+  if (!trip) return false;
+  const map = getItineraryByEmail();
+  map[email] = trip;
+  localStorage.setItem(SIDEKICK_KEYS.itineraryByEmail, JSON.stringify(map));
+  try { document.dispatchEvent(new CustomEvent("sidekick:itinerary-updated")); } catch (e) {}
+  return true;
+}
+
+// The planned trip whose dates overlap start–end (YYYY-MM-DD), apart from excludePlanId.
+function findOverlappingTrip(email, start, end, excludePlanId = null) {
+  if (!start) return null;
+  const last = end || start;
+  return getPlannedTrips(email).find((trip) => {
+    if (excludePlanId && trip.meta?.planId === excludePlanId) return false;
+    const range = tripDateRange(trip);
+    return range.start && !(last < range.start || start > (range.end || range.start));
+  }) || null;
+}
+
+function tripOverlapMessage(trip) {
+  return `These dates overlap your planned trip “${tripDisplayName(trip)}” (${shortDateRangeText(tripDateRange(trip))}). Choose dates that don’t overlap your other trips.`;
+}
+
+// Saves an itinerary (the draft, by default) as a planned trip: its dates must not
+// overlap another planned trip; it is recorded on the server first (this is when the
+// admin's records and reminders start), then moved from the draft into the planned
+// trips and kept open.
+async function savePlannedTrip(email, data = getItineraryByEmail()[email]) {
+  if (!email || !isItineraryData(data) || !data.itinerary.some((day) => (day?.activities || []).length)) {
+    throw new Error("There is no itinerary to save yet.");
+  }
+  const range = tripDateRange(data);
+  const clash = findOverlappingTrip(email, range.start, range.end, data.meta?.planId);
+  if (clash) throw Object.assign(new Error(tripOverlapMessage(clash)), { overlap: true });
+  const result = await apiRequest("/api/app-itineraries/sync", {
+    method: "POST",
+    body: JSON.stringify(getItinerarySyncPayload(data)),
+  });
+  const meta = { ...(data.meta || {}), serverTripId: result.tripId, planId: data.meta?.planId || newPlanId(), savedAt: new Date().toISOString() };
+  delete meta.isDraft;
+  const saved = { ...data, meta };
+  setPlannedTrips(email, [...getPlannedTrips(email).filter((trip) => trip.meta?.planId !== meta.planId), saved]);
+  if (data.meta?.isDraft || !data.meta?.planId) setItineraryDraft(email, null);
+  const state = itinerarySyncStates.get(Number(result.tripId)) || { lastSynced: "", timer: null, inFlight: false, attempts: 0 };
+  state.lastSynced = JSON.stringify(getItinerarySyncPayload(saved));
+  itinerarySyncStates.set(Number(result.tripId), state);
+  const map = getItineraryByEmail();
+  map[email] = saved;
+  setItineraryByEmail(map);
+  return saved;
+}
+
+// Removes the unsaved draft (nothing was recorded on the server for it).
+function discardItineraryDraft(email) {
+  setItineraryDraft(email, null);
+  const map = getItineraryByEmail();
+  if (map[email]?.meta?.isDraft) {
+    delete map[email];
+    localStorage.setItem(SIDEKICK_KEYS.itineraryByEmail, JSON.stringify(map));
+  }
+  try { document.dispatchEvent(new CustomEvent("sidekick:itinerary-updated", { detail: { email } })); } catch (e) {}
+}
+
+// Removes a planned trip from this phone (and closes it if it was open).
+function removePlannedTripLocally(email, planId) {
+  if (!planId) return;
+  setPlannedTrips(email, getPlannedTrips(email).filter((trip) => trip.meta?.planId !== planId));
+  const map = getItineraryByEmail();
+  if (map[email]?.meta?.planId === planId) {
+    delete map[email];
+    localStorage.setItem(SIDEKICK_KEYS.itineraryByEmail, JSON.stringify(map));
+  }
+}
+
+// ---- "Do this trip again" (Past trips) ---------------------------------------------
+// When a saved trip finishes, this phone keeps a full copy of it (places, photos, map
+// points, costs) so Past trips can plan it again; the server's archive copy only has each
+// stop's name, place and times. Kept by server trip ID: the newest 10, for 60 days.
+const FINISHED_TRIPS_KEY = "sidekick.finishedTripsByEmail.v1";
+const FINISHED_TRIP_LIMIT = 10;
+const FINISHED_TRIP_KEEP_MS = 60 * 86400000;
+
+function keepFinishedTripCopy(email, trip) {
+  const tripId = Number(trip?.meta?.serverTripId);
+  if (!email || !isItineraryData(trip) || !Number.isSafeInteger(tripId) || tripId < 1) return;
+  if (!(tripDateRange(trip).end < localDateValue())) return; // only trips that are over
+  try {
+    const map = readEmailMap(FINISHED_TRIPS_KEY);
+    const now = Date.now();
+    const kept = Object.entries(map[email] || {})
+      .filter(([id, entry]) => Number(id) !== tripId && entry && now - Number(entry.keptAt || 0) < FINISHED_TRIP_KEEP_MS)
+      .concat([[String(tripId), { keptAt: now, trip }]])
+      .sort((a, b) => Number(b[1].keptAt || 0) - Number(a[1].keptAt || 0))
+      .slice(0, FINISHED_TRIP_LIMIT);
+    map[email] = Object.fromEntries(kept);
+    localStorage.setItem(FINISHED_TRIPS_KEY, JSON.stringify(map));
+  } catch (error) { /* storage full or unavailable: Past trips uses the archive copy */ }
+}
+
+function getFinishedTripCopy(email, tripId) {
+  const entry = readEmailMap(FINISHED_TRIPS_KEY)[email]?.[String(Number(tripId))];
+  return isItineraryData(entry?.trip) ? entry.trip : null;
+}
+
+function forgetFinishedTripCopies(email, tripIds) {
+  try {
+    const map = readEmailMap(FINISHED_TRIPS_KEY);
+    if (!map[email]) return;
+    (tripIds || []).forEach((id) => { delete map[email][String(Number(id))]; });
+    if (!Object.keys(map[email]).length) delete map[email];
+    localStorage.setItem(FINISHED_TRIPS_KEY, JSON.stringify(map));
+  } catch (error) { /* storage unavailable */ }
+}
+
+function dateFromValue(value) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || ""));
+  return match ? new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3])) : null;
+}
+
+// Day `index` of a trip that starts on start (a local date), at hours:minutes.
+function tripDayTime(start, index, hours, minutes) {
+  return new Date(start.getFullYear(), start.getMonth(), start.getDate() + index, hours, minutes, 0, 0).getTime();
+}
+
+// An unsaved copy of a finished trip that starts on startDate (YYYY-MM-DD). Every stop
+// keeps its day, its order and its time of day. `full` is the copy kept on this phone
+// (keepFinishedTripCopy); without it, the Past trips entry from the server is used
+// (names, places and times; photos and map points come back as stops are edited).
+function repeatTripData(pastTrip, full, startDate) {
+  const start = dateFromValue(startDate);
+  if (!start) return null;
+  let itinerary;
+  let meta;
+  if (isItineraryData(full)) {
+    const oldStart = dateFromValue(tripDateRange(full).start) || dateFromValue(localDayText(full.meta?.startDate)) || start;
+    itinerary = full.itinerary.map((day, dayIndex) => ({
+      ...day,
+      activities: (day?.activities || []).map((activity) => {
+        const was = new Date(deriveActivityDueAt(activity, new Date(oldStart.getFullYear(), oldStart.getMonth(), oldStart.getDate() + dayIndex)));
+        const dayOffset = Math.round((Date.UTC(was.getFullYear(), was.getMonth(), was.getDate()) - Date.UTC(oldStart.getFullYear(), oldStart.getMonth(), oldStart.getDate())) / 86400000);
+        const dueAt = tripDayTime(start, dayOffset, was.getHours(), was.getMinutes());
+        // A new trip: last time's "done" / "missed" answers don't carry over.
+        const { doneAt, missedAt, ...copy } = activity;
+        return { ...copy, id: createItineraryActivityId(), dueAt, iso: new Date(dueAt).toISOString() };
+      }),
+    }));
+    meta = { ...(full.meta || {}) };
+  } else {
+    const firstDay = dateFromValue(pastTrip?.startDate);
+    const days = Array.isArray(pastTrip?.days) ? pastTrip.days : [];
+    itinerary = days.map((day, dayIndex) => {
+      const dayDate = dateFromValue(day?.date);
+      const offset = firstDay && dayDate
+        ? Math.round((Date.UTC(dayDate.getFullYear(), dayDate.getMonth(), dayDate.getDate()) - Date.UTC(firstDay.getFullYear(), firstDay.getMonth(), firstDay.getDate())) / 86400000)
+        : Math.max(0, Number(day?.dayNumber || dayIndex + 1) - 1);
+      return {
+        activities: (day?.activities || []).filter((activity) => String(activity?.title || "").trim()).map((activity) => {
+          const begins = /^(\d{1,2}):(\d{2})/.exec(String(activity.time || ""));
+          const ends = /^(\d{1,2}):(\d{2})/.exec(String(activity.endTime || ""));
+          const hours = begins ? Number(begins[1]) : 9;
+          const minutes = begins ? Number(begins[2]) : 0;
+          const length = begins && ends ? (Number(ends[1]) * 60 + Number(ends[2])) - (hours * 60 + minutes) : 0;
+          const dueAt = tripDayTime(start, offset, hours, minutes);
+          return {
+            id: createItineraryActivityId(),
+            title: String(activity.title).trim(),
+            location: String(activity.location || "").trim(),
+            category: String(activity.type || "").trim() || "activity",
+            ...(length > 0 ? { durationMinutes: length } : {}),
+            dueAt,
+            iso: new Date(dueAt).toISOString(),
+          };
+        }),
+      };
+    });
+    meta = {
+      destination: String(pastTrip?.destination || "").trim(),
+      ...(pastTrip?.budget ? { budget: String(pastTrip.budget) } : {}),
+    };
+    const title = String(pastTrip?.title || "").trim();
+    if (title && title.toLowerCase() !== `${meta.destination} itinerary`.toLowerCase()) meta.title = title;
+  }
+  if (!itinerary.some((day) => day.activities.length)) return null;
+  const normalized = normalizeItineraryData({ itinerary, meta: { ...meta, startDate } });
+  const range = tripDateRange(normalized);
+  const newMeta = {
+    ...meta,
+    startDate: range.start,
+    endDate: range.end,
+    durationDays: normalized.itinerary.length,
+    // Not saved yet: no server record and no reminders until "Save itinerary".
+    isDraft: true,
+    repeatedFromPastTrip: true,
+  };
+  // The archive keeps the budget as a label ("PHP 5,000 total"): its amount sets the
+  // budget targets and the hotel and restaurant price limits.
+  if (!(Number(newMeta.budgetAmountPhp) > 0)) {
+    const amount = Number(String(newMeta.budget || "").replace(/,/g, "").match(/\d+(\.\d+)?/)?.[0]);
+    if (amount > 0) newMeta.budgetAmountPhp = Math.floor(amount);
+  }
+  // Prices already researched for these places are reused (only new places are searched);
+  // the totals are worked out again for the new dates.
+  ["serverTripId", "planId", "savedAt", "liveTripBudgetCacheKey", "liveTripBudgetCachedAt"].forEach((key) => { delete newMeta[key]; });
+  return { ...normalized, meta: newMeta };
+}
+
+// Why a repeated trip can't start on its dates, or null: the start date has passed,
+// day 1's first stop is already too soon today, or it overlaps a planned trip.
+function repeatTripProblem(email, data) {
+  const range = tripDateRange(data);
+  const today = localDateValue();
+  if (!range.start || range.start < today) {
+    return { title: "Start date has passed", message: "That date has already passed. Choose today or a later date to start your trip." };
+  }
+  const earliest = firstDayStartMinute(range.start);
+  if (earliest !== null) {
+    const firstStop = Math.min(...(data.itinerary || []).flatMap((day) => (day.activities || []).map((activity) => Number(activity.dueAt)))
+      .filter((dueAt) => Number.isFinite(dueAt) && localDateValue(new Date(dueAt)) === today));
+    const first = new Date(firstStop);
+    if (Number.isFinite(firstStop) && first.getHours() * 60 + first.getMinutes() < earliest) {
+      const shown = first.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+      return { title: "Too late to start today", message: `Day 1 of this trip starts at ${shown}, which is too soon or has already passed. Start it tomorrow or later.` };
+    }
+  }
+  const clash = findOverlappingTrip(email, range.start, range.end);
+  if (clash) return { title: "Those dates are taken", message: tripOverlapMessage(clash) };
+  return null;
+}
+
+// Opens a repeated trip as the unsaved itinerary (it replaces any earlier unsaved one).
+function openRepeatedTrip(email, data) {
+  if (!email || !isItineraryData(data)) return false;
+  setItineraryDraft(email, data);
+  const map = getItineraryByEmail();
+  map[email] = data;
+  setItineraryByEmail(map);
+  return true;
+}
+
+// An itinerary from before planned trips existed counts as a saved planned trip.
+function migrateOpenItineraryToPlannedTrips(email) {
+  const map = getItineraryByEmail();
+  const open = map[email];
+  if (!isItineraryData(open) || open.meta?.planId || open.meta?.isDraft) return;
+  const planId = newPlanId();
+  const trip = { ...open, meta: { ...(open.meta || {}), planId } };
+  const list = getPlannedTrips(email);
+  const tripId = Number(open.meta?.serverTripId);
+  const already = Number.isSafeInteger(tripId) && tripId > 0 && list.some((item) => Number(item.meta?.serverTripId) === tripId);
+  if (!already) setPlannedTrips(email, [...list, trip]);
+  map[email] = already ? list.find((item) => Number(item.meta?.serverTripId) === tripId) : trip;
+  localStorage.setItem(SIDEKICK_KEYS.itineraryByEmail, JSON.stringify(map));
+}
+
+try {
+  const signedIn = getAuthSession();
+  if (signedIn?.email) migrateOpenItineraryToPlannedTrips(signedIn.email);
+} catch (error) { /* storage unavailable */ }
+
+// The open itinerary, or the planned trip, with this server trip ID.
+function findTripByServerId(email, tripId) {
+  const open = getItineraryByEmail()[email];
+  if (Number(open?.meta?.serverTripId) === Number(tripId)) return open;
+  return getPlannedTrips(email).find((trip) => Number(trip.meta?.serverTripId) === Number(tripId)) || null;
+}
+
 async function clearItineraryForEmail(email) {
   let map = getItineraryByEmail();
   let itineraryData = map[email];
+  if (itineraryData?.meta?.isDraft) {
+    discardItineraryDraft(email);
+    return;
+  }
+  const planId = itineraryData?.meta?.planId || null;
   if (itineraryData?.itinerary?.length && !itineraryData.meta?.serverTripId) {
     itineraryData = await ensureItineraryMonitored(email, itineraryData);
     map = getItineraryByEmail();
@@ -577,8 +1044,10 @@ async function clearItineraryForEmail(email) {
     }
     itinerarySyncStates.delete(tripId);
   }
+  map = getItineraryByEmail();
   delete map[email];
   localStorage.setItem(SIDEKICK_KEYS.itineraryByEmail, JSON.stringify(map));
+  if (planId) removePlannedTripLocally(email, planId);
   try {
     document.dispatchEvent(new CustomEvent('sidekick:itinerary-updated'));
   } catch (e) {}
@@ -598,9 +1067,13 @@ function clearExpiredItineraryForEmail(email, expectedTripId = null, expectedIti
     if (state?.timer) clearTimeout(state.timer);
     itinerarySyncStates.delete(currentTripId);
   }
+  keepFinishedTripCopy(email, current);
   delete map[email];
   localStorage.setItem(SIDEKICK_KEYS.itineraryByEmail, JSON.stringify(map));
-  window.SidekickCore?.clearItineraryRemindersForEmail?.(email);
+  if (current.meta?.planId) removePlannedTripLocally(email, current.meta.planId);
+  // Reminders for the other planned trips stay; only this trip's are dropped.
+  if (getPlannedTrips(email).length) window.SidekickCore?.syncRemindersFromItinerary?.(email);
+  else window.SidekickCore?.clearItineraryRemindersForEmail?.(email);
   document.dispatchEvent(new CustomEvent('sidekick:itinerary-updated', { detail: { email } }));
   if (window.location.pathname.endsWith('/itinerary.html')) {
     window.setTimeout(() => window.location.reload(), 0);
@@ -651,12 +1124,12 @@ function pickWeighted(items, weightFn, rng = Math.random) {
 }
 
 const INTEREST_KEYWORDS = [
-  { interest: "Beaches", words: ["beach", "island", "coron", "boracay", "el nido", "palawan"] },
+  { interest: "Beaches", words: ["beach", "island", "laiya", "nasugbu", "calatagan", "masasa", "fortune island"] },
   { interest: "Water Sports", words: ["snorkel", "scuba", "kayak", "water", "diving", "boat"] },
   { interest: "Island Hopping", words: ["hop", "hopping", "cruise", "tour"] },
-  { interest: "Mountains", words: ["mountain", "hike", "hiking", "banaue", "rice terraces", "scenery"] },
+  { interest: "Mountains", words: ["mountain", "hike", "hiking", "batulao", "maculot", "taal volcano", "scenery"] },
   { interest: "Hiking", words: ["trail", "hiking", "trek", "walk"] },
-  { interest: "Historical Sites", words: ["history", "museum", "intramuros", "heritage"] },
+  { interest: "Historical Sites", words: ["history", "museum", "taal", "heritage", "church", "basilica", "lighthouse"] },
   { interest: "Local Cuisine", words: ["food", "eat", "cuisine", "street food", "restaurant"] },
   { interest: "Nightlife", words: ["night", "bar", "music", "nightlife", "party"] },
   { interest: "Shopping", words: ["shop", "mall", "market", "souvenir"] },
@@ -680,20 +1153,21 @@ function inferInterestsFromMessage(message, selectedInterests) {
   return ordered.length ? ordered : (selectedInterests || []).slice(0, 3);
 }
 
-// Simple, offline “knowledge base” tagged by interests.
+// Simple, offline “knowledge base” tagged by interests. Sidekick covers the province of
+// Batangas only, so every place here is in Batangas.
 const PLACES = [
-  { name: "El Nido", region: "Palawan", lat: 11.2022, lng: 119.4573, tags: ["Beaches", "Island Hopping", "Photography", "Water Sports"] },
-  { name: "Coron", region: "Palawan", lat: 12.0022, lng: 120.2043, tags: ["Island Hopping", "Beaches", "Water Sports"] },
-  { name: "Boracay", region: "Aklan", lat: 11.9674, lng: 121.9248, tags: ["Beaches", "Nightlife", "Water Sports", "Shopping"] },
-  { name: "Banaue Rice Terraces", region: "Ifugao", lat: 16.9230, lng: 121.0561, tags: ["Mountains", "Hiking", "Photography", "Nature & Wildlife"] },
-  { name: "Sagada", region: "Mountain Province", lat: 17.0833, lng: 120.9000, tags: ["Mountains", "Hiking", "Photography", "Historical Sites"] },
-  { name: "Intramuros", region: "Manila", lat: 14.5896, lng: 120.9747, tags: ["Historical Sites", "Photography", "Local Cuisine"] },
-  { name: "Rizal Park", region: "Manila", lat: 14.5826, lng: 120.9790, tags: ["Historical Sites", "Photography", "Nature & Wildlife"] },
-  { name: "Binondo Food Walk", region: "Manila", lat: 14.6017, lng: 120.9736, tags: ["Local Cuisine", "Shopping", "Historical Sites"] },
-  { name: "Makati Food District", region: "Metro Manila", lat: 14.5547, lng: 121.0244, tags: ["Local Cuisine", "Nightlife"] },
-  { name: "Cebu Waterfront", region: "Cebu", lat: 10.3157, lng: 123.8854, tags: ["Beaches", "Photography", "Shopping"] },
-  { name: "Siargao Cloud 9", region: "Surigao del Norte", lat: 9.8135, lng: 126.1610, tags: ["Beaches", "Water Sports", "Nightlife", "Photography"] },
-  { name: "Chocolate Hills (Bohol)", region: "Bohol", lat: 9.8293, lng: 124.1694, tags: ["Nature & Wildlife", "Photography", "Mountains"] },
+  { name: "Taal Volcano", region: "Batangas", lat: 14.0113, lng: 120.9980, tags: ["Mountains", "Hiking", "Photography", "Nature & Wildlife"] },
+  { name: "Anilao, Mabini", region: "Batangas", lat: 13.7603, lng: 120.9254, tags: ["Water Sports", "Beaches", "Island Hopping", "Photography"] },
+  { name: "Laiya Beach, San Juan", region: "Batangas", lat: 13.6697, lng: 121.4022, tags: ["Beaches", "Water Sports", "Nightlife"] },
+  { name: "Fortune Island, Nasugbu", region: "Batangas", lat: 14.0581, lng: 120.4956, tags: ["Island Hopping", "Beaches", "Photography"] },
+  { name: "Masasa Beach, Tingloy", region: "Batangas", lat: 13.6550, lng: 120.8960, tags: ["Beaches", "Island Hopping", "Water Sports"] },
+  { name: "Mount Batulao, Nasugbu", region: "Batangas", lat: 14.0400, lng: 120.8000, tags: ["Mountains", "Hiking", "Photography", "Nature & Wildlife"] },
+  { name: "Mount Maculot, Cuenca", region: "Batangas", lat: 13.9200, lng: 121.0450, tags: ["Mountains", "Hiking", "Photography"] },
+  { name: "Taal Heritage Town", region: "Batangas", lat: 13.8800, lng: 120.9230, tags: ["Historical Sites", "Photography", "Local Cuisine", "Shopping"] },
+  { name: "Basilica of St. Martin de Tours, Taal", region: "Batangas", lat: 13.8817, lng: 120.9236, tags: ["Historical Sites", "Photography"] },
+  { name: "Cape Santiago Lighthouse, Calatagan", region: "Batangas", lat: 13.7660, lng: 120.6560, tags: ["Historical Sites", "Photography", "Beaches"] },
+  { name: "Lipa City Food Trip", region: "Batangas", lat: 13.9411, lng: 121.1631, tags: ["Local Cuisine", "Shopping", "Nightlife"] },
+  { name: "Batangas City Lomi Houses", region: "Batangas", lat: 13.7565, lng: 121.0583, tags: ["Local Cuisine"] },
 ];
 
 function scorePlaceByInterests(place, interests) {
@@ -704,21 +1178,21 @@ function scorePlaceByInterests(place, interests) {
   return score;
 }
 
-// Top, widely known tourist spots across the Philippines. Used for the general
+// Top, widely known tourist spots in Batangas. Used for the general
 // "Popular destinations" section (independent of the user's preferences).
 const POPULAR_PH_SPOTS = [
-  { name: "Boracay", region: "Aklan", lat: 11.9674, lng: 121.9248 },
-  { name: "El Nido", region: "Palawan", lat: 11.1784, lng: 119.3932 },
-  { name: "Puerto Princesa Underground River", region: "Palawan", lat: 10.1666, lng: 118.9201 },
-  { name: "Chocolate Hills", region: "Bohol", lat: 9.8293, lng: 124.1694 },
-  { name: "Banaue Rice Terraces", region: "Ifugao", lat: 16.9230, lng: 121.0561 },
-  { name: "Mayon Volcano", region: "Albay", lat: 13.2574, lng: 123.6856 },
-  { name: "Vigan Heritage Village", region: "Ilocos Sur", lat: 17.5747, lng: 120.3869 },
-  { name: "Intramuros", region: "Manila", lat: 14.5896, lng: 120.9747 },
-  { name: "Siargao Island", region: "Surigao del Norte", lat: 9.8482, lng: 126.0458 },
-  { name: "Coron Island", region: "Palawan", lat: 11.9986, lng: 120.2043 },
   { name: "Taal Volcano", region: "Batangas", lat: 14.0113, lng: 120.9980 },
-  { name: "Kawasan Falls", region: "Cebu", lat: 9.8000, lng: 123.3750 },
+  { name: "Anilao, Mabini", region: "Batangas", lat: 13.7603, lng: 120.9254 },
+  { name: "Laiya Beach, San Juan", region: "Batangas", lat: 13.6697, lng: 121.4022 },
+  { name: "Fortune Island, Nasugbu", region: "Batangas", lat: 14.0581, lng: 120.4956 },
+  { name: "Masasa Beach, Tingloy", region: "Batangas", lat: 13.6550, lng: 120.8960 },
+  { name: "Taal Heritage Town", region: "Batangas", lat: 13.8800, lng: 120.9230 },
+  { name: "Mount Batulao, Nasugbu", region: "Batangas", lat: 14.0400, lng: 120.8000 },
+  { name: "Mount Maculot, Cuenca", region: "Batangas", lat: 13.9200, lng: 121.0450 },
+  { name: "Cape Santiago Lighthouse, Calatagan", region: "Batangas", lat: 13.7660, lng: 120.6560 },
+  { name: "Malabrigo Lighthouse, Lobo", region: "Batangas", lat: 13.5960, lng: 121.2610 },
+  { name: "San Sebastian Cathedral, Lipa", region: "Batangas", lat: 13.9411, lng: 121.1631 },
+  { name: "Nasugbu Beaches", region: "Batangas", lat: 14.0670, lng: 120.6330 },
 ];
 
 function buildPopularDestinations() {
@@ -745,7 +1219,23 @@ function getPreferredDestinations(prefs) {
     const known = PLACES.find((p) => p.name.toLowerCase() === label.toLowerCase() || p.region.toLowerCase() === label.toLowerCase());
     push(known ? { name: label, region: known.region, lat: known.lat, lng: known.lng } : { name: label });
   }
-  return out.slice(0, 5);
+  // Sidekick covers Batangas only: destinations picked elsewhere (before the app was
+  // limited to Batangas) are left out of Home.
+  return out.filter(isBatangasDestination).slice(0, 5);
+}
+
+// A saved destination in Batangas: its name or area says Batangas, its pin is in the
+// province's box, or it is one of the app's own Batangas places.
+function isBatangasDestination(dest) {
+  const text = `${dest?.name || ""} ${dest?.region || ""} ${dest?.address || ""}`;
+  if (/\bbatangas\b/i.test(text)) return true;
+  const lat = Number(dest?.lat);
+  const lng = Number(dest?.lng);
+  if (dest?.lat != null && dest?.lng != null && Number.isFinite(lat) && Number.isFinite(lng)) {
+    return lat >= 13.45 && lat <= 14.30 && lng >= 120.45 && lng <= 121.55
+      && !/\b(cavite|laguna|quezon|mindoro|manila|rizal)\b/i.test(text);
+  }
+  return PLACES.some((place) => place.name.toLowerCase() === String(dest?.name || "").trim().toLowerCase());
 }
 
 function buildDashboardRecommendations(prefs) {
@@ -756,7 +1246,7 @@ function buildDashboardRecommendations(prefs) {
   // The user's chosen destinations come first, then interest-matched places.
   const preferredDestinations = getPreferredDestinations(prefs).map((d) => ({
     ...d,
-    region: d.region || "Philippines",
+    region: d.region || "Batangas",
     tags: d.tags || ["Preferred destination"],
   }));
   const preferredNames = new Set(preferredDestinations.map((d) => d.name.toLowerCase()));
@@ -766,13 +1256,14 @@ function buildDashboardRecommendations(prefs) {
       .sort((a, b) => scorePlaceByInterests(b, interests) - scorePlaceByInterests(a, interests)),
   ).slice(0, 8);
 
-  // "Popular" is a general list of top Philippine tourist spots.
+  // "Popular" is a general list of top tourist spots in Batangas.
   const popularDestinations = buildPopularDestinations();
 
   return { recommended, popularDestinations };
 }
 
 const REGION_CLUSTER = {
+  Batangas: "Luzon",
   Manila: "Luzon",
   "Metro Manila": "Luzon",
   Ifugao: "Luzon",
@@ -907,6 +1398,9 @@ function normalizeItineraryData(itineraryData) {
   const originalMeta = itineraryData.meta || {};
   const baseStart = originalMeta.startDate ? new Date(originalMeta.startDate) : new Date();
   const dayGroups = new Map();
+  // Meal and rest breaks belong to a day, not to a stop: remember which original day
+  // each stop came from, so the breaks can follow their day after regrouping.
+  const originalDayOf = new Map();
 
   itineraryData.itinerary.forEach((day, dayIndex) => {
     const fallbackDate = new Date(baseStart);
@@ -924,6 +1418,7 @@ function normalizeItineraryData(itineraryData) {
       const dayKey = startOfLocalDay(dueAt);
       if (!dayGroups.has(dayKey)) dayGroups.set(dayKey, []);
       dayGroups.get(dayKey).push(normalizedActivity);
+      originalDayOf.set(normalizedActivity, dayIndex);
     });
   });
 
@@ -944,13 +1439,25 @@ function normalizeItineraryData(itineraryData) {
       if (sortedDayKeys.every((key) => filled.includes(key))) orderedDayKeys = filled;
     }
   }
+  const usedBreakDays = new Set();
   const normalizedDays = orderedDayKeys.map((dayKey, index) => {
     const activities = (dayGroups.get(dayKey) || []).slice().sort((a, b) => Number(a.dueAt || 0) - Number(b.dueAt || 0));
+    // The breaks of the original day most of these stops came from (each used once).
+    const counts = new Map();
+    activities.forEach((activity) => {
+      const from = originalDayOf.get(activity);
+      if (from !== undefined) counts.set(from, (counts.get(from) || 0) + 1);
+    });
+    const source = Array.from(counts.entries())
+      .filter(([from]) => !usedBreakDays.has(from) && Array.isArray(itineraryData.itinerary[from]?.breaks))
+      .sort((a, b) => b[1] - a[1] || a[0] - b[0])[0]?.[0];
+    if (source !== undefined) usedBreakDays.add(source);
     return {
       dayNumber: index + 1,
       dateLabel: formatItineraryDayLabel(new Date(dayKey)),
       ...estimateDayBudgetRange(activities),
       activities,
+      ...(source !== undefined ? { breaks: itineraryData.itinerary[source].breaks } : {}),
     };
   });
 
@@ -988,7 +1495,14 @@ function updateItineraryActivitySchedule(email, { activityId, parentDueAt, paren
   if (!email || !newDueAt) return null;
 
   const map = getItineraryByEmail();
-  const itineraryData = normalizeItineraryData(map[email]);
+  // The activity is in the open itinerary or in one of the planned trips.
+  const containsActivity = (data) => (data?.itinerary || []).some((day) => (day.activities || []).some((activity) => (
+    activityId ? activity.id === activityId
+      : Number(activity?.dueAt || 0) === Number(parentDueAt || 0) && String(activity?.title || "") === String(parentTitle || "")
+  )));
+  const source = containsActivity(map[email]) ? map[email] : getPlannedTrips(email).find(containsActivity);
+  const isOpen = source === map[email];
+  const itineraryData = normalizeItineraryData(source);
   if (!itineraryData?.itinerary?.length) return null;
 
   let matchedActivity = null;
@@ -1010,8 +1524,14 @@ function updateItineraryActivitySchedule(email, { activityId, parentDueAt, paren
 
   if (!matchedActivity) return null;
 
-  map[email] = normalizeItineraryData(itineraryData);
-  setItineraryByEmail(map);
+  const updated = normalizeItineraryData(itineraryData);
+  if (isOpen) {
+    map[email] = updated;
+    setItineraryByEmail(map);
+  } else {
+    setPlannedTrips(email, getPlannedTrips(email).map((trip) => (trip.meta?.planId === updated.meta?.planId ? updated : trip)));
+    scheduleItinerarySync(email, updated);
+  }
   return {
     activityId: matchedActivity.id,
     dueAt: matchedActivity.dueAt,
@@ -1196,6 +1716,9 @@ window.SidekickCore = {
   escapeHtml,
   hashPasswordSHA256,
   apiRequest,
+  friendlyError,
+  isOnline,
+  waitForOnline,
   getUsers,
   setUsers,
   getAuthSession,
@@ -1240,6 +1763,23 @@ window.SidekickCore = {
   isPerfLiteMode,
   isFeatureOn,
   checkTripBudget,
+  getPlannedTrips,
+  getItineraryDraft,
+  openTripForEmail,
+  savePlannedTrip,
+  discardItineraryDraft,
+  findOverlappingTrip,
+  tripOverlapMessage,
+  tripDateRange,
+  tripDisplayName,
+  shortDateRangeText,
+  getFinishedTripCopy,
+  forgetFinishedTripCopies,
+  repeatTripData,
+  repeatTripProblem,
+  openRepeatedTrip,
+  firstDayStartMinute,
+  localDateValue,
   describeUnrealisticBudget,
   tripBudgetKey,
 };
@@ -1255,13 +1795,43 @@ function tripBudgetKey({ destination, startDate, endDate, budgetAmountPhp }) {
 
 // Resolves to the backend's result, or null when the check could not run
 // (offline, rate limited...). A failed check never blocks building a trip.
-async function checkTripBudget({ destination, lat = null, lng = null, startDate, endDate, budgetAmountPhp }) {
+// The most a trip budget may be per day. Anything above it (₱1,000,000 for 3 days, say)
+// is not a real budget, so no itinerary is built for it. The server checks this too.
+const MAX_BUDGET_PER_DAY_PHP = 100000;
+
+// Today's date on this phone, as YYYY-MM-DD.
+function localDateValue(date = new Date()) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+// For a trip that starts today: the earliest time day 1 can begin, in minutes after
+// midnight (about half an hour from now, on the quarter hour). null for a later start
+// date. A value of 1440 or more means today is already over.
+function firstDayStartMinute(startDate, now = new Date()) {
+  if (String(startDate || "").slice(0, 10) !== localDateValue(now)) return null;
+  return Math.ceil((now.getHours() * 60 + now.getMinutes() + 30) / 15) * 15;
+}
+
+function inclusiveTripDays(startDate, endDate) {
+  const start = Date.parse(`${String(startDate).slice(0, 10)}T00:00:00Z`);
+  const end = Date.parse(`${String(endDate).slice(0, 10)}T00:00:00Z`);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return 0;
+  return Math.round((end - start) / 86400000) + 1;
+}
+
+async function checkTripBudget({ destination, placeId = "", lat = null, lng = null, startDate, endDate, budgetAmountPhp }) {
   const key = tripBudgetKey({ destination, startDate, endDate, budgetAmountPhp });
   if (tripBudgetResults.has(key)) return tripBudgetResults.get(key);
+  // Far too much money for the trip: decided right here, without asking the server.
+  const days = inclusiveTripDays(startDate, endDate);
+  const amount = Number(budgetAmountPhp);
+  if (days >= 1 && Number.isFinite(amount) && amount > MAX_BUDGET_PER_DAY_PHP * days) {
+    return { checked: true, realistic: false, tooHigh: true, budgetAmountPhp: amount, days, maximumPhp: MAX_BUDGET_PER_DAY_PHP * days };
+  }
   try {
     const result = await apiRequest("/api/trip/budget-check", {
       method: "POST",
-      body: JSON.stringify({ destination, lat, lng, startDate, endDate, budgetAmountPhp }),
+      body: JSON.stringify({ destination, placeId, lat, lng, startDate, endDate, budgetAmountPhp }),
     });
     if (result && result.checked) tripBudgetResults.set(key, result);
     return result || null;
@@ -1274,7 +1844,18 @@ async function checkTripBudget({ destination, lat = null, lng = null, startDate,
 // Plain-language explanation of an unrealistic budget for an error message.
 function describeUnrealisticBudget(result, destination) {
   const peso = (amount) => `₱${Math.round(Number(amount) || 0).toLocaleString()}`;
+  if (result.outOfScope) {
+    return { title: "Batangas only", message: result.message || "Sidekick plans trips in the province of Batangas only. Choose a place in Batangas.", details: [] };
+  }
   const days = Number(result.days) || 1;
+  if (result.tooHigh) {
+    const maximum = Number(result.maximumPhp) || MAX_BUDGET_PER_DAY_PHP * days;
+    return {
+      title: "This budget is too high",
+      message: `${peso(result.budgetAmountPhp)} is far more than ${days} day${days === 1 ? "" : "s"} in ${destination} could use, so Sidekick can’t plan a realistic trip with it. Enter a budget of up to ${peso(maximum)} (${peso(MAX_BUDGET_PER_DAY_PHP)} a day).`,
+      details: [["Your budget", peso(result.budgetAmountPhp)], ["Trip length", `${days} day${days === 1 ? "" : "s"}`], ["Highest budget Sidekick plans for", peso(maximum)]],
+    };
+  }
   const meals = result.meals || {};
   const lodging = result.lodging || {};
   const details = [["Your budget", peso(result.budgetAmountPhp)]];
@@ -1304,27 +1885,41 @@ function startAppPresenceHeartbeat() {
   async function verifyStoredItinerary() {
     const session = getAuthSession();
     if (!session?.email || !session?.apiToken || document.visibilityState !== "visible" || itineraryCheckInProgress) return;
-    const itinerary = getItineraryByEmail()[session.email];
-    const tripId = Number(itinerary?.meta?.serverTripId);
-    const hasServerTripId = Number.isSafeInteger(tripId) && tripId > 0;
+    const email = session.email;
+    const trips = getPlannedTrips(email);
+    const draft = getItineraryDraft(email);
+    if (!trips.length && !draft) return;
     itineraryCheckInProgress = true;
     try {
-      const query = hasServerTripId ? `?tripId=${encodeURIComponent(tripId)}` : '';
-      const retention = await apiRequest(`/api/app-itineraries/retention${query}`);
-      const endDate = String(itinerary?.meta?.endDate || '').slice(0, 10);
-      const passedRetentionDate = /^\d{4}-\d{2}-\d{2}$/.test(endDate)
-        && endDate < String(retention.expiredBeforeDate || '');
-      if (!retention.tripAvailable || passedRetentionDate) {
-        clearExpiredItineraryForEmail(
-          session.email,
-          hasServerTripId ? tripId : null,
-          hasServerTripId ? null : itinerary,
-        );
+      let removed = false;
+      // Each planned trip: gone from the server (expired or deleted), or past its last day + retention.
+      for (const trip of trips) {
+        const tripId = Number(trip.meta?.serverTripId);
+        const hasServerTripId = Number.isSafeInteger(tripId) && tripId > 0;
+        const retention = await apiRequest(`/api/app-itineraries/retention${hasServerTripId ? `?tripId=${encodeURIComponent(tripId)}` : ""}`);
+        const endDate = tripDateRange(trip).end;
+        const passedRetentionDate = /^\d{4}-\d{2}-\d{2}$/.test(endDate) && endDate < String(retention.expiredBeforeDate || "");
+        if ((hasServerTripId && !retention.tripAvailable) || passedRetentionDate) {
+          keepFinishedTripCopy(email, trip);
+          removePlannedTripLocally(email, trip.meta?.planId);
+          removed = true;
+        }
+      }
+      // A draft whose last day has already gone by is no longer useful.
+      if (draft && tripDateRange(draft).end && tripDateRange(draft).end < localDateValue()) {
+        discardItineraryDraft(email);
+        removed = true;
+      }
+      if (removed) {
+        if (getPlannedTrips(email).length) window.SidekickCore?.syncRemindersFromItinerary?.(email);
+        else window.SidekickCore?.clearItineraryRemindersForEmail?.(email);
+        document.dispatchEvent(new CustomEvent("sidekick:itinerary-updated", { detail: { email } }));
+        if (window.location.pathname.endsWith("/itinerary.html")) window.setTimeout(() => window.location.reload(), 0);
       }
       lastItineraryCheckErrorAt = 0;
     } catch (error) {
       if (Date.now() - lastItineraryCheckErrorAt > 60_000) {
-        console.warn("Unable to verify the saved itinerary's retention status:", error.message);
+        console.warn("Unable to verify the saved itineraries' retention status:", error.message);
         lastItineraryCheckErrorAt = Date.now();
       }
     } finally {
@@ -1430,7 +2025,7 @@ if (document.readyState === "loading") {
     } catch (e) {}
 
     if (overlayHeight > 0) {
-      container.style.paddingBottom = `calc(${overlayHeight}px + env(safe-area-inset-bottom) + 12px)`;
+      container.style.paddingBottom = `calc(${overlayHeight}px + var(--sk-safe-bottom, env(safe-area-inset-bottom)) + 12px)`;
     } else {
       // restore default padding from CSS (remove inline override)
       container.style.paddingBottom = '';
@@ -1769,7 +2364,7 @@ if (document.readyState === "loading") {
         }],
       });
     } catch (e) {
-      return { ok: false, message: `The test notification could not be scheduled: ${e?.message || 'unknown error'}` };
+      return { ok: false, message: 'The test notification could not be sent. Please check that notifications are allowed for Sidekick, then try again.' };
     }
     let exactNote = '';
     try {
@@ -2040,11 +2635,18 @@ if (document.readyState === "loading") {
 
   function syncRemindersFromItinerary(email) {
     try {
+      // Reminders come from every planned (saved) trip; an unsaved draft has none.
       const map = getItineraryByEmail();
-      const data = normalizeItineraryData(map[email]);
-      if (!data || !data.itinerary || !Array.isArray(data.itinerary)) return;
-      map[email] = data;
-      setItineraryByEmail(map);
+      if (map[email]?.meta?.planId) {
+        map[email] = normalizeItineraryData(map[email]);
+        setItineraryByEmail(map);
+      }
+      const stored = getPlannedTrips(email);
+      const trips = stored.map((trip) => normalizeItineraryData(trip)).filter((trip) => trip && Array.isArray(trip.itinerary));
+      // Activities given an ID just now keep it, so each reminder keeps its on/off state.
+      if (stored.some((trip) => trip.itinerary.some((day) => (day?.activities || []).some((activity) => !activity?.id)))) {
+        setPlannedTrips(email, trips);
+      }
 
       const existing = getRemindersFor(email) || [];
       const manualReminders = existing.filter((r) => r.type !== 'Itinerary' && !r.itineraryActivityId);
@@ -2055,7 +2657,7 @@ if (document.readyState === "loading") {
       const now = Date.now();
       const nextItineraryReminders = [];
 
-      data.itinerary.forEach((day) => {
+      trips.forEach((data) => data.itinerary.forEach((day) => {
         const activities = day.activities || [];
         activities.forEach((act) => {
           const dueAt = Number(act?.dueAt || 0);
@@ -2084,7 +2686,7 @@ if (document.readyState === "loading") {
             });
           });
         });
-      });
+      }));
 
       const list = manualReminders.concat(nextItineraryReminders).sort((a, b) => Number(a.dueAt || 0) - Number(b.dueAt || 0));
       setRemindersFor(email, list);

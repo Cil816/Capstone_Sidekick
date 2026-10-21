@@ -3,7 +3,9 @@
     display: flex;
     flex-direction: column;
     /* Give the message list a bounded flex area so it becomes the scroll container. */
-    height: calc(100dvh - var(--bottom-overlay-height, var(--nav-height)) - env(safe-area-inset-bottom));
+    /* Reaches up behind the status bar (full-screen layout); the header starts below it. */
+    height: calc(100dvh - var(--bottom-overlay-height, var(--nav-height)) - var(--sk-safe-bottom, env(safe-area-inset-bottom)));
+    margin-top: calc(-1 * var(--sk-safe-top, 0px));
     min-height: 0;
     padding-bottom: 0;
     overflow: hidden;
@@ -60,7 +62,7 @@
     overflow-y: auto;
     min-height: 0;
     padding: 24px;
-    padding-bottom: calc(var(--bottom-overlay-height, var(--nav-height, 72px)) + 80px + env(safe-area-inset-bottom));
+    padding-bottom: calc(var(--bottom-overlay-height, var(--nav-height, 72px)) + 80px + var(--sk-safe-bottom, env(safe-area-inset-bottom)));
     display: flex;
     flex-direction: column;
     gap: 16px;
@@ -153,7 +155,7 @@
 
 .chat-input-container {
     position: fixed;
-    bottom: calc(var(--bottom-overlay-height, var(--nav-height)) + env(safe-area-inset-bottom) + 8px);
+    bottom: calc(var(--bottom-overlay-height, var(--nav-height)) + var(--sk-safe-bottom, env(safe-area-inset-bottom)) + 8px);
     left: 0;
     right: 0;
     max-width: 448px;
@@ -345,7 +347,7 @@
    Now it sits on a solid strip that reaches down behind the nav bar. */
 @media (max-width: 599px) {
     .chat-input-container {
-        bottom: calc(var(--nav-height) + 14px + env(safe-area-inset-bottom));
+        bottom: calc(var(--nav-height) + 14px + var(--sk-safe-bottom, env(safe-area-inset-bottom)));
         z-index: 9000;
         padding: 8px 12px;
         gap: 10px;
@@ -362,7 +364,7 @@
         left: 0;
         right: 0;
         top: 100%;
-        height: calc(var(--nav-height) + 14px + env(safe-area-inset-bottom));
+        height: calc(var(--nav-height) + 14px + var(--sk-safe-bottom, env(safe-area-inset-bottom)));
         background: #f7fcfd;
         pointer-events: none;
     }
@@ -398,3 +400,8 @@
 
 /* New messages ease in */
 .message { animation: skRise 260ms cubic-bezier(.22, .9, .35, 1) backwards; }
+
+/* Full-screen layout: the header panel also fills the strip behind the status bar. */
+.chat-screen > .chat-header {
+    padding-top: calc(16px + var(--sk-safe-top, 0px));
+}
