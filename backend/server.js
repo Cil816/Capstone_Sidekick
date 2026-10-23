@@ -106,7 +106,10 @@ if (forceHttps) {
 const ADMIN_CONTENT_SECURITY_POLICY = [
   "default-src 'self'",
   "script-src 'self'",
-  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  // Style sheets and <style> blocks only from this site and Google Fonts. Inline
+  // style="..." attributes (chart bars, progress widths) stay allowed: they can't run code.
+  "style-src 'self' https://fonts.googleapis.com",
+  "style-src-attr 'unsafe-inline'",
   "font-src 'self' https://fonts.gstatic.com",
   "img-src 'self' data:",
   "connect-src 'self'",
@@ -126,6 +129,9 @@ app.use((req, res, next) => {
   if (req.path === '/admin' || req.path.startsWith('/admin/') || (isProduction && !req.path.startsWith('/api/'))) {
     res.set('Content-Security-Policy', ADMIN_CONTENT_SECURITY_POLICY);
     res.set('X-Frame-Options', 'DENY');
+    // Admin pages and files may only be loaded by the admin website itself. (Not set on
+    // /api/: the phone app loads place photos from it.)
+    res.set('Cross-Origin-Resource-Policy', 'same-origin');
   }
   if (req.path.startsWith('/api/')) {
     // Routes such as /api/maps/photo may replace this with their own caching.
@@ -178,6 +184,7 @@ if (isProduction) {
     '/travel-plans': 'admin-itineraries.html',
     '/reports': 'admin-analytics.html',
     '/reviews': 'admin-reviews.html',
+    '/popular-places': 'admin-popular.html',
     '/activity': 'admin-activity.html',
     '/system': 'admin-integrations.html',
     '/api-usage': 'admin-usage.html',

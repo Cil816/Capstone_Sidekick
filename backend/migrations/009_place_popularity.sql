@@ -30,6 +30,11 @@ BEGIN
     );
 END;
 
+-- Every usage row belongs to a counted place.
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_place_usage_popular_places')
+    ALTER TABLE dbo.place_usage ADD CONSTRAINT FK_place_usage_popular_places
+        FOREIGN KEY (place_key) REFERENCES dbo.popular_places (place_key);
+
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_place_usage_place_user' AND object_id = OBJECT_ID(N'dbo.place_usage'))
     CREATE INDEX IX_place_usage_place_user ON dbo.place_usage (place_key, user_id);
 
