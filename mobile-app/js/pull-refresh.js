@@ -11,6 +11,12 @@
   var distance = 0;
   var reloading = false;
   var indicator = null;
+  var frame = 0;
+
+  // The phone's own over-scroll effect (and a browser's built-in pull-to-refresh) is
+  // turned off so it doesn't play under this one. This lets the touch listeners stay
+  // "passive": the page scrolls without waiting for this script on every finger move.
+  try { document.documentElement.style.overscrollBehaviorY = 'none'; } catch (e) {}
 
   function getIndicator() {
     if (indicator && indicator.isConnected) return indicator;
@@ -80,11 +86,11 @@
       else if (dy < -START_SLOP || Math.abs(dx) > START_SLOP) { start = null; return; } // scroll up or swipe
       else return;
     }
-    // Resistance: the indicator moves about half as far as the finger.
+    // Resistance: the indicator moves about half as far as the finger. Drawn once per
+    // screen frame, however many touch events arrive.
     distance = Math.max(0, Math.min(MAX_PULL, dy * 0.5));
-    if (event.cancelable) event.preventDefault(); // no page bounce while pulling
-    show(distance, true);
-  }, { passive: false });
+    if (!frame) frame = window.requestAnimationFrame(function () { frame = 0; if (pulling) show(distance, true); });
+  }, { passive: true });
 
   function finish() {
     if (!start) return;

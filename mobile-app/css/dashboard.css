@@ -480,6 +480,40 @@
     grid-column: 1 / -1;
 }
 
+.destination-route-controls .destination-use-location {
+    grid-column: 2;
+    justify-self: start;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 32px;
+    padding: 4px 10px;
+    border: 1px solid #b6dfe6;
+    border-radius: 999px;
+    background: #eef9fb;
+    color: #1f7f9c;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.destination-route-controls .destination-use-location svg {
+    width: 15px;
+    height: 15px;
+    flex: none;
+}
+
+.destination-route-controls .destination-use-location:disabled {
+    opacity: .6;
+    cursor: default;
+}
+
+html[data-theme="dark"] .destination-route-controls .destination-use-location {
+    border-color: hsl(189, 35%, 30%);
+    background: hsl(189, 35%, 16%);
+    color: #8fd8e6;
+}
+
 .development-place-label {
     display: inline-block;
     margin-top: 4px;
@@ -577,7 +611,8 @@
     font-size: 12px;
 }
 
-.destination-plan-field input {
+.destination-plan-field input,
+.destination-plan-field select {
     width: 100%;
     min-width: 0;
     min-height: 40px;
@@ -588,7 +623,10 @@
     color: #1f2937;
 }
 
-.destination-plan-field input:focus {
+.destination-plan-field select { font: inherit; font-size: 14px; }
+
+.destination-plan-field input:focus,
+.destination-plan-field select:focus {
     outline: 2px solid #6b8cae;
     outline-offset: 1px;
 }
@@ -654,7 +692,8 @@
     }
 
     .destination-origin-status,
-    .destination-origin-results {
+    .destination-origin-results,
+    .destination-route-controls .destination-use-location {
         grid-column: 1;
     }
 
@@ -710,6 +749,29 @@
 
 .see-all-screen[hidden] {
     display: none;
+}
+
+/* Opens like a new screen: slides in from the right, and back out when closed. */
+.see-all-screen:not([hidden]) {
+    animation: skSeeAllIn 320ms cubic-bezier(.22, .9, .35, 1) backwards;
+}
+
+.see-all-screen.is-closing {
+    animation: skSeeAllOut 240ms cubic-bezier(.4, 0, 1, 1) forwards;
+    pointer-events: none;
+}
+
+@keyframes skSeeAllIn {
+    from { transform: translateX(100%); }
+}
+
+@keyframes skSeeAllOut {
+    to { transform: translateX(100%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .see-all-screen:not([hidden]),
+    .see-all-screen.is-closing { animation: none; }
 }
 
 .see-all-header {
@@ -956,3 +1018,7 @@
     margin-top: calc(-1 * var(--sk-safe-top, 0px));
     padding-top: var(--sk-safe-top, 0px);
 }
+
+/* "Generate itinerary" form: start and end dates side by side, the budget below. */
+.destination-plan-field-wide { grid-column: 1 / -1; }
+.destination-plan-field input[type="date"] { font: inherit; font-size: 14px; }

@@ -9,6 +9,20 @@ let _originMarker = null;
 let _routePolyline = null;
 let _selectedPlace = null;
 let _selectedOriginPlace = null;
+// Set once the traveler has used "Use my current location": from then on it is used
+// automatically when a place is opened (if location is still allowed).
+const USE_CURRENT_LOCATION_KEY = "sidekick.useCurrentLocation.v1";
+
+// Whether the phone's location can be used without asking: location is already
+// allowed for the app, or the traveler chose it before (and hasn't blocked it since).
+async function currentLocationAllowed() {
+  if (!navigator.geolocation) return false;
+  let state = "";
+  try { state = (await navigator.permissions?.query({ name: "geolocation" }))?.state || ""; } catch (error) {}
+  if (state === "granted") return true;
+  if (state === "denied") return false;
+  try { return localStorage.getItem(USE_CURRENT_LOCATION_KEY) === "1"; } catch (error) { return false; }
+}
 let _originSearchTimer = null;
 let _originSearchRequestId = 0;
 const IS_PERF_LITE = Boolean(window.SidekickCore && window.SidekickCore.isPerfLiteMode && window.SidekickCore.isPerfLiteMode());
@@ -88,9 +102,9 @@ function buildPreferenceKeywords(prefs, searchQuery = "") {
     Beaches: "famous beaches",
     Hiking: "hiking trails and peaks",
     "Historical Sites": "historical landmarks",
-    "Local Cuisine": "cultural heritage attractions",
-    Nightlife: "scenic city landmarks",
-    Shopping: "heritage districts and landmarks",
+    "Local Cuisine": "food heritage towns and night food markets",
+    Nightlife: "night markets and sunset viewpoints",
+    Shopping: "heritage towns and local crafts",
     Photography: "scenic viewpoints",
     "Nature & Wildlife": "nature parks and waterfalls",
     Mountains: "mountain attractions",
@@ -283,17 +297,39 @@ const NON_TOURIST_TYPES = new Set([
   "food", "meal_takeaway", "meal_delivery", "bakery", "spa", "gym", "travel_agency", "real_estate_agency",
   "bank", "atm", "hospital", "pharmacy", "drugstore", "school", "gas_station", "car_rental", "bus_station",
   "transit_station", "airport", "local_government_office", "police", "post_office", "finance", "doctor",
+  "fire_station", "city_hall", "courthouse", "government_office", "embassy", "dentist", "primary_school",
+  "secondary_school", "university", "cemetery", "funeral_home", "parking", "car_repair", "insurance_agency",
+  "lawyer", "storage", "veterinary_care", "laundry",
 ]);
-const NON_TOURIST_NAME = /\b(wet market|public market|fish market|meat market|talipapa|palengke|mall|supermarket|grocery|terminal|hospital|pharmacy|drugstore|bank|pawnshop|gas station|gasoline|hardware)\b/i;
+const NON_TOURIST_NAME = /\b(wet market|public market|fish market|meat market|talipapa|palengke|mall|supermarket|grocery|terminal|hospital|clinic|pharmacy|drugstore|bank|pawnshop|gas station|gasoline|hardware|police|pnp|fire station|bfp|municipal hall|city hall|town hall|barangay hall|hall of justice|court|post office|elementary school|high school|integrated school|central school|university|college|cemetery|funeral|memorial park|government|office)\b/i;
+// Night markets and food parks are evening stops travelers go to.
+const EVENING_MARKET_NAME = /\b(night market|food park|night bazaar|food bazaar)\b/i;
 
 function isTouristSpot(place) {
   if (!place) return false;
   // Development samples use placeholder types, so keep the old behaviour for them.
   if (place.isDevelopmentMock) return true;
-  if (NON_TOURIST_NAME.test(String(place.name || ""))) return false;
+  const name = String(place.name || "");
+  if (NON_TOURIST_NAME.test(name)) return false;
   const types = (place.types || []).map((type) => String(type).toLowerCase());
-  if (types.some((type) => NON_TOURIST_TYPES.has(type))) return false;
+  const eveningMarket = EVENING_MARKET_NAME.test(name);
+  if (types.some((type) => NON_TOURIST_TYPES.has(type) && !(eveningMarket && /market|food|store/.test(type)))) return false;
+  if (eveningMarket) return true;
   return !types.length || types.some((type) => TOURIST_SPOT_TYPES.has(type));
+}
+
+// True when a place fits at least one of the traveler's interests or travel styles.
+function fitsPreferences(place, prefs) {
+  return preferenceScore(place, prefs) > preferenceScore(place, null);
+}
+
+// Best first, and places that fit the traveler's onboarding answers always before
+// places that don't (those only fill the list when too few fit).
+function matchedFirst(places, prefs) {
+  const sorted = places.slice().sort((a, b) => preferenceScore(b, prefs) - preferenceScore(a, prefs));
+  if (!prefs) return sorted;
+  const fits = sorted.filter((place) => fitsPreferences(place, prefs));
+  return fits.concat(sorted.filter((place) => !fitsPreferences(place, prefs)));
 }
 
 function getInterestKeywords(prefs) {
@@ -359,11 +395,11 @@ async function fetchDestinationPlaces(destination, index, prefs, interestKeyword
   const lng = Number(destination.lng);
   const seeds = destination.lat != null && destination.lng != null && Number.isFinite(lat) && Number.isFinite(lng) ? [{ lat, lng }] : [];
   const data = await fetchPlacesCached({ queries, seeds, touristOnly: true });
-  return (data.places || []).map(toBackendDashboardPlace)
+  const places = (data.places || []).map(toBackendDashboardPlace)
     .map((place) => ({ ...place, isDevelopmentMock: Boolean(data.isDevelopmentMock), preferredFor: destination.name }))
     .filter((place) => Number.isFinite(place.lat) && Number.isFinite(place.lng))
-    .filter(isTouristSpot)
-    .sort((a, b) => preferenceScore(b, prefs) - preferenceScore(a, prefs));
+    .filter(isTouristSpot);
+  return matchedFirst(places, prefs);
 }
 
 async function fetchRecommendedPlaces(prefs, searchQuery = "") {
@@ -377,7 +413,7 @@ async function fetchRecommendedPlaces(prefs, searchQuery = "") {
       .map((place) => ({ ...place, isDevelopmentMock: Boolean(data.isDevelopmentMock) }))
       .filter((place) => Number.isFinite(place.lat) && Number.isFinite(place.lng))
       .filter(isTouristSpot);
-    return allPlaces.sort((a, b) => preferenceScore(b, prefs) - preferenceScore(a, prefs)).slice(0, limit);
+    return matchedFirst(allPlaces, prefs).slice(0, limit);
   }
 
   // Search around each of the user's chosen destinations, then interleave so every
@@ -400,7 +436,31 @@ async function fetchRecommendedPlaces(prefs, searchQuery = "") {
   return recommended;
 }
 
-async function fetchPopularPlaces() {
+// Places Sidekick travelers use most in their saved trips (the server counts each place
+// once per trip), most travelers first. Empty until the server has counts.
+async function fetchAppPopularPlaces() {
+  try {
+    const data = await window.SidekickCore.apiRequest("/api/places/popular");
+    return (data?.places || [])
+      .map((place) => {
+        const travelers = Number(place.travelers) || 0;
+        return {
+          ...toBackendDashboardPlace(place),
+          travelers,
+          trips: Number(place.trips) || 0,
+          tags: [travelers === 1 ? "Picked by 1 traveler" : `Picked by ${travelers} travelers`],
+        };
+      })
+      .filter((place) => Number.isFinite(place.lat) && Number.isFinite(place.lng))
+      .filter(isTouristSpot);
+  } catch (error) {
+    return [];
+  }
+}
+
+// Google's best-rated Batangas spots (fills "Popular destinations" until enough
+// travelers have saved trips).
+async function fetchGoogleTopPlaces() {
   const data = await fetchPlacesCached({ queries: ["top tourist attractions", "famous landmarks", "must visit destinations", "best beaches and islands"], touristOnly: true });
   // Development mode only returns sample places for another country; use the curated list instead.
   if (data.isDevelopmentMock) return [];
@@ -409,8 +469,16 @@ async function fetchPopularPlaces() {
     .filter((place) => Number.isFinite(place.lat) && Number.isFinite(place.lng))
     .filter((place) => place.rating > 0 && place.ratingCount >= 100)
     .filter(isTouristSpot)
-    .sort((a, b) => popularity(b) - popularity(a))
-    .slice(0, IS_PERF_LITE ? 5 : 8);
+    .sort((a, b) => popularity(b) - popularity(a));
+}
+
+// "Popular destinations": the places Sidekick travelers use most come first; Google's
+// top-rated spots fill the remaining places.
+async function fetchPopularPlaces() {
+  const [appResult, googleResult] = await Promise.allSettled([fetchAppPopularPlaces(), fetchGoogleTopPlaces()]);
+  const fromApp = appResult.status === "fulfilled" ? appResult.value : [];
+  const fromGoogle = googleResult.status === "fulfilled" ? googleResult.value : [];
+  return dedupePlaces([...fromApp, ...fromGoogle]).slice(0, IS_PERF_LITE ? 5 : 8);
 }
 
 async function fetchPlacesFromGoogle(prefs, searchQuery = "") {
@@ -431,11 +499,11 @@ function renderPlaceCard(place) {
   const safeRegion = window.SidekickCore.escapeHtml(place.region);
   const mockLabel = place.isDevelopmentMock ? '<small class="development-place-label">Development sample</small>' : '';
   const imgPart = place.photoUrl
-    ? `<img src="${place.photoUrl}" alt="${safeName}" loading="lazy" />`
+    ? `<img src="${place.photoUrl}" alt="${safeName}" loading="lazy" decoding="async" />`
     : svgPin();
   return `
     <div class="place-card" data-place-id="${window.SidekickCore.escapeHtml(place.placeId)}">
-      <div class="place-image">${place.photoUrl ? `<img src="${window.SidekickCore.escapeHtml(place.photoUrl)}" alt="${safeName}" loading="lazy" onerror="this.style.display='none'" />` : imgPart}${renderPhotoAttribution(place)}</div>
+      <div class="place-image">${place.photoUrl ? `<img src="${window.SidekickCore.escapeHtml(place.photoUrl)}" alt="${safeName}" loading="lazy" decoding="async" onerror="this.style.display='none'" />` : imgPart}${renderPhotoAttribution(place)}</div>
       <div class="place-info">
         <h3>${safeName}</h3>
         <p>${safeRegion}</p>
@@ -450,11 +518,11 @@ function renderDestinationCard(place) {
   const safeRegion = window.SidekickCore.escapeHtml(place.region);
   const mockLabel = place.isDevelopmentMock ? '<small class="development-place-label">Development sample</small>' : '';
   const imgPart = place.photoUrl
-    ? `<img src="${place.photoUrl}" alt="${safeName}" loading="lazy" />`
+    ? `<img src="${place.photoUrl}" alt="${safeName}" loading="lazy" decoding="async" />`
     : svgPin();
   return `
     <div class="destination-card" data-place-id="${window.SidekickCore.escapeHtml(place.placeId)}">
-      <div class="destination-image">${place.photoUrl ? `<img src="${window.SidekickCore.escapeHtml(place.photoUrl)}" alt="${safeName}" loading="lazy" onerror="this.style.display='none'" />` : imgPart}${renderPhotoAttribution(place)}</div>
+      <div class="destination-image">${place.photoUrl ? `<img src="${window.SidekickCore.escapeHtml(place.photoUrl)}" alt="${safeName}" loading="lazy" decoding="async" onerror="this.style.display='none'" />` : imgPart}${renderPhotoAttribution(place)}</div>
       <div class="destination-info">
         <h3>${safeName}</h3>
         <p>${safeRegion}</p>
@@ -466,7 +534,8 @@ function renderDestinationCard(place) {
 
 function persistSelectedDestination(place) {
   if (!place) return;
-  localStorage.setItem(SELECTED_DESTINATION_KEY, JSON.stringify(place));
+  // selectedAt: the chat only uses a place opened in the last 30 minutes ("Ask AI").
+  localStorage.setItem(SELECTED_DESTINATION_KEY, JSON.stringify({ ...place, selectedAt: Date.now() }));
 }
 
 function getSelectedDestination() {
@@ -478,9 +547,43 @@ function getSelectedDestination() {
   }
 }
 
+// Start and end dates for "Generate itinerary": today (tomorrow when it's too late to
+// see anything today) to two days later, and no earlier than today. Dates the traveler
+// already picked are kept unless they have passed.
+function prefillTripDates() {
+  const startInput = document.getElementById("destination-plan-start");
+  const endInput = document.getElementById("destination-plan-end");
+  if (!startInput || !endInput) return;
+  const value = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  const today = new Date();
+  const todayValue = value(today);
+  startInput.min = todayValue;
+  if (!startInput.value || startInput.value < todayValue) {
+    const first = new Date(today);
+    const firstDayStart = window.SidekickCore.firstDayStartMinute?.(todayValue) ?? null;
+    if (Number.isFinite(firstDayStart) && firstDayStart > 24 * 60 - 90) first.setDate(first.getDate() + 1);
+    const last = new Date(first);
+    last.setDate(last.getDate() + 2);
+    startInput.value = value(first);
+    endInput.value = value(last);
+  }
+  endInput.min = startInput.value;
+  if (!endInput.value || endInput.value < startInput.value) endInput.value = startInput.value;
+}
+
+// The end date can't come before the start date.
+document.addEventListener("change", (event) => {
+  if (event.target?.id !== "destination-plan-start") return;
+  const endInput = document.getElementById("destination-plan-end");
+  if (!endInput) return;
+  endInput.min = event.target.value;
+  if (!endInput.value || endInput.value < event.target.value) endInput.value = event.target.value;
+});
+
 function openModal() {
   const modal = document.getElementById("destination-modal");
   if (!modal) return;
+  prefillTripDates();
   // Keep the pop-up at the top level of the page so it always opens in view.
   if (modal.parentElement !== document.body) document.body.appendChild(modal);
   modal.classList.add("open");
@@ -510,7 +613,7 @@ async function showDestinationDetails(place, prefs, session) {
   const imageEl = document.getElementById("destination-image");
   if (imageEl) {
     imageEl.innerHTML = place.photoUrl
-      ? `<img src="${window.SidekickCore.escapeHtml(place.photoUrl)}" alt="${window.SidekickCore.escapeHtml(place.name)}" loading="lazy" />${renderPhotoAttribution(place)}`
+      ? `<img src="${window.SidekickCore.escapeHtml(place.photoUrl)}" alt="${window.SidekickCore.escapeHtml(place.name)}" loading="lazy" decoding="async" />${renderPhotoAttribution(place)}`
       : `<div class="destination-photo-fallback">${svgPin()}</div>`;
   }
 
@@ -532,7 +635,10 @@ async function showDestinationDetails(place, prefs, session) {
   const mapEl = document.getElementById("destination-map");
   if (!mapEl) return;
   const originInput = document.getElementById("destination-origin");
-  if (originInput) originInput.value = "";
+  if (originInput) {
+    originInput.value = "";
+    delete originInput.dataset.currentLocation;
+  }
   _selectedOriginPlace = null;
   if (_originMarker) {
     _originMarker.setMap(null);
@@ -581,7 +687,7 @@ async function showDestinationDetails(place, prefs, session) {
   }
   };
   // The rest of the pop-up (route button, starting location) works without waiting for the map.
-  void drawMap();
+  const mapReady = drawMap();
 
   if (routeButton) {
     routeButton.onclick = () => calculateDestinationRoute(place);
@@ -590,6 +696,7 @@ async function showDestinationDetails(place, prefs, session) {
     originInput.oninput = () => {
       _selectedOriginPlace = null;
       delete originInput.dataset.verifiedOrigin;
+      delete originInput.dataset.currentLocation;
       if (_originMarker) {
         _originMarker.setMap(null);
         _originMarker = null;
@@ -642,26 +749,9 @@ async function showDestinationDetails(place, prefs, session) {
                 originResults.replaceChildren();
                 originResults.hidden = true;
 
-                if (_modalMap) {
-                  const originPosition = { lat: Number(candidate.lat), lng: Number(candidate.lng) };
-                  if (_originMarker) _originMarker.setMap(null);
-                  _originMarker = new google.maps.Marker({
-                    map: _modalMap,
-                    position: originPosition,
-                    title: `Starting location: ${candidate.name || candidate.address}`,
-                    label: { text: "A", color: "#fff" },
-                  });
-                  const destinationPosition = { lat: Number(place.lat), lng: Number(place.lng) };
-                  if (originPosition.lat === destinationPosition.lat && originPosition.lng === destinationPosition.lng) {
-                    _modalMap.panTo(originPosition);
-                    _modalMap.setZoom(13);
-                  } else {
-                    const bounds = new google.maps.LatLngBounds();
-                    bounds.extend(originPosition);
-                    bounds.extend(destinationPosition);
-                    _modalMap.fitBounds(bounds, 48);
-                  }
-                }
+                delete originInput.dataset.currentLocation;
+                showOriginOnMap(candidate);
+                void calculateDestinationRoute(place);
               });
               originResults.appendChild(resultButton);
             });
@@ -685,6 +775,85 @@ async function showDestinationDetails(place, prefs, session) {
       }
     };
   }
+  // The starting point as pin "A" on the map, with the destination in view.
+  function showOriginOnMap(origin) {
+    if (!_modalMap || !window.google?.maps) return;
+    const originPosition = { lat: Number(origin.lat), lng: Number(origin.lng) };
+    if (!Number.isFinite(originPosition.lat) || !Number.isFinite(originPosition.lng)) return;
+    if (_originMarker) _originMarker.setMap(null);
+    _originMarker = new google.maps.Marker({
+      map: _modalMap,
+      position: originPosition,
+      title: `Starting location: ${origin.name || origin.address}`,
+      label: { text: "A", color: "#fff" },
+    });
+    const destinationPosition = { lat: Number(place.lat), lng: Number(place.lng) };
+    if (originPosition.lat === destinationPosition.lat && originPosition.lng === destinationPosition.lng) {
+      _modalMap.panTo(originPosition);
+      _modalMap.setZoom(13);
+    } else {
+      const bounds = new google.maps.LatLngBounds();
+      bounds.extend(originPosition);
+      bounds.extend(destinationPosition);
+      _modalMap.fitBounds(bounds, 48);
+    }
+  }
+
+  // ---- "Use my current location" ------------------------------------------------
+  // The phone's location becomes the starting point and the route is worked out at
+  // once. After the traveler has used it once (or when location is already allowed for
+  // the app), it is used automatically each time a place is opened.
+  const useLocationBtn = document.getElementById("destination-use-location");
+  const locationKey = mapPlaceKey;
+
+  async function useCurrentLocation(userAsked) {
+    if (!navigator.geolocation) {
+      if (userAsked && originStatus) originStatus.textContent = "Your location isn’t available on this device. Type a starting location instead.";
+      return;
+    }
+    if (useLocationBtn) useLocationBtn.disabled = true;
+    if (originStatus) originStatus.textContent = "Finding your location…";
+    try {
+      const position = await new Promise((resolve, reject) => navigator.geolocation.getCurrentPosition(resolve, reject, {
+        enableHighAccuracy: true, timeout: 15000, maximumAge: 5 * 60 * 1000,
+      }));
+      if (mapEl.dataset.placeKey !== locationKey) return; // another place was opened
+      // The traveler typed a starting location meanwhile: keep theirs.
+      if (!userAsked && _selectedOriginPlace && !originInput?.dataset.currentLocation) return;
+      const lat = Number(position.coords.latitude);
+      const lng = Number(position.coords.longitude);
+      const origin = { placeId: "", name: "My current location", address: `${lat.toFixed(5)},${lng.toFixed(5)}`, lat, lng };
+      _selectedOriginPlace = origin;
+      if (originInput) {
+        originInput.value = "My current location";
+        originInput.dataset.currentLocation = "1";
+      }
+      if (originResults) { originResults.replaceChildren(); originResults.hidden = true; }
+      if (routeButton) routeButton.disabled = false;
+      if (originStatus) originStatus.textContent = "✓ Using your current location";
+      try { localStorage.setItem(USE_CURRENT_LOCATION_KEY, "1"); } catch (error) {}
+      await mapReady;
+      if (mapEl.dataset.placeKey !== locationKey || _selectedOriginPlace !== origin) return;
+      showOriginOnMap(origin);
+      await calculateDestinationRoute(place);
+    } catch (error) {
+      if (mapEl.dataset.placeKey !== locationKey) return;
+      if (!userAsked) { if (originStatus) originStatus.textContent = ""; return; }
+      if (originStatus) {
+        originStatus.textContent = error?.code === 1
+          ? "Location is turned off for Sidekick. Allow location in your phone’s settings, or type a starting location."
+          : "Your location couldn’t be found right now. Try again, or type a starting location.";
+      }
+    } finally {
+      if (useLocationBtn) useLocationBtn.disabled = false;
+    }
+  }
+
+  if (useLocationBtn) useLocationBtn.onclick = () => { void useCurrentLocation(true); };
+  void (async () => {
+    if (await currentLocationAllowed()) void useCurrentLocation(false);
+  })();
+
   const generateBtn = document.getElementById("destination-generate");
   if (generateBtn) {
     generateBtn.onclick = () => generateFocusedItinerary(place, prefs, session);
@@ -764,57 +933,78 @@ async function generateFocusedItinerary(place, prefs, session) {
   const button = document.getElementById("destination-generate");
   if (button?.disabled) return;
   const budgetInput = document.getElementById("destination-plan-budget");
-  const daysInput = document.getElementById("destination-plan-days");
+  const startInput = document.getElementById("destination-plan-start");
+  const endInput = document.getElementById("destination-plan-end");
   const errorEl = document.getElementById("destination-plan-error");
   const budgetAmountPhp = Number(budgetInput?.value);
-  const durationDays = Number(daysInput?.value);
+  const showError = (text, field) => {
+    if (errorEl) {
+      errorEl.textContent = text;
+      errorEl.hidden = false;
+    }
+    field?.focus();
+  };
   if (errorEl) {
     errorEl.hidden = true;
     errorEl.textContent = "";
   }
-  if (!Number.isSafeInteger(budgetAmountPhp) || budgetAmountPhp < 1) {
-    if (errorEl) {
-      errorEl.textContent = "Enter a whole-number budget in Philippine pesos.";
-      errorEl.hidden = false;
-    }
-    budgetInput?.focus();
-    return;
-  }
-  if (!Number.isInteger(durationDays) || durationDays < 1 || durationDays > 14) {
-    if (errorEl) {
-      errorEl.textContent = "Choose a trip length from 1 to 14 days.";
-      errorEl.hidden = false;
-    }
-    daysInput?.focus();
-    return;
-  }
-  // The trip starts today and lasts the chosen number of days. Late at night, when
-  // there's no time left to see anything today (less than 90 minutes before midnight,
-  // the same limit as the Itinerary screen), it starts tomorrow instead.
+  // The trip's dates, checked like the Itinerary screen's builder.
   const dateValue = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-  const start = new Date();
+  const parseDay = (text) => {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(text || ""));
+    return match ? new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3])) : null;
+  };
+  const start = parseDay(startInput?.value);
+  const end = parseDay(endInput?.value);
+  if (!start || !end) {
+    showError("Choose the start and end dates of your trip.", !start ? startInput : endInput);
+    return;
+  }
+  const todayValue = dateValue(new Date());
+  if (dateValue(start) < todayValue) {
+    const shown = start.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
+    await window.SidekickUI.alert(`${shown} has already passed. Choose today or a later date to start your trip.`, { title: "Start date has passed", confirmText: "Change date" });
+    if (startInput) startInput.min = todayValue;
+    startInput?.focus();
+    return;
+  }
+  if (end < start) {
+    showError("The end date can’t be before the start date.", endInput);
+    return;
+  }
+  const durationDays = Math.round((Date.UTC(end.getFullYear(), end.getMonth(), end.getDate()) - Date.UTC(start.getFullYear(), start.getMonth(), start.getDate())) / 86400000) + 1;
+  if (durationDays > 14) {
+    showError("Trips can be up to 14 days. Choose a shorter date range.", endInput);
+    return;
+  }
+  // Starting today with too little of the day left (less than 90 minutes before
+  // midnight, the same limit as the Itinerary screen): start tomorrow instead.
   const firstDayStart = window.SidekickCore.firstDayStartMinute?.(dateValue(start)) ?? null;
-  const startsTomorrow = Number.isFinite(firstDayStart) && firstDayStart > 24 * 60 - 90;
-  if (startsTomorrow) start.setDate(start.getDate() + 1);
-  const end = new Date(start);
-  end.setDate(end.getDate() + durationDays - 1);
+  if (Number.isFinite(firstDayStart) && firstDayStart > 24 * 60 - 90) {
+    await window.SidekickUI.alert("It’s too late in the day to start sightseeing today. Start your trip tomorrow instead.", { title: "Too late to start today", confirmText: "Change date" });
+    startInput?.focus();
+    return;
+  }
+  if (!Number.isSafeInteger(budgetAmountPhp) || budgetAmountPhp < 1) {
+    showError("Enter a whole-number budget in Philippine pesos.", budgetInput);
+    return;
+  }
   const origin = _selectedOriginPlace
     ? String(_selectedOriginPlace.address || _selectedOriginPlace.name || "").trim()
     : String(document.getElementById("destination-origin")?.value || "").trim();
   // Dates already taken by a planned trip can't be used for another one.
   const clash = window.SidekickCore.findOverlappingTrip?.(session.email, dateValue(start), dateValue(end));
   if (clash) {
-    await window.SidekickUI.alert(`${window.SidekickCore.tripOverlapMessage(clash)} You can pick other dates with “+ New trip” on the Itinerary tab.`, { title: "Those dates are taken", confirmText: "OK" });
+    await window.SidekickUI.alert(window.SidekickCore.tripOverlapMessage(clash), { title: "Those dates are taken", confirmText: "Change dates" });
+    startInput?.focus();
     return;
-  }
-  if (startsTomorrow) {
-    const day = start.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
-    await window.SidekickUI.alert(`It’s too late to start sightseeing today, so your trip will start tomorrow, ${day}.`, { title: "Your trip starts tomorrow", confirmText: "OK" });
   }
 
   // Check the budget against the cheapest restaurants and hotels before leaving,
   // so an unrealistic budget can be fixed right here.
-  const trip = { destination: place.name, startDate: dateValue(start), endDate: dateValue(end), budgetAmountPhp };
+  // The budget covers everyone traveling (1–10 people).
+  const travelers = window.SidekickCore.normalizeTravelers?.(document.getElementById("destination-plan-travelers")?.value) || 1;
+  const trip = { destination: place.name, startDate: dateValue(start), endDate: dateValue(end), budgetAmountPhp, travelers };
   if (button) button.disabled = true;
   window.SidekickUI?.loading.show("Checking your budget…");
   let budgetCheck = null;
@@ -852,6 +1042,7 @@ async function generateFocusedItinerary(place, prefs, session) {
       startDate: dateValue(start),
       endDate: dateValue(end),
       budgetAmountPhp,
+      travelers,
       origin: origin.slice(0, 180),
       createdAt: Date.now(),
     }));
@@ -945,6 +1136,9 @@ async function buildPopularPool(initial) {
     .filter(isTouristSpot)
     .sort((a, b) => popularity(b) - popularity(a));
   const curated = window.SidekickCore.buildPopularDestinations?.() || [];
+  // Places Sidekick travelers use most always lead the list.
+  const fromApp = await fetchAppPopularPlaces();
+  ranked.unshift(...fromApp);
   const merged = dedupePlaces([...ranked, ...(initial || []), ...curated]);
   // Drop curated spots that a ranked result already covers under a slightly different name.
   const rankedKeys = ranked.map(placeNameKey);
@@ -1003,7 +1197,27 @@ function setSeeAllVisible(visible) {
     if (opener) opener.focus({ preventScroll: true });
     else document.activeElement.blur();
   }
-  screen.hidden = !visible;
+  // The screen slides in from the right (and back out) while the tab bar slides down
+  // (and back up); styles in css/dashboard.css and css/tab-motion.css.
+  clearTimeout(_seeAllState.closeTimer);
+  screen.classList.remove("is-closing");
+  if (visible) {
+    screen.hidden = false;
+    window.SidekickNav?.hide();
+  } else {
+    window.SidekickNav?.show();
+    let reduce = false;
+    try { reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch (error) {}
+    if (reduce || screen.hidden) {
+      screen.hidden = true;
+    } else {
+      screen.classList.add("is-closing");
+      _seeAllState.closeTimer = setTimeout(() => {
+        screen.classList.remove("is-closing");
+        if (!_seeAllState.open) screen.hidden = true;
+      }, 240);
+    }
+  }
   screen.setAttribute("aria-hidden", String(!visible));
   document.body.style.overflow = visible ? "hidden" : "";
   _seeAllState.open = visible;
@@ -1031,7 +1245,7 @@ async function openSeeAll(kind, prefs, session, initialPlaces) {
   setText("see-all-title", kind === "recommended" ? "Recommended for you" : "Popular destinations");
   setText("see-all-subtitle", kind === "recommended"
     ? "Ordered from most to least preferred"
-    : "Top tourist spots in Batangas");
+    : "Most picked by Sidekick travelers, then top-rated spots");
   setSeeAllVisible(true);
   screen.scrollTop = 0;
   try { history.pushState({ seeAll: true }, ""); } catch (error) {}

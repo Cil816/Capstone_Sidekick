@@ -95,6 +95,8 @@ document.addEventListener('DOMContentLoaded', function () {
     const logoutBtn = document.getElementById('logout-btn');
     if (logoutBtn) {
         logoutBtn.addEventListener('click', async function () {
+            const ok = await window.SidekickUI.confirm('You’ll need to log in again to use Sidekick. Your trips and chats stay on this phone.', { title: 'Log out?', confirmText: 'Log out', cancelText: 'Stay logged in', tone: 'danger', icon: 'logout' });
+            if (!ok) return;
             try {
                 if (session?.apiToken) {
                     // Logging out also works offline: no waiting for the connection.

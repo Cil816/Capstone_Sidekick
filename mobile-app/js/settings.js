@@ -89,8 +89,11 @@ document.addEventListener('DOMContentLoaded', () => {
   const clearChatBtn = document.getElementById('clear-chat-btn');
   if (clearChatBtn) {
     clearChatBtn.addEventListener('click', async () => {
-      const ok = await window.SidekickUI.confirm('All your messages with Sidekick on this phone will be deleted.', { title: 'Clear chat history?', confirmText: 'Clear chat', tone: 'danger' });
+      const ok = await window.SidekickUI.confirm('All your chats with Sidekick on this phone will be deleted, including archived sessions. Your trips are kept.', { title: 'Clear chat history?', confirmText: 'Clear chat', tone: 'danger' });
       if (!ok) return;
+      // A second, final check: this can't be undone.
+      const sure = await window.SidekickUI.confirm('This can’t be undone. Your current chat and every archived session will be gone for good.', { title: 'Are you sure?', confirmText: 'Yes, delete all chats', cancelText: 'Keep my chats', tone: 'danger' });
+      if (!sure) return;
       window.SidekickCore.clearChatForEmail(session.email);
       showMessage('Chat history cleared.');
     });
@@ -136,6 +139,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const logoutBtn = document.getElementById('logout-btn');
   if (logoutBtn) {
     logoutBtn.addEventListener('click', async () => {
+      const ok = await window.SidekickUI.confirm('You’ll need to log in again to use Sidekick. Your trips and chats stay on this phone.', { title: 'Log out?', confirmText: 'Log out', cancelText: 'Stay logged in', tone: 'danger', icon: 'logout' });
+      if (!ok) return;
       try {
         if (session?.apiToken) {
           // Logging out also works offline: no waiting for the connection.
@@ -172,6 +177,8 @@ document.addEventListener('DOMContentLoaded', () => {
   function clearLocalAccountData(email) {
     const perEmailKeys = [
       'sidekick.chatByEmail.v1',
+      'sidekick.chatArchiveByEmail.v1',
+      'sidekick.chatCurrentSession.v1',
       'sidekick.itineraryByEmail.v1',
       'sidekick.plannedTripsByEmail.v1',
       'sidekick.itineraryDraftByEmail.v1',
@@ -223,6 +230,15 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   if (deleteBtn && deleteDialog && deleteForm) {
+    // An account made with Google has no password: it confirms by typing its email.
+    const passwordless = Boolean(window.SidekickCore.getAuthSession?.()?.passwordless);
+    if (passwordless && deletePassword) {
+      const label = deleteForm.querySelector('label[for="delete-account-password"]');
+      if (label) label.textContent = 'Type your email address to confirm';
+      deletePassword.type = 'email';
+      deletePassword.autocomplete = 'off';
+      deletePassword.placeholder = session.email || '';
+    }
     deleteBtn.addEventListener('click', () => {
       setDeleteError('');
       if (deletePassword) deletePassword.value = '';
@@ -234,7 +250,7 @@ document.addEventListener('DOMContentLoaded', () => {
       event.preventDefault();
       const password = String(deletePassword?.value || '');
       if (!password) {
-        setDeleteError('Enter your password to confirm.');
+        setDeleteError(passwordless ? 'Type your email address to confirm.' : 'Enter your password to confirm.');
         deletePassword?.focus();
         return;
       }

@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Popular places · Sidekick Admin</title>
+    <link rel="icon" type="image/png" sizes="64x64" href="assets/sidekick-logo-64.png" />
+    <link rel="apple-touch-icon" href="assets/sidekick-logo-192.png" />
+    <link rel="stylesheet" href="css/admin.css" />
+    <link rel="stylesheet" href="css/admin-v3.css" />
+    <link rel="stylesheet" href="css/admin-dark.css" />
+    <script src="js/theme.js"></script>
+    <script src="js/auth-guard.js"></script>
+  </head>
+  <body data-page="popular">
+    <div class="admin-shell">
+      <aside class="admin-sidebar">
+        <div class="admin-sidebar-header">
+          <img class="admin-logo" src="assets/sidekick-logo-512.png" alt="" />
+          <div>
+            <div class="ax-brand-name">Sidekick</div>
+            <div class="ax-brand-role">Administrator</div>
+          </div>
+        </div>
+        <nav aria-label="Admin pages">
+          <a class="admin-nav-link" href="admin.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg><span>Dashboard</span></a>
+          <a class="admin-nav-link" href="admin-users.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 19v-1a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v1"/><circle cx="9" cy="7" r="3.5"/><path d="M22 19v-1a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg><span>Users</span></a>
+          <a class="admin-nav-link" href="admin-itineraries.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4 3 6v14l6-2 6 2 6-2V4l-6 2-6-2Z"/><path d="M9 4v14M15 6v14"/></svg><span>Travel plans</span></a>
+          <a class="admin-nav-link" href="admin-analytics.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18"/><path d="M7 15v-4M12 15V7M17 15v-7"/></svg><span>Reports</span></a>
+          <a class="admin-nav-link" href="admin-reviews.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9Z"/></svg><span>App reviews</span></a>
+          <a class="admin-nav-link active" href="admin-popular.html" aria-current="page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11Z"/><circle cx="12" cy="10" r="2.5"/></svg><span>Popular places</span></a>
+          <a class="admin-nav-link" href="admin-activity.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l2.5-6 5 12 2.5-6H21"/></svg><span>Activity</span></a>
+          <a class="admin-nav-link" href="admin-integrations.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/></svg><span>System status</span></a>
+          <a class="admin-nav-link" href="admin-usage.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z"/><path d="m13.4 10.6 3.6-3.6"/><path d="M3.3 15a9 9 0 1 1 17.4 0"/><path d="M5 19h14"/></svg><span>API usage</span></a>
+          <a class="admin-nav-link" href="admin-controls.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg><span>Settings</span></a>
+        </nav>
+        <button class="admin-button-secondary ax-theme-toggle" data-theme-toggle type="button" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg><span>Dark mode</span></button>
+        <button class="admin-button-secondary" data-admin-logout type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg><span>Log out</span></button>
+      </aside>
+
+      <main class="admin-main">
+        <div class="admin-topbar">
+          <div>
+            <h1 class="admin-page-title">Popular places</h1>
+            <p class="admin-subtitle">The places travelers keep in their saved trips. The app's Home “Popular destinations” lists them in this order.</p>
+          </div>
+        </div>
+
+        <div id="admin-status-banner" class="admin-status-banner" aria-live="polite"></div>
+
+        <div class="ax-kpis ax-kpis-4" id="popular-summary" aria-label="Popular places summary"></div>
+
+        <section class="admin-card ax-table-card" aria-labelledby="popular-heading">
+          <div class="ax-card-head">
+            <div>
+              <h2 class="ax-card-title" id="popular-heading">Ranking</h2>
+              <p class="ax-card-note">Ranked by how many different travelers used each place, then by number of trips. Each place counts once per trip; hotels, meals and places outside Batangas aren’t counted. The top places appear first on Home, and Google’s top-rated spots fill the rest.</p>
+            </div>
+          </div>
+          <table class="ax-table">
+            <colgroup><col style="width:56px"><col><col style="width:16%"><col style="width:12%"><col style="width:18%" class="hide-sm"></colgroup>
+            <thead><tr><th scope="col">#</th><th scope="col">Place</th><th scope="col">Travelers</th><th scope="col">Trips</th><th scope="col" class="hide-sm">Last used</th></tr></thead>
+            <tbody id="popular-table-body"></tbody>
+          </table>
+          <div class="ax-pagination">
+            <span id="popular-page-summary"></span>
+            <div>
+              <button id="popular-page-previous" class="admin-button-secondary ax-btn-sm" type="button">Previous</button>
+              <button id="popular-page-next" class="admin-button-secondary ax-btn-sm" type="button">Next</button>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div id="chart-tooltip" class="chart-tooltip" role="presentation" hidden></div>
+
+    <script src="js/config.js"></script>
+    <script src="js/admin.js"></script>
+  </body>
+</html>

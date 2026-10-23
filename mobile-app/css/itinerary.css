@@ -451,12 +451,12 @@
 .add-activity-btn { border-color: #b9cbe0; background: rgba(255, 255, 255, .5); color: var(--itinerary-blue); }
 .add-activity-btn:hover { background: linear-gradient(135deg, rgba(107, 140, 174, .08), rgba(154, 155, 210, .1)); }
 #place-search { border-color: #d7e2ee !important; background: #fff; color: var(--itinerary-ink); outline: none; transition: border-color .2s ease, box-shadow .2s ease; }
-#place-search:focus, #itinerary-destination:focus, #itinerary-name:focus, #itinerary-origin:focus, #itinerary-start:focus, #itinerary-end:focus, #itinerary-budget:focus { border-color: var(--itinerary-blue) !important; box-shadow: 0 0 0 4px rgba(67, 191, 208, .14); outline: none; }
+#place-search:focus, #itinerary-destination:focus, #itinerary-name:focus, #itinerary-origin:focus, #itinerary-start:focus, #itinerary-end:focus, #itinerary-budget:focus, #itinerary-travelers:focus { border-color: var(--itinerary-blue) !important; box-shadow: 0 0 0 4px rgba(67, 191, 208, .14); outline: none; }
 #map { border-radius: 16px !important; background: linear-gradient(135deg, #edf3fa, #f8f7ff); box-shadow: inset 0 0 0 1px rgba(211, 222, 235, .8), 0 8px 18px rgba(52, 76, 104, .06); }
 
 #itinerary-builder { border-bottom: 0 !important; padding: 18px 0 12px !important; background: linear-gradient(135deg, rgba(238, 245, 252, .95), rgba(247, 245, 253, .95)); border: 1px solid #dfe8f1; border-radius: 18px; margin-bottom: 8px; }
 #itinerary-builder > div:first-child { padding-left: 16px; padding-right: 16px; }
-#itinerary-destination, #itinerary-name, #itinerary-origin, #itinerary-start, #itinerary-end, #itinerary-budget { min-height: 42px; width: 100%; box-sizing: border-box; padding: 0 11px; border: 1px solid #d7e2ee; border-radius: 11px; background: #fff; color: var(--itinerary-ink); }
+#itinerary-destination, #itinerary-name, #itinerary-origin, #itinerary-start, #itinerary-end, #itinerary-budget, #itinerary-travelers { min-height: 42px; width: 100%; box-sizing: border-box; padding: 0 11px; border: 1px solid #d7e2ee; border-radius: 11px; background: #fff; color: var(--itinerary-ink); }
 #no-itinerary-message { margin: 12px 0 22px; padding: 28px 22px !important; border: 1px solid #e0e8f1; border-radius: 18px; background: linear-gradient(135deg, #f7faff, #fbf9ff); color: var(--itinerary-muted) !important; text-align: center; }
 
 @media (max-width: 420px) {
@@ -936,3 +936,20 @@ html[data-theme="dark"] .activity-status[data-status="done"] .activity-status-bo
 html[data-theme="dark"] .activity-status[data-status="missed"] { border-color: rgba(224, 86, 106, .55); background: rgba(224, 86, 106, .14); color: #ff8593; }
 html[data-theme="dark"] .activity-status[data-status="missed"] .activity-status-box { border-color: #ff8593; }
 html[data-theme="dark"] .activity-card.is-missed { border-color: rgba(224, 86, 106, .5); }
+
+/* Hotel and restaurant pickers: "Want higher-end hotels? Edit trip budget". */
+.budget-picker-budget-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 0 0 12px; padding: 10px 12px; border: 1px solid #d8e9ef; border-radius: 12px; background: #f3f9fb; color: #315f78; font-size: 13px; font-weight: 600; }
+.budget-picker-budget-btn { flex: none; min-height: 34px; padding: 0 14px; border: 1px solid #1f6f88; border-radius: 999px; background: #ffffff; color: #1f6f88; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; }
+.budget-picker-budget-btn:focus-visible { outline: 2px solid #2c91b0; outline-offset: 2px; }
+
+/* "No trips currently" (Itinerary tab with no trips; builder closed). */
+.no-trips { max-width: 712px; margin: 24px auto 0; padding: 28px 20px; box-sizing: border-box; border: 1px dashed #c6dce6; border-radius: 20px; background: rgba(255, 255, 255, .78); text-align: center; }
+.no-trips[hidden] { display: none; }
+.no-trips-icon { display: inline-flex; align-items: center; justify-content: center; width: 56px; height: 56px; margin-bottom: 12px; border-radius: 50%; background: #e6f3f7; color: #1f6f88; }
+.no-trips-icon svg { width: 28px; height: 28px; }
+.no-trips h2 { margin: 0 0 6px; color: #163457; font-size: 19px; font-weight: 800; }
+.no-trips p { margin: 0 0 16px; color: #5b7489; font-size: 14px; line-height: 1.5; }
+@media (max-width: 640px) { .no-trips { margin: 20px 16px 0; } }
+
+/* Short help line under a builder field (Travelers). */
+.itinerary-field-hint { color: #64748b; font-size: 12px; line-height: 1.35; }

@@ -83,6 +83,12 @@ function clearAuthSession() {
   localStorage.removeItem(SIDEKICK_KEYS.auth);
 }
 
+// Passwords: at least 8 characters, with both letters and numbers (the server checks too).
+function isStrongEnoughPassword(password) {
+  const text = String(password || "");
+  return text.length >= 8 && /\p{L}/u.test(text) && /\d/.test(text);
+}
+
 function normalizeEmail(email) {
   return String(email || "").trim().toLowerCase();
 }
@@ -351,6 +357,8 @@ async function apiRequest(path, options = {}) {
       : friendlyError({ message: serverMessage }, fallback);
     const error = new Error(message);
     error.statusCode = response.status;
+    // A verification code was already sent recently (no new one is sent).
+    if (payload.alreadySent === true) error.alreadySent = true;
     if (response.status === 401 && sessionToken && !window.location.pathname.endsWith("/login.html")) {
       invalidateAppSession(sessionToken);
     }
@@ -481,10 +489,29 @@ function setChatByEmail(map) {
   localStorage.setItem(SIDEKICK_KEYS.chatByEmail, JSON.stringify(map));
 }
 
+// Removes this account's whole chat history on this phone: the current conversation,
+// the archived sessions (and their numbering), what Sidekick remembered from the chats,
+// a trip it proposed but wasn't saved yet, and the saved scroll position. Saved trips
+// and preferences are kept.
 function clearChatForEmail(email) {
   const map = getChatByEmail();
   delete map[email];
   setChatByEmail(map);
+  [
+    "sidekick.chatArchiveByEmail.v1",
+    "sidekick.chatCurrentSession.v1",
+    "sidekick.aiCompanionByEmail.v2",
+    "sidekick.pendingItineraryByEmail.v1",
+  ].forEach((key) => {
+    try {
+      const all = safeJsonParse(localStorage.getItem(key), {});
+      if (all && typeof all === "object" && Object.hasOwn(all, email)) {
+        delete all[email];
+        localStorage.setItem(key, JSON.stringify(all));
+      }
+    } catch (error) {}
+  });
+  try { localStorage.removeItem(`sidekick.chatScrollPosition.v1:${String(email || "").trim().toLowerCase()}`); } catch (error) {}
 }
 
 function getItineraryByEmail() {
@@ -518,6 +545,12 @@ function getItinerarySyncPayload(itineraryData) {
           return localDateValue(new Date(end)) === localDateValue(new Date(start)) ? clock(end) : "";
         })(),
         estimatedTotalCostPhp: activity?.estimatedTotalCostPhp ?? activity?.estimatedActivityCostPhp ?? null,
+        // The Google place, so the server can count how often each place is used
+        // (Home's "Popular destinations").
+        placeId: activity?.placeId || "",
+        lat: Number.isFinite(Number(activity?.locationCoords?.lat)) ? Number(activity.locationCoords.lat) : null,
+        lng: Number.isFinite(Number(activity?.locationCoords?.lng)) ? Number(activity.locationCoords.lng) : null,
+        photoResource: activity?.photoResource || "",
       })),
     })),
     meta: {
@@ -1180,23 +1213,85 @@ function scorePlaceByInterests(place, interests) {
 
 // Top, widely known tourist spots in Batangas. Used for the general
 // "Popular destinations" section (independent of the user's preferences).
+// Most people on one trip (see normalizeTravelers). Defined before window.SidekickCore,
+// which exports it.
+const MAX_TRAVELERS = 10;
+
+// Well-known Batangas spots, each tagged with the onboarding interests it suits, so
+// onboarding can suggest the places that match what the traveler picked.
 const POPULAR_PH_SPOTS = [
-  { name: "Taal Volcano", region: "Batangas", lat: 14.0113, lng: 120.9980 },
-  { name: "Anilao, Mabini", region: "Batangas", lat: 13.7603, lng: 120.9254 },
-  { name: "Laiya Beach, San Juan", region: "Batangas", lat: 13.6697, lng: 121.4022 },
-  { name: "Fortune Island, Nasugbu", region: "Batangas", lat: 14.0581, lng: 120.4956 },
-  { name: "Masasa Beach, Tingloy", region: "Batangas", lat: 13.6550, lng: 120.8960 },
-  { name: "Taal Heritage Town", region: "Batangas", lat: 13.8800, lng: 120.9230 },
-  { name: "Mount Batulao, Nasugbu", region: "Batangas", lat: 14.0400, lng: 120.8000 },
-  { name: "Mount Maculot, Cuenca", region: "Batangas", lat: 13.9200, lng: 121.0450 },
-  { name: "Cape Santiago Lighthouse, Calatagan", region: "Batangas", lat: 13.7660, lng: 120.6560 },
-  { name: "Malabrigo Lighthouse, Lobo", region: "Batangas", lat: 13.5960, lng: 121.2610 },
-  { name: "San Sebastian Cathedral, Lipa", region: "Batangas", lat: 13.9411, lng: 121.1631 },
-  { name: "Nasugbu Beaches", region: "Batangas", lat: 14.0670, lng: 120.6330 },
+  { name: "Taal Volcano", region: "Batangas", lat: 14.0113, lng: 120.9980, interests: ["Hiking", "Mountains", "Photography"] },
+  { name: "Anilao, Mabini", region: "Batangas", lat: 13.7603, lng: 120.9254, interests: ["Water Sports", "Beaches", "Island Hopping"] },
+  { name: "Laiya Beach, San Juan", region: "Batangas", lat: 13.6697, lng: 121.4022, interests: ["Beaches", "Water Sports", "Nightlife"] },
+  { name: "Fortune Island, Nasugbu", region: "Batangas", lat: 14.0581, lng: 120.4956, interests: ["Island Hopping", "Beaches", "Photography", "Water Sports"] },
+  { name: "Masasa Beach, Tingloy", region: "Batangas", lat: 13.6550, lng: 120.8960, interests: ["Beaches", "Island Hopping"] },
+  { name: "Taal Heritage Town", region: "Batangas", lat: 13.8800, lng: 120.9230, interests: ["Historical Sites", "Local Cuisine", "Photography", "Shopping"] },
+  { name: "Mount Batulao, Nasugbu", region: "Batangas", lat: 14.0400, lng: 120.8000, interests: ["Hiking", "Mountains"] },
+  { name: "Mount Maculot, Cuenca", region: "Batangas", lat: 13.9200, lng: 121.0450, interests: ["Hiking", "Mountains", "Photography"] },
+  { name: "Cape Santiago Lighthouse, Calatagan", region: "Batangas", lat: 13.7660, lng: 120.6560, interests: ["Historical Sites", "Photography", "Beaches"] },
+  { name: "Malabrigo Lighthouse, Lobo", region: "Batangas", lat: 13.5960, lng: 121.2610, interests: ["Historical Sites", "Photography", "Beaches"] },
+  { name: "San Sebastian Cathedral, Lipa", region: "Batangas", lat: 13.9411, lng: 121.1631, interests: ["Historical Sites", "Photography"] },
+  { name: "Nasugbu Beaches", region: "Batangas", lat: 14.0670, lng: 120.6330, interests: ["Beaches", "Water Sports"] },
+  { name: "Pico de Loro, Nasugbu", region: "Batangas", lat: 14.2140, lng: 120.6400, interests: ["Hiking", "Mountains", "Photography"] },
+  { name: "Mount Gulugod Baboy, Mabini", region: "Batangas", lat: 13.7180, lng: 120.9130, interests: ["Hiking", "Mountains", "Photography"] },
+  { name: "Verde Island, Batangas City", region: "Batangas", lat: 13.5500, lng: 121.0700, interests: ["Water Sports", "Island Hopping", "Beaches"] },
+  { name: "Calatagan Beaches", region: "Batangas", lat: 13.8320, lng: 120.6300, interests: ["Beaches", "Photography"] },
+  { name: "Lipa City", region: "Batangas", lat: 13.9411, lng: 121.1631, interests: ["Local Cuisine", "Shopping", "Historical Sites"], town: true },
+  { name: "Batangas City", region: "Batangas", lat: 13.7565, lng: 121.0583, interests: ["Local Cuisine", "Nightlife", "Shopping"], town: true },
 ];
 
+// ---- Onboarding choices -------------------------------------------------------------
+// Each travel style leads to the interests that fit it; each interest to the Batangas
+// spots above. Onboarding shows only what follows from the earlier answers, and Home
+// recommends places from the same answers.
+const TRAVEL_STYLE_OPTIONS = [
+  { name: "Adventure", detail: "Hikes, volcano treks and water sports", interests: ["Hiking", "Mountains", "Water Sports", "Island Hopping", "Photography"] },
+  { name: "Beach & Relaxation", detail: "White sand, clear water, slow days", interests: ["Beaches", "Island Hopping", "Water Sports", "Photography"] },
+  { name: "Cultural", detail: "Heritage towns, churches and history", interests: ["Historical Sites", "Local Cuisine", "Photography", "Shopping"] },
+  { name: "Food Tour", detail: "Lomi, bulalo, kapeng barako and more", interests: ["Local Cuisine", "Nightlife", "Shopping"] },
+  { name: "Nature & Wildlife", detail: "Mountains, reefs, islands and views", interests: ["Mountains", "Hiking", "Beaches", "Island Hopping", "Photography"] },
+  { name: "City Exploration", detail: "Town centers, shops and night spots", interests: ["Shopping", "Nightlife", "Local Cuisine", "Historical Sites"] },
+];
+
+const INTEREST_OPTIONS = [
+  { name: "Beaches", detail: "Laiya, Nasugbu, Calatagan, Masasa" },
+  { name: "Island Hopping", detail: "Fortune Island, Verde Island, Tingloy" },
+  { name: "Water Sports", detail: "Diving and snorkeling in Anilao" },
+  { name: "Hiking", detail: "Trails to Batulao, Maculot, Pico de Loro" },
+  { name: "Mountains", detail: "Taal Volcano and ridge views" },
+  { name: "Historical Sites", detail: "Taal Heritage Town, old churches, lighthouses" },
+  { name: "Photography", detail: "Lighthouses, sunsets and viewpoints" },
+  { name: "Local Cuisine", detail: "Batangas lomi, bulalo, kapeng barako" },
+  { name: "Shopping", detail: "Pasalubong, embroidery and local crafts" },
+  { name: "Nightlife", detail: "Night markets, beach parties, city nights" },
+];
+
+// Interests that fit the chosen travel styles (all of them when none is chosen).
+function interestsForTravelStyles(styles) {
+  const chosen = TRAVEL_STYLE_OPTIONS.filter((option) => (styles || []).includes(option.name));
+  if (!chosen.length) return INTEREST_OPTIONS.slice();
+  const wanted = new Set(chosen.flatMap((option) => option.interests));
+  return INTEREST_OPTIONS.filter((option) => wanted.has(option.name));
+}
+
+// Batangas spots for the chosen interests, best match first: { matches, others }.
+function spotsForInterests(interests) {
+  const wanted = new Set(interests || []);
+  const scored = POPULAR_PH_SPOTS.map((spot, index) => ({
+    spot,
+    index,
+    score: (spot.interests || []).filter((interest) => wanted.has(interest)).length,
+  }));
+  const matches = scored.filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .map((item) => item.spot);
+  const others = scored.filter((item) => item.score === 0).map((item) => item.spot);
+  return { matches, others };
+}
+
 function buildPopularDestinations() {
-  return POPULAR_PH_SPOTS.map((spot) => ({ ...spot, tags: ["Tourist Attraction"] }));
+  // Whole towns (picked in onboarding for food, shopping and nights out) aren't spots.
+  return POPULAR_PH_SPOTS.filter((spot) => !spot.town).map((spot) => ({ ...spot, tags: ["Tourist Attraction"] }));
 }
 
 // Normalizes a user's selected destinations. Supports the newer
@@ -1725,6 +1820,7 @@ window.SidekickCore = {
   setAuthSession,
   clearAuthSession,
   normalizeEmail,
+  isStrongEnoughPassword,
   getPreferences,
   setPreferencesForEmail,
   syncPreferencesToServer,
@@ -1751,6 +1847,14 @@ window.SidekickCore = {
   buildPopularDestinations,
   getPreferredDestinations,
   POPULAR_PH_SPOTS,
+  MAX_TRAVELERS,
+  normalizeTravelers,
+  roomsForTravelers,
+  travelersLabel,
+  TRAVEL_STYLE_OPTIONS,
+  INTEREST_OPTIONS,
+  interestsForTravelStyles,
+  spotsForInterests,
   getApiBaseUrl,
   generateItinerary,
   updateItineraryActivitySchedule,
@@ -1763,6 +1867,7 @@ window.SidekickCore = {
   isPerfLiteMode,
   isFeatureOn,
   checkTripBudget,
+  startBuildProgress,
   getPlannedTrips,
   getItineraryDraft,
   openTripForEmail,
@@ -1789,8 +1894,29 @@ window.SidekickCore = {
 // compares the budget with the cheapest restaurant and hotel prices it finds.
 const tripBudgetResults = new Map();
 
-function tripBudgetKey({ destination, startDate, endDate, budgetAmountPhp }) {
-  return [String(destination || "").trim().toLowerCase(), startDate, endDate, Number(budgetAmountPhp)].join("|");
+function tripBudgetKey({ destination, startDate, endDate, budgetAmountPhp, travelers = 1 }) {
+  const people = normalizeTravelers(travelers);
+  return [String(destination || "").trim().toLowerCase(), startDate, endDate, Number(budgetAmountPhp), ...(people > 1 ? [people] : [])].join("|");
+}
+
+// ---- Group trips --------------------------------------------------------------------
+// How many people travel together: 1 to 10 (the usual barkada or family trip). Budgets,
+// rooms, meals and entrance fees are worked out for the whole group. The server uses
+// the same rules (normalizeTravelers in server.js).
+
+function normalizeTravelers(value) {
+  const count = Math.round(Number(value));
+  return Number.isFinite(count) && count >= 1 ? Math.min(MAX_TRAVELERS, count) : 1;
+}
+
+// Rooms a group needs: two people share a room.
+function roomsForTravelers(travelers) {
+  return Math.ceil(normalizeTravelers(travelers) / 2);
+}
+
+function travelersLabel(travelers) {
+  const count = normalizeTravelers(travelers);
+  return count === 1 ? "1 traveler" : `${count} travelers`;
 }
 
 // Resolves to the backend's result, or null when the check could not run
@@ -1819,19 +1945,20 @@ function inclusiveTripDays(startDate, endDate) {
   return Math.round((end - start) / 86400000) + 1;
 }
 
-async function checkTripBudget({ destination, placeId = "", lat = null, lng = null, startDate, endDate, budgetAmountPhp }) {
-  const key = tripBudgetKey({ destination, startDate, endDate, budgetAmountPhp });
+async function checkTripBudget({ destination, placeId = "", lat = null, lng = null, startDate, endDate, budgetAmountPhp, travelers = 1 }) {
+  const people = normalizeTravelers(travelers);
+  const key = tripBudgetKey({ destination, startDate, endDate, budgetAmountPhp, travelers: people });
   if (tripBudgetResults.has(key)) return tripBudgetResults.get(key);
   // Far too much money for the trip: decided right here, without asking the server.
   const days = inclusiveTripDays(startDate, endDate);
   const amount = Number(budgetAmountPhp);
-  if (days >= 1 && Number.isFinite(amount) && amount > MAX_BUDGET_PER_DAY_PHP * days) {
-    return { checked: true, realistic: false, tooHigh: true, budgetAmountPhp: amount, days, maximumPhp: MAX_BUDGET_PER_DAY_PHP * days };
+  if (days >= 1 && Number.isFinite(amount) && amount > MAX_BUDGET_PER_DAY_PHP * days * people) {
+    return { checked: true, realistic: false, tooHigh: true, budgetAmountPhp: amount, days, travelers: people, maximumPhp: MAX_BUDGET_PER_DAY_PHP * days * people };
   }
   try {
     const result = await apiRequest("/api/trip/budget-check", {
       method: "POST",
-      body: JSON.stringify({ destination, placeId, lat, lng, startDate, endDate, budgetAmountPhp }),
+      body: JSON.stringify({ destination, placeId, lat, lng, startDate, endDate, budgetAmountPhp, travelers: people }),
     });
     if (result && result.checked) tripBudgetResults.set(key, result);
     return result || null;
@@ -1841,6 +1968,74 @@ async function checkTripBudget({ destination, placeId = "", lat = null, lng = nu
   }
 }
 
+// ---- Itinerary build progress --------------------------------------------------------
+// While an itinerary is built, the loading screen shows a percentage and what is
+// happening. The server reports its stage (GET /api/itinerary/progress); between reports
+// the number keeps creeping toward the next stage, and it never goes back. Without
+// reports (offline, an older server) it follows the time a build usually takes, up to 90%.
+// Returns { id, finish(success) }: send id as progressId with the build request.
+function startBuildProgress(label = "Building your itinerary…") {
+  const ui = window.SidekickUI?.loading;
+  const rawId = window.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+  const id = String(rawId).replace(/[^A-Za-z0-9_-]/g, "").slice(0, 64);
+  const startedAt = Date.now();
+  let shown = 0;
+  let server = null;
+  let serverAt = 0;
+  let text = label;
+  let stopped = false;
+  let polling = false;
+  ui?.show(label);
+  ui?.progress?.(0, label);
+  const tick = () => {
+    if (stopped) return;
+    let target;
+    if (server) {
+      const since = (Date.now() - serverAt) / 1000;
+      const span = Math.max(0, server.next - server.percent - 1);
+      target = server.percent + span * (1 - Math.exp(-since / 12));
+    } else {
+      target = 90 * (1 - Math.exp(-(Date.now() - startedAt) / 30000));
+    }
+    shown = Math.max(shown, Math.min(99, target));
+    ui?.progress?.(shown, text);
+  };
+  const frameTimer = setInterval(tick, 250);
+  const pollTimer = setInterval(async () => {
+    if (stopped || polling) return;
+    polling = true;
+    try {
+      const data = await apiRequest(`/api/itinerary/progress?id=${encodeURIComponent(id)}`, { waitForConnection: false });
+      const percent = Number(data?.percent);
+      if (!stopped && data?.found && Number.isFinite(percent)) {
+        if (!server || server.percent !== percent) {
+          server = { percent, next: Number.isFinite(Number(data.next)) ? Number(data.next) : percent + 5 };
+          serverAt = Date.now();
+        }
+        if (data.label) text = `${data.label}…`;
+      }
+    } catch (error) {
+      // No report this time: the estimate keeps the number moving.
+    } finally {
+      polling = false;
+    }
+  }, 800);
+  return {
+    id,
+    async finish(success = true) {
+      if (stopped) return;
+      stopped = true;
+      clearInterval(frameTimer);
+      clearInterval(pollTimer);
+      if (success) {
+        ui?.progress?.(100, "Your itinerary is ready");
+        await new Promise((resolve) => setTimeout(resolve, 400));
+      }
+      ui?.hide();
+    },
+  };
+}
+
 // Plain-language explanation of an unrealistic budget for an error message.
 function describeUnrealisticBudget(result, destination) {
   const peso = (amount) => `₱${Math.round(Number(amount) || 0).toLocaleString()}`;
@@ -1848,12 +2043,14 @@ function describeUnrealisticBudget(result, destination) {
     return { title: "Batangas only", message: result.message || "Sidekick plans trips in the province of Batangas only. Choose a place in Batangas.", details: [] };
   }
   const days = Number(result.days) || 1;
+  const people = normalizeTravelers(result.travelers);
+  const group = people > 1 ? ` for ${people} travelers` : "";
   if (result.tooHigh) {
-    const maximum = Number(result.maximumPhp) || MAX_BUDGET_PER_DAY_PHP * days;
+    const maximum = Number(result.maximumPhp) || MAX_BUDGET_PER_DAY_PHP * days * people;
     return {
       title: "This budget is too high",
-      message: `${peso(result.budgetAmountPhp)} is far more than ${days} day${days === 1 ? "" : "s"} in ${destination} could use, so Sidekick can’t plan a realistic trip with it. Enter a budget of up to ${peso(maximum)} (${peso(MAX_BUDGET_PER_DAY_PHP)} a day).`,
-      details: [["Your budget", peso(result.budgetAmountPhp)], ["Trip length", `${days} day${days === 1 ? "" : "s"}`], ["Highest budget Sidekick plans for", peso(maximum)]],
+      message: `${peso(result.budgetAmountPhp)} is far more than ${days} day${days === 1 ? "" : "s"} in ${destination}${group} could use, so Sidekick can’t plan a realistic trip with it. Enter a budget of up to ${peso(maximum)} (${peso(MAX_BUDGET_PER_DAY_PHP * people)} a day${group}).`,
+      details: [["Your budget", peso(result.budgetAmountPhp)], ["Trip length", `${days} day${days === 1 ? "" : "s"}`], ...(people > 1 ? [["Group", travelersLabel(people)]] : []), ["Highest budget Sidekick plans for", peso(maximum)]],
     };
   }
   const meals = result.meals || {};
@@ -1861,17 +2058,18 @@ function describeUnrealisticBudget(result, destination) {
   const details = [["Your budget", peso(result.budgetAmountPhp)]];
   if (lodging.needed && lodging.totalPhp > 0) {
     const label = lodging.source === "researched" && lodging.name ? `Cheapest hotel found (${lodging.name})` : "Cheapest rooms";
-    details.push([label, `${peso(lodging.nightlyLowPhp)} a night × ${lodging.nights} night${lodging.nights === 1 ? "" : "s"}`]);
+    const rooms = Number(lodging.rooms) || 1;
+    details.push([label, `${peso(lodging.nightlyLowPhp)} a night × ${lodging.nights} night${lodging.nights === 1 ? "" : "s"}${rooms > 1 ? ` × ${rooms} rooms` : ""}`]);
   }
   const mealLabel = meals.estimated ? "Basic meals" : `Cheapest meals found${meals.name ? ` (${meals.name})` : ""}`;
-  details.push([mealLabel, `${peso(meals.perMealPhp)} × ${meals.mealsPerDay || 2} a day × ${days} day${days === 1 ? "" : "s"}`]);
+  details.push([mealLabel, `${peso(meals.perMealPhp)} × ${meals.mealsPerDay || 2} a day × ${days} day${days === 1 ? "" : "s"}${people > 1 ? ` × ${people} people` : ""}`]);
   details.push(["Lowest realistic cost", peso(result.minimumPhp)]);
   const shorter = result.maxAffordableDays >= 1 && result.maxAffordableDays < days
     ? ` or shorten the trip to ${result.maxAffordableDays} day${result.maxAffordableDays === 1 ? "" : "s"}`
     : "";
   return {
     title: "This budget isn't realistic",
-    message: `${peso(result.budgetAmountPhp)} isn't enough for ${days} day${days === 1 ? "" : "s"} in ${destination}, even at the cheapest prices we found. Raise your budget to at least ${peso(result.minimumPhp)}${shorter}.`,
+    message: `${peso(result.budgetAmountPhp)} isn't enough for ${days} day${days === 1 ? "" : "s"} in ${destination}${group}, even at the cheapest prices we found. Raise your budget to at least ${peso(result.minimumPhp)}${shorter}.`,
     details,
   };
 }
@@ -1996,6 +2194,8 @@ if (document.readyState === "loading") {
 
       for (const el of candidates) {
         try {
+          // Screens without the tab bar (Settings, Past trips) need no room for it.
+          if (el.classList.contains('bottom-nav') && document.body?.getAttribute('data-nav') === 'away') continue;
           const cs = getComputedStyle(el);
           const isFixed = cs.position === 'fixed';
           const isVisible = cs.display !== 'none' && cs.visibility !== 'hidden';

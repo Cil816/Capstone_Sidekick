@@ -622,8 +622,12 @@
       const place = state.modalPlace;
       if (!place) return;
       try {
+        // selectedAt: the chat only uses a place opened in the last 30 minutes. The photo
+        // lets the reply show the place's photo card.
         localStorage.setItem(SELECTED_DESTINATION_KEY, JSON.stringify({
           name: place.name, placeId: place.placeId, lat: place.lat, lng: place.lng, address: place.address || "",
+          rating: place.rating, ratingCount: place.ratingCount, photoResource: place.photoResource || "",
+          photoAttribution: place.photoAttribution || null, selectedAt: Date.now(),
         }));
         sessionStorage.setItem(PENDING_CHAT_MESSAGE_KEY, `What do visitors think of ${place.name}?`);
       } catch (error) {}

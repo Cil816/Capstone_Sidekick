@@ -146,8 +146,8 @@
     async function savePassword() {
       const password = String(passwordInput.value || "");
       const confirmation = String(confirmInput.value || "");
-      if (password.length < 8) {
-        setError("Password must be at least 8 characters.");
+      if (!window.SidekickCore.isStrongEnoughPassword(password)) {
+        setError("Password must be at least 8 characters and include both letters and numbers.");
         passwordInput.focus();
         return;
       }

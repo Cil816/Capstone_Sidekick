@@ -77,6 +77,10 @@
                         <div class="destination-origin-search">
                             <input id="destination-origin" type="text" placeholder="Search starting location" autocomplete="off" aria-autocomplete="list" aria-controls="destination-origin-results" aria-describedby="destination-origin-status" />
                         </div>
+                        <button id="destination-use-location" class="destination-use-location" type="button">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3"></path><circle cx="12" cy="12" r="7"></circle></svg>
+                            Use my current location
+                        </button>
                         <div id="destination-origin-status" class="destination-origin-status" role="status" aria-live="polite"></div>
                         <div id="destination-origin-results" class="destination-origin-results" role="listbox" aria-label="Starting location suggestions" hidden></div>
                         <button id="destination-calculate-route" class="btn btn-outline" type="button">Calculate route</button>
@@ -97,12 +101,20 @@
                     </div>
                     <div class="destination-plan-controls">
                         <div class="destination-plan-field">
+                            <label for="destination-plan-start">Start date</label>
+                            <input id="destination-plan-start" type="date" required />
+                        </div>
+                        <div class="destination-plan-field">
+                            <label for="destination-plan-end">End date</label>
+                            <input id="destination-plan-end" type="date" required />
+                        </div>
+                        <div class="destination-plan-field">
                             <label for="destination-plan-budget">Total budget (PHP)</label>
                             <input id="destination-plan-budget" type="number" min="1" step="1" inputmode="numeric" placeholder="Enter your budget" required />
                         </div>
                         <div class="destination-plan-field">
-                            <label for="destination-plan-days">Trip length (days)</label>
-                            <input id="destination-plan-days" type="number" min="1" max="14" step="1" inputmode="numeric" placeholder="1–14 days" required />
+                            <label for="destination-plan-travelers">Travelers</label>
+                            <select id="destination-plan-travelers"><option value="1" selected>1 (just me)</option><option value="2">2 people</option><option value="3">3 people</option><option value="4">4 people</option><option value="5">5 people</option><option value="6">6 people</option><option value="7">7 people</option><option value="8">8 people</option><option value="9">9 people</option><option value="10">10 people</option></select>
                         </div>
                     </div>
                     <p id="destination-plan-error" class="destination-plan-error" role="status" aria-live="polite" hidden></p>
@@ -178,7 +190,7 @@
     <script src="js/app-rating.js"></script>
     <script src="js/dashboard.js"></script>
     <script src="js/nav.js"></script>
-    <script src="js/tab-motion.js"></script>
+    <script src="js/tab-motion.js"></script>
     <script src="js/pull-refresh.js"></script>
 </body>
 </html>

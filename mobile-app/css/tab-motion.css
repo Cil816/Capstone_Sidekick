@@ -142,8 +142,11 @@ html.sk-vt body[data-tab] .screen {
     animation-duration: 280ms;
 }
 
+/* Between two tab screens the bar stays put; to and from Settings or Past trips it
+   glides down or up (the browser moves it from one page's position to the other's). */
 ::view-transition-group(sk-bottom-nav) {
-    animation-duration: 200ms;
+    animation-duration: 340ms;
+    animation-timing-function: cubic-bezier(.22, .9, .35, 1);
 }
 
 html:active-view-transition-type(sk-next)::view-transition-old(root) {
@@ -167,9 +170,11 @@ html:active-view-transition-type(sk-prev)::view-transition-new(root) {
 @keyframes skVtInFromRight { from { opacity: 0; transform: translateX(40px); } }
 @keyframes skVtInFromLeft { from { opacity: 0; transform: translateX(-40px); } }
 
-/* Lighter phones: keep the gradient, stop the drifting glows. */
+/* Lighter phones (and all phone-sized screens): keep the gradient, stop the drifting
+   glows, and don't keep them as separate graphics layers in memory. */
 .perf-lite .sk-tab-bg span {
     animation: none;
+    will-change: auto;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -212,7 +217,7 @@ body[data-tab] .bottom-nav .nav-item svg {
     padding: 9px;
     border-radius: 50%;
     background-color: transparent;
-    transition: transform 380ms cubic-bezier(.34, 1.56, .64, 1), background-color 200ms ease, box-shadow 200ms ease, stroke 200ms ease;
+    transition: transform 380ms cubic-bezier(.34, 1.56, .64, 1), background-color 200ms ease, stroke 200ms ease;
 }
 
 body[data-tab] .bottom-nav .nav-item:not(.active):hover svg {
@@ -254,13 +259,60 @@ body[data-tab] .bottom-nav .nav-item.active .reminders-badge {
     transform: translateY(-16px);
 }
 
+/* Only the position and size animate (an animated shadow is redrawn every frame). */
 @keyframes skNavRise {
-    from { transform: translateY(0) scale(.6); box-shadow: none; }
+    from { transform: translateY(0) scale(.6); }
 }
 
 /* Hiding the bar on scroll must also hide the raised circle. */
 body[data-tab] .bottom-nav.overlay.navbar-hidden {
     transform: translateX(-50%) translateY(175%);
+}
+
+/* The bar glides down and up (also on lighter phones: only transform and opacity
+   change, which the graphics chip animates without redrawing the page). */
+body[data-tab] .bottom-nav.overlay {
+    transition: transform 340ms cubic-bezier(.22, .9, .35, 1), opacity 260ms ease;
+}
+
+/* ---- Screens without the tab bar --------------------------------------------
+   Settings and Past trips (<body data-nav="away">) and Home's "See all" screen
+   (SidekickNav.hide() in js/nav.js): the bar slides down out of view, and slides
+   back up on the next tab screen. */
+body[data-nav="away"] .bottom-nav.overlay,
+body[data-tab] .bottom-nav.overlay.nav-away {
+    transform: translateX(-50%) translateY(calc(175% + var(--sk-safe-bottom, 0px)));
+    opacity: 0;
+    pointer-events: none;
+}
+
+/* Arriving from a screen that had the bar (or the other way round), when the
+   browser does not move the bar itself with a view transition. */
+@keyframes skNavDown {
+    from { transform: translateX(-50%) translateY(0); opacity: 1; }
+}
+
+@keyframes skNavUp {
+    from { transform: translateX(-50%) translateY(calc(175% + var(--sk-safe-bottom, 0px))); opacity: 0; }
+}
+
+body[data-tab] .bottom-nav.overlay.sk-nav-leave {
+    animation: skNavDown 340ms cubic-bezier(.4, 0, .2, 1) backwards;
+}
+
+body[data-tab] .bottom-nav.overlay.sk-nav-return {
+    animation: skNavUp 400ms cubic-bezier(.22, .9, .35, 1) 60ms backwards;
+}
+
+/* With the bar gone, the page needs no room for it at the bottom. */
+body[data-nav="away"] .app-container {
+    --bottom-overlay-height: 8px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    body[data-tab] .bottom-nav.overlay { transition: none; }
+    body[data-tab] .bottom-nav.overlay.sk-nav-leave,
+    body[data-tab] .bottom-nav.overlay.sk-nav-return { animation: none; }
 }
 
 /* ---- Home: no extra empty space under the last section -------------------- */

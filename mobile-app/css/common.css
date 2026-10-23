@@ -79,7 +79,8 @@ img, svg, video, canvas {
     font-size: 16px;
     font-weight: 500;
     cursor: pointer;
-    transition: all 0.3s ease;
+    /* Only these change on press/hover ("all" would also animate layout changes). */
+    transition: transform 0.2s ease, background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -238,7 +239,7 @@ img, svg, video, canvas {
     border-radius: 12px;
     font-size: 16px;
     outline: none;
-    transition: all 0.2s;
+    transition: border-color 0.2s, box-shadow 0.2s, background-color 0.2s;
 }
 
 .form-group input:focus {
@@ -711,3 +712,19 @@ input:focus, select:focus, textarea:focus {
 /* Links: no underline anywhere in the app (they keep their colour, and keyboard focus
    keeps its outline from a11y.css). */
 a, a:hover { text-decoration: none; }
+
+/* "Continue with Google" (login and register; js/google-auth.js). */
+.google-auth { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
+.google-auth-divider { display: flex; align-items: center; gap: 12px; color: #6b8193; font-size: 13px; font-weight: 600; }
+.google-auth-divider::before, .google-auth-divider::after { content: ""; flex: 1; height: 1px; background: #d9e6ee; }
+.google-btn { display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; min-height: 48px; padding: 0 16px; border: 1px solid #c9d7e1; border-radius: 12px; background: #ffffff; color: #1f2937; font: inherit; font-size: 15px; font-weight: 600; cursor: pointer; box-sizing: border-box; }
+.google-btn:hover { background: #f7fafc; }
+.google-btn:focus-visible { outline: 2px solid #2c91b0; outline-offset: 2px; }
+.google-btn-logo { width: 20px; height: 20px; flex: none; }
+.google-auth-note { margin: 0; color: #6b8193; font-size: 12px; line-height: 1.45; text-align: center; }
+.google-auth-note a { color: #1f6f88; font-weight: 600; }
+
+/* Alerts and Profile have no back button row: keep their titles clear of the top
+   edge (and of the status bar on edge-to-edge phones). */
+body[data-tab="alerts"] .alerts-screen,
+body[data-tab="profile"] .screen { padding-top: calc(20px + env(safe-area-inset-top, 0px)); }

@@ -288,6 +288,9 @@
 .chat-header {
     background: rgba(255, 255, 255, .84);
     backdrop-filter: blur(12px);
+    /* Above the messages, so the ⋯ menu opens over them. */
+    position: relative;
+    z-index: 9600;
 }
 
 .chat-header-info h1 { font-size: 20px; font-weight: 800; }
@@ -342,31 +345,26 @@
 .chat-place-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
 .chat-place-actions .btn { width: 100%; box-sizing: border-box; text-align: center; text-decoration: none; }
 
-/* ---- Composer docked above the nav (phones) ------------------------------
-   The input used to float with a gap under it where messages showed through.
-   Now it sits on a solid strip that reaches down behind the nav bar. */
+/* ---- Composer above the nav (phones) -------------------------------------
+   Just the text box and the send button, a little above the nav bar, with no
+   strip or panel behind them (or behind the nav bar). */
 @media (max-width: 599px) {
     .chat-input-container {
-        bottom: calc(var(--nav-height) + 14px + var(--sk-safe-bottom, env(safe-area-inset-bottom)));
+        bottom: calc(var(--nav-height) + 34px + var(--sk-safe-bottom, env(safe-area-inset-bottom)));
         z-index: 9000;
-        padding: 8px 12px;
+        padding: 0 12px;
         gap: 10px;
         align-items: center;
-        background: #f7fcfd;
-        border-top: 0;
+        background: transparent;
+        border: 0;
         backdrop-filter: none;
-        box-shadow: 0 -10px 18px rgba(247, 252, 253, .95);
+        box-shadow: none;
     }
+    html[data-theme="dark"] .chat-input-container { background: transparent; border: 0; box-shadow: none; backdrop-filter: none; }
 
-    .chat-input-container::after {
-        content: "";
-        position: absolute;
-        left: 0;
-        right: 0;
-        top: 100%;
-        height: calc(var(--nav-height) + 14px + var(--sk-safe-bottom, env(safe-area-inset-bottom)));
-        background: #f7fcfd;
-        pointer-events: none;
+    /* The last message stops above the raised text box. */
+    .chat-messages {
+        padding-bottom: calc(var(--bottom-overlay-height, var(--nav-height, 72px)) + 112px + var(--sk-safe-bottom, env(safe-area-inset-bottom)));
     }
 }
 
@@ -404,4 +402,68 @@
 /* Full-screen layout: the header panel also fills the strip behind the status bar. */
 .chat-screen > .chat-header {
     padding-top: calc(16px + var(--sk-safe-top, 0px));
+}
+
+/* While a reply is being written the send button is Stop (js/chat.js). */
+.chat-input-container .send-btn.is-stop { background: #163457; box-shadow: none; }
+.chat-input-container .send-btn.is-stop svg { width: 16px; height: 16px; color: #ffffff; }
+html[data-theme="dark"] .chat-input-container .send-btn.is-stop { background: #e6eef5; }
+html[data-theme="dark"] .chat-input-container .send-btn.is-stop svg { color: #163457; }
+
+/* Links in replies ("Open in Google Maps" and other web pages). */
+.ai-message .message-bubble a { color: #1f6f88; font-weight: 700; }
+html[data-theme="dark"] .ai-message .message-bubble a { color: #7fd4e6; }
+
+/* ---- ⋯ menu in the chat header (Chat archive, Delete this chat) ---- */
+.chat-menu { position: relative; flex: none; }
+.chat-menu-btn { display: flex; align-items: center; justify-content: center; width: 40px; height: 40px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: #315f78; cursor: pointer; }
+.chat-menu-btn svg { width: 22px; height: 22px; fill: currentColor; }
+.chat-menu-btn:hover, .chat-menu-btn[aria-expanded="true"] { background: rgba(44, 145, 176, .1); }
+.chat-menu-btn:focus-visible { outline: 2px solid #2c91b0; outline-offset: 2px; }
+.chat-menu-list { position: absolute; top: calc(100% + 6px); right: 0; z-index: 9500; min-width: 210px; padding: 6px; border: 1px solid #dce8ef; border-radius: 14px; background: #ffffff; box-shadow: 0 14px 32px rgba(22, 52, 87, .18); }
+.chat-menu-list[hidden] { display: none; }
+.chat-menu-list button { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; padding: 0 12px; border: 0; border-radius: 10px; background: none; color: #163457; font: inherit; font-size: 15px; font-weight: 600; text-align: left; cursor: pointer; }
+.chat-menu-list button svg { width: 20px; height: 20px; flex: none; }
+.chat-menu-list button:hover, .chat-menu-list button:focus-visible { background: #f1f7fa; outline: none; }
+.chat-menu-list button.is-danger { color: #c0182f; }
+.chat-menu-list button.is-danger:hover, .chat-menu-list button.is-danger:focus-visible { background: #fdecee; }
+
+/* ---- Chat archive: a sidebar from the left (current session + archived sessions) ---- */
+.chat-archive { position: fixed; inset: 0; z-index: 20000; display: flex; justify-content: flex-start; }
+.chat-archive-backdrop { position: absolute; inset: 0; background: rgba(15, 23, 42, .5); }
+.chat-archive-panel { position: relative; display: flex; flex-direction: column; width: min(86vw, 340px); height: 100%; overflow-y: auto; box-sizing: border-box; padding: calc(18px + env(safe-area-inset-top, 0px)) 14px calc(18px + env(safe-area-inset-bottom, 0px)); border-radius: 0 22px 22px 0; background: radial-gradient(circle at 10% 0%, rgba(104, 221, 217, .16), transparent 30%), #f5fbfc; box-shadow: 12px 0 30px rgba(22, 52, 87, .22); }
+.chat-archive.is-opening .chat-archive-panel { animation: skArchiveIn .26s cubic-bezier(.2, .8, .2, 1) both; }
+.chat-archive.is-opening .chat-archive-backdrop { animation: skArchiveFade .26s ease both; }
+@keyframes skArchiveIn { from { transform: translateX(-100%); } to { transform: none; } }
+@keyframes skArchiveFade { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .chat-archive.is-opening .chat-archive-panel, .chat-archive.is-opening .chat-archive-backdrop { animation: none; } }
+.chat-archive-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.chat-archive-head h2 { margin: 0; color: #163457; font-size: 19px; font-weight: 800; }
+.chat-archive-x { width: 36px; height: 36px; border: 0; border-radius: 50%; background: #eef4f7; color: #315f78; font-size: 22px; line-height: 1; cursor: pointer; }
+.chat-archive-new { margin-bottom: 4px; }
+.chat-archive-new:disabled { opacity: .55; }
+.chat-archive-section { margin: 16px 2px 8px; color: #6b8193; font-size: 12px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
+.chat-session-chip { align-self: flex-start; padding: 2px 9px; border-radius: 999px; background: #e6f3f7; color: #1f6f88; font-size: 11px; font-weight: 800; letter-spacing: .02em; }
+.chat-session-chip.is-current { background: #1f6f88; color: #ffffff; }
+.chat-archive-current { display: flex; flex-direction: column; gap: 4px; padding: 12px 14px; border: 1px solid #a9d3df; border-radius: 14px; background: #eef8fb; }
+.chat-archive-current strong { color: #163457; font-size: 15px; font-weight: 700; overflow-wrap: anywhere; }
+.chat-archive-current small { color: #6b8193; font-size: 12px; }
+.chat-archive-empty { margin: 4px 2px 8px; color: #6b8193; font-size: 13px; line-height: 1.45; }
+.chat-archive-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.chat-archive-list li { display: flex; align-items: stretch; border: 1px solid #dce8ef; border-radius: 14px; background: #ffffff; box-shadow: 0 4px 12px rgba(22, 52, 87, .05); }
+.chat-archive-open { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 4px; padding: 12px 14px; border: 0; background: none; text-align: left; font: inherit; cursor: pointer; }
+.chat-archive-open strong { color: #163457; font-size: 15px; font-weight: 700; overflow-wrap: anywhere; }
+.chat-archive-open small { color: #6b8193; font-size: 12px; }
+.chat-archive-delete { flex: none; width: 46px; border: 0; border-left: 1px solid #dce8ef; border-radius: 0 14px 14px 0; background: none; color: #c0182f; cursor: pointer; }
+.chat-archive-delete svg { width: 20px; height: 20px; }
+.chat-archive-open:focus-visible, .chat-archive-delete:focus-visible, .chat-archive-x:focus-visible { outline: 2px solid #2c91b0; outline-offset: -2px; }
+html[data-theme="dark"] .chat-session-chip.is-current { background: #2c91b0; color: #ffffff; }
+/* Same background as the chat screen in dark mode too. */
+html[data-theme="dark"] .chat-archive-panel { background: radial-gradient(circle at 10% 0%, rgba(104, 221, 217, .16), transparent 30%), hsl(189, 38%, 12%); }
+html[data-theme="dark"] .chat-menu-list button.is-danger, html[data-theme="dark"] .chat-archive-delete { color: #ff8593; }
+
+/* Lighter phones: the header doesn't sit over the messages, so its blur showed
+   nothing and only cost drawing time. */
+.perf-lite .chat-header {
+    backdrop-filter: none;
 }

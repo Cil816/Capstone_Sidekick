@@ -181,6 +181,30 @@ html[data-theme="dark"] .maintenance-banner {
   color: hsl(30, 32%, 83%);
   border-bottom: 1px solid hsl(34, 30%, 29%);
 }
+html[data-theme="dark"] .google-auth-divider {
+  color: hsl(207, 16%, 72%);
+}
+html[data-theme="dark"] .google-auth-divider::before,
+html[data-theme="dark"] .google-auth-divider::after {
+  background: hsl(203, 38%, 16%);
+}
+html[data-theme="dark"] .google-btn {
+  border: 1px solid hsl(205, 29%, 26%);
+  background: hsl(208, 32%, 11%);
+  color: hsl(215, 28%, 86%);
+}
+html[data-theme="dark"] .google-btn:hover {
+  background: hsl(204, 38%, 12%);
+}
+html[data-theme="dark"] .google-btn:focus-visible {
+  outline: 2px solid #2c91b0;
+}
+html[data-theme="dark"] .google-auth-note {
+  color: hsl(207, 16%, 72%);
+}
+html[data-theme="dark"] .google-auth-note a {
+  color: hsl(194, 32%, 79%);
+}
 
 /* ---- from alerts.css (alerts) ---- */
 html[data-theme="dark"]:where([data-page="alerts"]) .alerts-card {
@@ -547,10 +571,10 @@ html[data-theme="dark"]:where([data-page="chat"]) .chat-place-hours ul {
 }
 @media (max-width: 599px) {
 html[data-theme="dark"]:where([data-page="chat"]) .chat-input-container {
-  background: hsl(190, 38%, 12%);
+  background: transparent;
 }
-html[data-theme="dark"]:where([data-page="chat"]) .chat-input-container::after {
-  background: hsl(190, 38%, 12%);
+html[data-theme="dark"]:where([data-page="chat"])[data-theme="dark"] .chat-input-container {
+  background: transparent;
 }
 }
 html[data-theme="dark"]:where([data-page="chat"]) .chat-input-container input {
@@ -563,6 +587,125 @@ html[data-theme="dark"]:where([data-page="chat"]) .chat-input-container input:fo
 }
 html[data-theme="dark"]:where([data-page="chat"]) .chat-header-info h1 {
   color: hsl(212, 32%, 84%);
+}
+html[data-theme="dark"]:where([data-page="chat"]) .chat-input-container .send-btn.is-stop {
+  background: #163457;
+}
+html[data-theme="dark"]:where([data-page="chat"]) .chat-input-container .send-btn.is-stop svg {
+  color: #ffffff;
+}
+html[data-theme="dark"]:where([data-page="chat"])[data-theme="dark"] .chat-input-container .send-btn.is-stop {
+  background: hsl(208, 38%, 14%);
+}
+html[data-theme="dark"]:where([data-page="chat"])[data-theme="dark"] .chat-input-container .send-btn.is-stop svg {
+  color: hsl(212, 32%, 84%);
+}
+html[data-theme="dark"]:where([data-page="chat"]) .ai-message .message-bubble a {
+  color: hsl(194, 32%, 79%);
+}
+html[data-theme="dark"]:where([data-page="chat"])[data-theme="dark"] .ai-message .message-bubble a {
+  color: #7fd4e6;
+}
+html[data-theme="dark"]:where([data-page="chat"]) .chat-menu-btn {
+  background: transparent;
+  color: hsl(201, 32%, 79%);
+}
+html[data-theme="dark"]:where([data-page="chat"]) .chat-menu-btn:hover,
+html[data-theme="dark"]:where([data-page="chat"]) .chat-menu-btn[aria-expanded="true"] {
+  background: rgba(44, 145, 176, .1);
+}
+html[data-theme="dark"]:where([data-page="chat"]) .chat-menu-btn:focus-visible {
+  outline: 2px solid #2c91b0;
+}
+html[data-theme="dark"]:where([data-page="chat"]) .chat-menu-list {
+  border: 1px solid hsl(202, 30%, 24%);
+  background: hsl(208, 32%, 11%);
+}
+html[data-theme="dark"]:where([data-page="chat"]) .chat-menu-list button {
+  background: none;
+  color: hsl(212, 32%, 84%);
+}
+html[data-theme="dark"]:where([data-page="chat"]) .chat-menu-list button:hover,
+html[data-theme="dark"]:where([data-page="chat"]) .chat-menu-list button:focus-visible {
+  background: hsl(200, 38%, 13%);
+}
+html[data-theme="dark"]:where([data-page="chat"]) .chat-menu-list button.is-danger {
+  color: hsl(352, 32%, 75%);
+}
+html[data-theme="dark"]:where([data-page="chat"]) .chat-menu-list button.is-danger:hover,
+html[data-theme="dark"]:where([data-page="chat"]) .chat-menu-list button.is-danger:focus-visible {
+  background: hsl(353, 38%, 13%);
+}
+html[data-theme="dark"]:where([data-page="chat"]) .chat-archive-backdrop {
+  background: rgba(15, 23, 42, .5);
+}
+html[data-theme="dark"]:where([data-page="chat"]) .chat-archive-panel {
+  background: radial-gradient(circle at 10% 0%, rgba(104, 221, 217, .16), transparent 30%), hsl(189, 38%, 12%);
+}
+html[data-theme="dark"]:where([data-page="chat"]) .chat-archive-head h2 {
+  color: hsl(212, 32%, 84%);
+}
+html[data-theme="dark"]:where([data-page="chat"]) .chat-archive-x {
+  background: hsl(200, 36%, 13%);
+  color: hsl(201, 32%, 79%);
+}
+html[data-theme="dark"]:where([data-page="chat"]) .chat-archive-section {
+  color: hsl(207, 16%, 72%);
+}
+html[data-theme="dark"]:where([data-page="chat"]) .chat-session-chip {
+  background: hsl(194, 38%, 14%);
+  color: hsl(194, 32%, 79%);
+}
+html[data-theme="dark"]:where([data-page="chat"]) .chat-session-chip.is-current {
+  background: #1f6f88;
+  color: #ffffff;
+}
+html[data-theme="dark"]:where([data-page="chat"]) .chat-archive-current {
+  border: 1px solid hsl(193, 30%, 28%);
+  background: hsl(194, 38%, 13%);
+}
+html[data-theme="dark"]:where([data-page="chat"]) .chat-archive-current strong {
+  color: hsl(212, 32%, 84%);
+}
+html[data-theme="dark"]:where([data-page="chat"]) .chat-archive-current small {
+  color: hsl(207, 16%, 72%);
+}
+html[data-theme="dark"]:where([data-page="chat"]) .chat-archive-empty {
+  color: hsl(207, 16%, 72%);
+}
+html[data-theme="dark"]:where([data-page="chat"]) .chat-archive-list li {
+  border: 1px solid hsl(202, 30%, 24%);
+  background: hsl(208, 32%, 11%);
+}
+html[data-theme="dark"]:where([data-page="chat"]) .chat-archive-open {
+  background: none;
+}
+html[data-theme="dark"]:where([data-page="chat"]) .chat-archive-open strong {
+  color: hsl(212, 32%, 84%);
+}
+html[data-theme="dark"]:where([data-page="chat"]) .chat-archive-open small {
+  color: hsl(207, 16%, 72%);
+}
+html[data-theme="dark"]:where([data-page="chat"]) .chat-archive-delete {
+  border-left: 1px solid hsl(202, 30%, 24%);
+  background: none;
+  color: hsl(352, 32%, 75%);
+}
+html[data-theme="dark"]:where([data-page="chat"]) .chat-archive-open:focus-visible,
+html[data-theme="dark"]:where([data-page="chat"]) .chat-archive-delete:focus-visible,
+html[data-theme="dark"]:where([data-page="chat"]) .chat-archive-x:focus-visible {
+  outline: 2px solid #2c91b0;
+}
+html[data-theme="dark"]:where([data-page="chat"])[data-theme="dark"] .chat-session-chip.is-current {
+  background: #2c91b0;
+  color: #ffffff;
+}
+html[data-theme="dark"]:where([data-page="chat"])[data-theme="dark"] .chat-archive-panel {
+  background: radial-gradient(circle at 10% 0%, rgba(104, 221, 217, .16), transparent 30%), hsl(189, 38%, 12%);
+}
+html[data-theme="dark"]:where([data-page="chat"])[data-theme="dark"] .chat-menu-list button.is-danger,
+html[data-theme="dark"]:where([data-page="chat"])[data-theme="dark"] .chat-archive-delete {
+  color: #ff8593;
 }
 
 /* ---- from dashboard.css (dashboard) ---- */
@@ -698,6 +841,14 @@ html[data-theme="dark"]:where([data-page="dashboard"]) .destination-origin-resul
 html[data-theme="dark"]:where([data-page="dashboard"]) .destination-origin-result span {
   color: hsl(215, 16%, 73%);
 }
+html[data-theme="dark"]:where([data-page="dashboard"]) .destination-route-controls .destination-use-location {
+  border: 1px solid hsl(189, 30%, 27%);
+  background: hsl(189, 38%, 13%);
+  color: hsl(194, 32%, 78%);
+}
+html[data-theme="dark"]:where([data-page="dashboard"])[data-theme="dark"] .destination-route-controls .destination-use-location {
+  color: #8fd8e6;
+}
 html[data-theme="dark"]:where([data-page="dashboard"]) .development-place-label {
   color: hsl(39, 32%, 82%);
 }
@@ -722,12 +873,14 @@ html[data-theme="dark"]:where([data-page="dashboard"]) .destination-route-error 
 html[data-theme="dark"]:where([data-page="dashboard"]) .destination-plan-field label {
   color: hsl(215, 16%, 73%);
 }
-html[data-theme="dark"]:where([data-page="dashboard"]) .destination-plan-field input {
+html[data-theme="dark"]:where([data-page="dashboard"]) .destination-plan-field input,
+html[data-theme="dark"]:where([data-page="dashboard"]) .destination-plan-field select {
   border: 1px solid hsl(216, 12%, 26%);
   background: hsl(208, 32%, 11%);
   color: hsl(215, 28%, 86%);
 }
-html[data-theme="dark"]:where([data-page="dashboard"]) .destination-plan-field input:focus {
+html[data-theme="dark"]:where([data-page="dashboard"]) .destination-plan-field input:focus,
+html[data-theme="dark"]:where([data-page="dashboard"]) .destination-plan-field select:focus {
   outline: 2px solid #6b8cae;
 }
 html[data-theme="dark"]:where([data-page="dashboard"]) .destination-plan-error {
@@ -981,7 +1134,8 @@ html[data-theme="dark"]:where([data-page="itinerary"]) #itinerary-name,
 html[data-theme="dark"]:where([data-page="itinerary"]) #itinerary-origin,
 html[data-theme="dark"]:where([data-page="itinerary"]) #itinerary-start,
 html[data-theme="dark"]:where([data-page="itinerary"]) #itinerary-end,
-html[data-theme="dark"]:where([data-page="itinerary"]) #itinerary-budget {
+html[data-theme="dark"]:where([data-page="itinerary"]) #itinerary-budget,
+html[data-theme="dark"]:where([data-page="itinerary"]) #itinerary-travelers {
   border: 1px solid hsl(211, 30%, 24%);
   background: hsl(208, 32%, 11%);
 }
@@ -1506,13 +1660,51 @@ html[data-theme="dark"]:where([data-page="itinerary"])[data-theme="dark"] .activ
 html[data-theme="dark"]:where([data-page="itinerary"])[data-theme="dark"] .activity-card.is-missed {
   border-color: rgba(224, 86, 106, .5);
 }
+html[data-theme="dark"]:where([data-page="itinerary"]) .budget-picker-budget-row {
+  border: 1px solid hsl(196, 30%, 24%);
+  background: hsl(195, 38%, 13%);
+  color: hsl(201, 32%, 79%);
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .budget-picker-budget-btn {
+  border: 1px solid #1f6f88;
+  background: hsl(208, 32%, 11%);
+  color: hsl(194, 32%, 79%);
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .budget-picker-budget-btn:focus-visible {
+  outline: 2px solid #2c91b0;
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .no-trips {
+  border: 1px dashed hsl(199, 30%, 26%);
+  background: hsla(208, 32%, 11%, 0.78);
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .no-trips-icon {
+  background: hsl(194, 38%, 14%);
+  color: hsl(194, 32%, 79%);
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .no-trips h2 {
+  color: hsl(212, 32%, 84%);
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .no-trips p {
+  color: hsl(207, 20%, 74%);
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .itinerary-field-hint {
+  color: hsl(215, 16%, 73%);
+}
 
 /* ---- from legal.css (404, cookies, index, login, privacy, register, terms) ---- */
 html[data-theme="dark"]:where([data-page="404"], [data-page="cookies"], [data-page="index"], [data-page="login"], [data-page="privacy"], [data-page="register"], [data-page="terms"]) .legal-page {
   color: hsl(212, 32%, 85%);
 }
 html[data-theme="dark"]:where([data-page="404"], [data-page="cookies"], [data-page="index"], [data-page="login"], [data-page="privacy"], [data-page="register"], [data-page="terms"]) .legal-page .legal-back {
-  color: hsl(190, 32%, 79%);
+  border: 1px solid hsl(197, 30%, 26%);
+  background: hsl(208, 32%, 11%);
+  color: hsl(194, 32%, 79%);
+}
+html[data-theme="dark"]:where([data-page="404"], [data-page="cookies"], [data-page="index"], [data-page="login"], [data-page="privacy"], [data-page="register"], [data-page="terms"]) .legal-page .legal-back:hover {
+  background: hsl(195, 38%, 13%);
+}
+html[data-theme="dark"]:where([data-page="404"], [data-page="cookies"], [data-page="index"], [data-page="login"], [data-page="privacy"], [data-page="register"], [data-page="terms"]) .legal-page .legal-back:focus-visible {
+  outline: 3px solid #2c91b0;
 }
 html[data-theme="dark"]:where([data-page="404"], [data-page="cookies"], [data-page="index"], [data-page="login"], [data-page="privacy"], [data-page="register"], [data-page="terms"]) .legal-page h1 {
   color: hsl(212, 32%, 84%);
@@ -1666,6 +1858,16 @@ html[data-theme="dark"]:where([data-page="onboarding"]) .dest-chip-remove {
 }
 html[data-theme="dark"]:where([data-page="onboarding"]) .dest-subheading {
   color: hsl(212, 32%, 84%);
+}
+html[data-theme="dark"]:where([data-page="onboarding"]) .option-chip small {
+  color: hsl(210, 23%, 75%);
+}
+html[data-theme="dark"]:where([data-page="onboarding"]) .option-chip.selected small {
+  color: rgba(255, 255, 255, .88);
+}
+html[data-theme="dark"]:where([data-page="onboarding"]) .dest-more {
+  background: none;
+  color: hsl(194, 32%, 79%);
 }
 
 /* ---- from otp.css (login, register, verify) ---- */
@@ -1901,9 +2103,6 @@ html[data-theme="dark"]:where([data-page="past-trips"], [data-page="settings"]) 
 html[data-theme="dark"]:where([data-page="past-trips"], [data-page="settings"]) .toggle-input:focus-visible {
   outline: 3px solid rgba(107, 140, 174, 0.25);
 }
-html[data-theme="dark"]:where([data-page="past-trips"], [data-page="settings"]) .settings-card.danger .btn {
-  background: #334155;
-}
 html[data-theme="dark"]:where([data-page="past-trips"], [data-page="settings"]) .settings-message {
   color: hsl(163, 32%, 85%);
   background: hsl(152, 38%, 13%);
@@ -1922,9 +2121,6 @@ html[data-theme="dark"]:where([data-page="past-trips"], [data-page="settings"]) 
 html[data-theme="dark"]:where([data-page="past-trips"], [data-page="settings"]) .toggle-input:checked {
   background: linear-gradient(135deg, #2c91b0, #68ddd9);
   border-color: #2c91b0;
-}
-html[data-theme="dark"]:where([data-page="past-trips"], [data-page="settings"]) .settings-card.danger .btn-primary {
-  background: #334155 !important;
 }
 html[data-theme="dark"]:where([data-page="past-trips"], [data-page="settings"]) .settings-card.danger .btn-danger-outline {
   background: hsl(208, 32%, 11%);
@@ -2004,6 +2200,26 @@ html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-pa
 html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .btn-primary:hover {
   background: linear-gradient(135deg, #24819e, #55cfcb);
 }
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .btn-logout {
+  background: #d63d3d;
+  color: #fff;
+}
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .btn-logout:hover:not(:disabled) {
+  background: #b93232;
+}
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .btn-logout:active:not(:disabled) {
+  background: #a32b2b;
+}
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .btn-logout:focus-visible {
+  outline: 3px solid hsl(0, 30%, 27%);
+}
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"])[data-theme="dark"] .btn-logout {
+  background: #c94444;
+  color: #fff;
+}
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"])[data-theme="dark"] .btn-logout:hover:not(:disabled) {
+  background: #b23a3a;
+}
 html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .btn-outline {
   background: hsla(208, 32%, 11%, 0.9);
   border: 1.5px solid hsl(191, 30%, 26%);
@@ -2057,9 +2273,29 @@ html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-pa
 html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-loader-text {
   color: hsl(212, 32%, 84%);
 }
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-loader.is-progress .sk-loader-ring {
+  background: conic-gradient(#2c91b0 calc(var(--sk-progress, 0) * 3.6deg), rgba(44, 145, 176, .16) 0);
+}
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-loader-percent {
+  color: hsl(194, 32%, 79%);
+}
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-loader-bar {
+  background: rgba(44, 145, 176, .16);
+}
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-loader-bar span {
+  background: linear-gradient(90deg, #2c91b0, #68ddd9);
+}
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"])[data-theme="dark"] .sk-loader-percent {
+  color: #8fd8e6;
+}
 html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-skel {
   background-color: hsl(201, 33%, 15%);
-  background-image: linear-gradient(90deg, hsl(201, 33%, 15%) 0%, hsl(197, 37%, 13%) 45%, hsl(201, 33%, 15%) 90%);
+}
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-skel::after {
+  background: linear-gradient(90deg, hsla(208, 32%, 11%, 0) 0%, hsla(208, 32%, 11%, 0.6) 50%, hsla(208, 32%, 11%, 0) 100%);
+}
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"])[data-theme="dark"] .sk-skel::after {
+  background: linear-gradient(90deg, hsla(208, 32%, 11%, 0) 0%, hsla(208, 32%, 11%, 0.07) 50%, hsla(208, 32%, 11%, 0) 100%);
 }
 html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-skel-card {
   background: hsl(208, 32%, 11%);
@@ -2332,11 +2568,6 @@ html[data-theme="dark"] .sk-map-wash {
 }
 html[data-theme="dark"] body[data-map-stop="index"] .sk-map-wash {
   background: radial-gradient(ellipse at 50% 55%, hsla(208, 38%, 9%, .8) 0%, hsla(208, 38%, 9%, .55) 55%, hsla(208, 38%, 9%, .36) 100%);
-}
-
-/* Chat composer: the light fade above it becomes a dark one */
-@media (max-width: 599px) {
-  html[data-theme="dark"] .chat-input-container { box-shadow: 0 -10px 18px hsla(190, 38%, 12%, .95); }
 }
 
 /* Logo loading screen: a slightly lighter box so it stands out on the dimmed page */

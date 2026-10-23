@@ -198,6 +198,7 @@
       return;
     }
     try { updateHeaderDate(null, current); } catch (error) {}
+    if (typeof setActiveTravelers === "function") setActiveTravelers(current.meta);
     renderItinerary(current.itinerary, isMock());
     renderEditBar();
     try { loadLiveTripBudget(current, owner); } catch (error) {}
@@ -254,9 +255,10 @@
     document.addEventListener("keydown", (event) => {
       if (event.key === "Escape" && modal.classList.contains("open")) closeForm();
     });
-    $("itinerary-edit-form").addEventListener("submit", (event) => {
+    let submitting = false;
+    $("itinerary-edit-form").addEventListener("submit", async (event) => {
       event.preventDefault();
-      if (!activeForm) return;
+      if (!activeForm || submitting) return;
       const values = {};
       for (const field of activeForm.fields) {
         const raw = activeForm.inputs[field.name].value;
@@ -266,7 +268,15 @@
         // The place picked from the search results (null when only a name was typed).
         if (field.type === "place") values[`${field.name}Place`] = activeForm.inputs[field.name]._place || null;
       }
-      const message = activeForm.onSubmit(values);
+      // A check may ask the traveler first (for example, a place already in the trip).
+      submitting = true;
+      let message = "";
+      try {
+        message = await activeForm.onSubmit(values);
+      } finally {
+        submitting = false;
+      }
+      if (message === null) return; // the traveler chose to change something first
       if (message) return showFormError(message);
       closeForm();
     });
@@ -330,7 +340,7 @@
     function showChosen(place) {
       if (!place) { chosen.hidden = true; chosen.replaceChildren(); return; }
       const photo = placePhotoUrl(place);
-      chosen.innerHTML = `${photo ? `<img src="${esc(photo)}" alt="" loading="lazy">` : '<span class="place-field-pin" aria-hidden="true">📍</span>'}<span><strong>${esc(place.name)}</strong><small>${esc(place.address || "Pinned on the map")}</small></span>`;
+      chosen.innerHTML = `${photo ? `<img src="${esc(photo)}" alt="" loading="lazy" decoding="async">` : '<span class="place-field-pin" aria-hidden="true">📍</span>'}<span><strong>${esc(place.name)}</strong><small>${esc(place.address || "Pinned on the map")}</small></span>`;
       chosen.querySelector("img")?.addEventListener("error", (event) => event.target.remove());
       chosen.hidden = false;
     }
@@ -518,6 +528,41 @@
     if (place.photoGoogleMapsUri) activity.photoGoogleMapsUri = place.photoGoogleMapsUri;
   }
 
+  // ---- the same place twice -----------------------------------------------------
+  // A place already in the trip: same Google place, or the same name.
+  function placeNameOf(activity) {
+    const fromLocation = String(activity?.location || "").split(",")[0];
+    const fromTitle = String(activity?.title || "").replace(/^(stay at|eat at|visit|explore|tour)\s+/i, "");
+    return (fromLocation || fromTitle).trim().toLowerCase().replace(/\s+/g, " ");
+  }
+
+  function findSamePlace(candidate, skip = null) {
+    const id = String(candidate.placeId || "");
+    const name = placeNameOf(candidate);
+    for (const [dayIndex, day] of (current?.itinerary || []).entries()) {
+      for (const activity of day?.activities || []) {
+        if (activity === skip) continue;
+        const sameId = id && activity.placeId && String(activity.placeId) === id;
+        const sameName = name.length >= 4 && placeNameOf(activity) === name;
+        if (sameId || sameName) return { activity, dayIndex };
+      }
+    }
+    return null;
+  }
+
+  // Asks before adding a place that is already planned. true = add it anyway.
+  async function confirmSamePlace(candidate, skip = null) {
+    const found = findSamePlace(candidate, skip);
+    if (!found) return true;
+    const when = activityDueAt(found.activity, found.dayIndex);
+    const time = Number.isFinite(when) ? new Date(when).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "";
+    const day = Number.isFinite(when) ? shortDay(when) : "";
+    const name = String(found.activity.title || found.activity.location || "This place");
+    const message = `“${name}” is already in your trip on Day ${found.dayIndex + 1}${day ? ` (${day})` : ""}${time ? ` at ${time}` : ""}. Do you want to add it again?`;
+    if (!window.SidekickUI?.confirm) return window.confirm(message);
+    return window.SidekickUI.confirm(message, { title: "Already in your trip", confirmText: "Add anyway", cancelText: "Go back" });
+  }
+
   // Adds an activity. `place` (a hotel/restaurant from the nearby list) pre-fills the form.
   function openAdd({ dayIndex = 0, place = null, kind = "" } = {}) {
     if (!hasItinerary()) return;
@@ -539,7 +584,7 @@
       title: place ? (kind === "hotel" ? "Add hotel to itinerary" : kind === "restaurant" ? "Add restaurant to itinerary" : "Add to itinerary") : "Add activity",
       fields,
       submitText: "Add",
-      onSubmit: (values) => {
+      onSubmit: async (values) => {
         const dueAt = buildDueAt(values.date, values.time);
         if (dueAt === null) return "Enter a valid date and time.";
         const problem = scheduleProblem(dueAt);
@@ -565,6 +610,7 @@
         }
         const planError = checkPlan([...allDueAts(), dueAt]);
         if (planError) return planError;
+        if (!(await confirmSamePlace(activity))) return null;
         ensureIds();
         const before = previousMap();
         current.itinerary[safeDay].activities = [...(current.itinerary[safeDay].activities || []), activity];
@@ -594,9 +640,15 @@
         },
         { name: "note", label: "Notes", type: "textarea", maxLength: 300, value: activity.note || "" },
       ],
-      onSubmit: (values) => {
+      onSubmit: async (values) => {
         const dueAt = buildDueAt(values.date, values.time);
         if (dueAt === null) return "Enter a valid date and time.";
+        // Moving this stop to a place that is already planned elsewhere: ask first.
+        const newPlace = values.locationPlace;
+        if (newPlace ? newPlace.placeId !== activity.placeId : values.location !== originalLocation) {
+          const candidate = newPlace ? { placeId: newPlace.placeId, location: newPlace.name, title: newPlace.name } : { location: values.location, title: values.title };
+          if (!(await confirmSamePlace(candidate, activity))) return null;
+        }
         // An activity whose time isn't changed can always be edited (even one that has
         // already happened); a new time must be ahead and within the trip.
         if (dueAt !== originalDueAt) {
@@ -747,7 +799,31 @@
       anchorName,
       budgetAmountPhp: Number.isFinite(budget) && budget > 0 ? budget : null,
       durationDays: current.itinerary.length,
+      travelers: current.meta?.travelers || 1,
+      destination: String(current.meta?.destination || current.meta?.focusedPlace || "").trim(),
+      startDate: core()?.tripDateRange?.(current)?.start || "",
+      endDate: core()?.tripDateRange?.(current)?.end || "",
+      onBudgetChange: changeTripBudget,
     });
+  }
+
+  // "Edit trip budget" (restaurant picker): the trip's new total budget. Targets worked
+  // out for the old amount are dropped, so the cost summary follows the new one.
+  function changeTripBudget(amount) {
+    if (!hasItinerary() || !(Number(amount) > 0)) return false;
+    const before = { ...(current.meta || {}) };
+    current.meta = { ...(current.meta || {}), budgetAmountPhp: amount, budget: `PHP ${Number(amount).toLocaleString()} total` };
+    delete current.meta.activityBudgetTargetPhp;
+    delete current.meta.dailyActivityBudgetTargetPhp;
+    try {
+      setItineraryForEmail(email(), current);
+    } catch (error) {
+      current.meta = before;
+      window.SidekickUI.alert("The new budget couldn’t be saved on this device. Free up some storage and try again.", { title: "Not saved" });
+      return false;
+    }
+    try { loadLiveTripBudget(current, email()); } catch (error) {}
+    return true;
   }
 
   // ---- per-card / per-day buttons ---------------------------------------------

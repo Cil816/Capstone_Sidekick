@@ -71,7 +71,10 @@ function bindRegisterForm() {
       document.getElementById("registration-code-email").textContent = verifiedEmail;
       otpInput.value = "";
       showStep("code");
-      setRegisterStatus("Verification code sent. Check your inbox and spam folder.");
+      // A code from a recent request still works: no new email was sent.
+      setRegisterStatus(result.alreadySent
+        ? "You’ve already requested a code. Enter the code we sent to your email. Didn’t get it? Check your spam folder or tap “Didn’t receive the code?”."
+        : "Verification code sent. Check your inbox and spam folder.");
       otpInput.focus();
     } catch (error) {
       setRegisterError(window.SidekickCore.friendlyError(error, "Unable to send a verification code. Check the email and try again."));
@@ -111,18 +114,20 @@ function bindRegisterForm() {
   resendCodeButton.addEventListener("click", async () => {
     setRegisterError("");
     setRegisterStatus("");
-    setButtonBusy(resendCodeButton, true, "Sending…", "Resend code");
+    setButtonBusy(resendCodeButton, true, "Sending…", "Didn’t receive the code?");
     try {
       await window.SidekickCore.apiRequest("/api/resend-otp", {
         method: "POST",
         body: JSON.stringify({ email: verifiedEmail }),
       });
       otpInput.value = "";
-      setRegisterStatus("A new verification code has been sent.");
+      setRegisterStatus("A new verification code has been sent. Use the newest code in your inbox.");
     } catch (error) {
-      setRegisterError(window.SidekickCore.friendlyError(error, "Unable to resend the code. Please try again."));
+      // Asked again too soon: the code already sent still works.
+      if (error?.alreadySent) setRegisterStatus(error.message);
+      else setRegisterError(window.SidekickCore.friendlyError(error, "Unable to resend the code. Please try again."));
     } finally {
-      setButtonBusy(resendCodeButton, false, "Sending…", "Resend code");
+      setButtonBusy(resendCodeButton, false, "Sending…", "Didn’t receive the code?");
     }
   });
 
@@ -151,8 +156,8 @@ function bindRegisterForm() {
       (!name ? nameInput : passwordInput).focus();
       return;
     }
-    if (password.length < 8) {
-      setRegisterError("Password must be at least 8 characters.");
+    if (!window.SidekickCore.isStrongEnoughPassword(password)) {
+      setRegisterError("Password must be at least 8 characters and include both letters and numbers.");
       passwordInput.focus();
       return;
     }

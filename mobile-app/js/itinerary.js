@@ -9,6 +9,12 @@ let _itineraryMapLoadPromise = null;
 let _liveTripBudget = null;
 let _liveActivityCostsByPlaceId = new Map();
 let _activeBudgetTargetPhp = null;
+// People on the open trip (1–10). Entrance fees are per person; day and trip totals
+// are for the whole group.
+let _activeTravelers = 1;
+function setActiveTravelers(meta) {
+  _activeTravelers = window.SidekickCore?.normalizeTravelers?.(meta?.travelers) || 1;
+}
 let _activeActivityBudgetTargetPhp = null;
 let _activeActivityDailyBudgetTargetPhp = null;
 const TRIP_BUDGET_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -96,11 +102,9 @@ function displayPlaceOnItineraryMap(place) {
   requestAnimationFrame(() => google.maps.event.trigger(_itineraryMap, "resize"));
 }
 
+// The chosen destination's coordinates, kept for the budget check and hotel list (the
+// "Explore places" map was removed, so nothing is drawn and no map script is loaded).
 async function showDestinationSuggestionOnMap(suggestion) {
-  const searchPanel = document.getElementById("itinerary-place-search");
-  if (searchPanel) searchPanel.open = true;
-  await initializeItineraryMap();
-
   let place = suggestion;
   if (!hasPlaceCoordinates(place) && place.placeId) {
     try {
@@ -262,7 +266,7 @@ async function searchPlacesForBuilder(query) {
       button.innerHTML = `
         <span class="map-place-result-media">
           ${photoUrl
-            ? `<img src="${window.SidekickCore.escapeHtml(photoUrl)}" alt="" loading="lazy" />`
+            ? `<img src="${window.SidekickCore.escapeHtml(photoUrl)}" alt="" loading="lazy" decoding="async" />`
             : svgPin()}
         </span>
         <span class="map-place-result-copy">
@@ -439,7 +443,7 @@ function renderActivity(activity) {
       ? (/restaurant|cafe|hotel/i.test(String(activity?.category || '')) ? 'No entry fee' : 'Free entry')
       : costEstimate.lowPhp === 0
         ? `Entry: ${formatPriceRange(0, costEstimate.highPhp)} (free entry; optional fees or tours cost more)`
-        : `Entry fee: ${formatPriceRange(costEstimate.lowPhp, costEstimate.highPhp)}`)
+        : `Entry fee: ${formatPriceRange(costEstimate.lowPhp, costEstimate.highPhp)}${_activeTravelers > 1 ? ' per person' : ''}`)
     : '';
   const durationMinutes = Math.round(Number(activity.durationMinutes));
   const durationText = durationMinutes >= 60
@@ -448,7 +452,7 @@ function renderActivity(activity) {
   const photoUrl = getPlacePhotoUrl(activity);
   const photoPlaceId = window.SidekickCore.escapeHtml(String(activity?.placeId || ''));
   const photoMarkup = photoUrl
-    ? `<img src="${window.SidekickCore.escapeHtml(photoUrl)}" alt="Photo of ${window.SidekickCore.escapeHtml(activity.title || 'this place')}" loading="lazy" />${getPhotoAttributionMarkup(activity)}`
+    ? `<img src="${window.SidekickCore.escapeHtml(photoUrl)}" alt="Photo of ${window.SidekickCore.escapeHtml(activity.title || 'this place')}" loading="lazy" decoding="async" />${getPhotoAttributionMarkup(activity)}`
     : `<span class="activity-photo-placeholder">${svgPin()}</span>`;
   return `
     <div class="activity-card">
@@ -591,22 +595,29 @@ function renderTripBudget(budget) {
     return;
   }
   const hasActivityEstimate = Number.isFinite(budget.totalLowPhp) && Number.isFinite(budget.totalHighPhp);
+  // Prices are per person; the total is for everyone on the trip.
+  const people = _activeTravelers;
+  const groupLow = Number(budget.totalLowPhp) * people;
+  const groupHigh = Number(budget.totalHighPhp) * people;
   const total = hasActivityEstimate
-    ? formatPriceRange(Number(budget.totalLowPhp), Number(budget.totalHighPhp))
+    ? formatPriceRange(groupLow, groupHigh)
     : 'No price estimate found';
+  const groupNote = hasActivityEstimate && people > 1
+    ? `<p class="itinerary-budget-note">For ${people} travelers: ${window.SidekickCore.escapeHtml(formatPriceRange(Number(budget.totalLowPhp), Number(budget.totalHighPhp)))} per person.</p>`
+    : '';
   // A range starting at "Free" means some places are free to enter and the higher
   // figure includes optional fees (tours, rentals, environmental fees).
   const rangeNote = hasActivityEstimate && Number(budget.totalLowPhp) < Number(budget.totalHighPhp)
     ? '<p class="itinerary-budget-note">The lower figure is the least you’d pay (free places and basic entry only); the higher one includes optional fees such as tours and rentals.</p>'
     : '';
   const targetNote = Number.isFinite(_activeBudgetTargetPhp)
-    ? `<p class="itinerary-budget-note">Your trip budget: PHP ${Number(_activeBudgetTargetPhp).toLocaleString()}.</p>`
+    ? `<p class="itinerary-budget-note">Your trip budget: PHP ${Number(_activeBudgetTargetPhp).toLocaleString()}${people > 1 ? ` for ${people} travelers` : ''}.</p>`
     : '';
   const activityTargetNote = Number.isFinite(_activeActivityBudgetTargetPhp)
     ? `<p class="itinerary-budget-note">About PHP ${Number(_activeActivityBudgetTargetPhp).toLocaleString()} is set aside for activity entry fees${Number.isFinite(_activeActivityDailyBudgetTargetPhp) ? ` (about PHP ${Number(_activeActivityDailyBudgetTargetPhp).toLocaleString()} per day)` : ''}. The rest is for travel, rooms, food, local transport, and extra costs.</p>`
     : '';
   const activityOverTargetNote = hasActivityEstimate && Number.isFinite(_activeActivityBudgetTargetPhp)
-    && budget.totalHighPhp > _activeActivityBudgetTargetPhp
+    && groupHigh > _activeActivityBudgetTargetPhp
     ? '<p class="itinerary-budget-note">Activity entry fees are over the planned amount. Try lower-cost places or raise your budget.</p>'
     : '';
   const sourceHtml = (budget.sources || []).map((source) => {
@@ -626,7 +637,7 @@ function renderTripBudget(budget) {
   const sourcesToggle = sourceHtml
     ? `<button class="itinerary-sources-toggle" type="button" aria-expanded="false" aria-controls="itinerary-budget-sources">Show sources (${sourceCount})</button><div class="itinerary-budget-sources" id="itinerary-budget-sources" hidden>${sourceHtml}</div>`
     : '<p class="itinerary-budget-note">No source links found.</p>';
-  summary.innerHTML = `<h2>Activity costs (estimate)</h2><p class="itinerary-budget-total">${window.SidekickCore.escapeHtml(total)}</p>${rangeNote}${targetNote}${activityTargetNote}${activityOverTargetNote}${notes}${sourcesToggle}${suggestionHtml ? `<div class="itinerary-search-suggestions">${suggestionHtml}</div>` : ''}`;
+  summary.innerHTML = `<h2>Activity costs (estimate)</h2><p class="itinerary-budget-total">${window.SidekickCore.escapeHtml(total)}</p>${groupNote}${rangeNote}${targetNote}${activityTargetNote}${activityOverTargetNote}${notes}${sourcesToggle}${suggestionHtml ? `<div class="itinerary-search-suggestions">${suggestionHtml}</div>` : ''}`;
   const sourceToggle = summary.querySelector('.itinerary-sources-toggle');
   const sourcePanel = summary.querySelector('.itinerary-budget-sources');
   sourceToggle?.addEventListener('click', () => {
@@ -712,6 +723,7 @@ async function loadLiveTripBudget(itineraryData, email) {
     _liveActivityCostsByPlaceId = new Map((Array.isArray(meta.liveActivityCosts) ? meta.liveActivityCosts : []).map((cost) => [String(cost.placeId), cost]));
     _liveTripBudget = normalizeTripBudgetCounts(meta.liveTripBudget, itineraryData.itinerary, meta.liveActivityCosts);
     renderTripBudget(_liveTripBudget);
+    setActiveTravelers(itineraryData.meta);
     renderItinerary(itineraryData.itinerary, false);
     return;
   }
@@ -796,6 +808,7 @@ async function loadLiveTripBudget(itineraryData, email) {
       }
     }
     renderTripBudget(_liveTripBudget);
+    setActiveTravelers(itineraryData.meta);
     renderItinerary(itineraryData.itinerary, Boolean(meta.isDevelopmentMock));
   } catch (error) {
     if (summary && hasStoredItinerary()) {
@@ -902,6 +915,7 @@ async function enrichItineraryWithLiveRoutes(itineraryData, email) {
 
   if (changed) {
     setItineraryForEmail(email, itineraryData);
+    setActiveTravelers(itineraryData.meta);
     renderItinerary(itineraryData.itinerary, Boolean(itineraryData.meta?.isDevelopmentMock));
   }
 }
@@ -923,10 +937,10 @@ function renderItinerary(itinerary, isDevelopmentMock = false) {
         .filter((cost) => cost && Number.isFinite(cost.lowPhp) && Number.isFinite(cost.highPhp));
     const dayCostLow = isDevelopmentMock
       ? Number(day.estimatedDayCostLowPhp ?? day.estimatedDayCostPhp)
-      : (dayCostBands || []).reduce((sum, cost) => sum + cost.lowPhp, 0);
+      : (dayCostBands || []).reduce((sum, cost) => sum + cost.lowPhp, 0) * _activeTravelers;
     const dayCostHigh = isDevelopmentMock
       ? Number(day.estimatedDayCostHighPhp ?? day.estimatedDayCostPhp)
-      : (dayCostBands || []).reduce((sum, cost) => sum + cost.highPhp, 0);
+      : (dayCostBands || []).reduce((sum, cost) => sum + cost.highPhp, 0) * _activeTravelers;
     const dayPricedActivityCount = isDevelopmentMock
       ? (Number.isFinite(dayCostLow) && Number.isFinite(dayCostHigh) ? dayActivities.length : 0)
       : (dayCostBands || []).length;
@@ -938,7 +952,7 @@ function renderItinerary(itinerary, isDevelopmentMock = false) {
       : true);
     const dayCostText = hasDayCostEstimate
       ? (dayPricedActivityCount
-        ? `Entry fees: ${formatPriceRange(dayCostLow, dayCostHigh)} (prices found for ${dayPricedActivityCount} of ${dayActivities.length} stops)${Number.isFinite(_activeActivityDailyBudgetTargetPhp) ? ` · planned ~₱${_activeActivityDailyBudgetTargetPhp.toLocaleString()} a day` : ''}`
+        ? `Entry fees${_activeTravelers > 1 ? ` for ${_activeTravelers} travelers` : ''}: ${formatPriceRange(dayCostLow, dayCostHigh)} (prices found for ${dayPricedActivityCount} of ${dayActivities.length} stops)${Number.isFinite(_activeActivityDailyBudgetTargetPhp) ? ` · planned ~₱${_activeActivityDailyBudgetTargetPhp.toLocaleString()} a day` : ''}`
         : `No activity prices found${Number.isFinite(_activeActivityDailyBudgetTargetPhp) ? ` · planned ~₱${_activeActivityDailyBudgetTargetPhp.toLocaleString()} a day` : ''}`)
       : '';
 
@@ -1107,6 +1121,7 @@ function attachAddActivityHandler(itineraryData, prefs, email, startDate) {
 
     setItineraryForEmail(email, itineraryData);
     updateHeaderDate(prefs, itineraryData);
+    setActiveTravelers(itineraryData.meta);
     renderItinerary(itineraryData.itinerary, Boolean(itineraryData.meta?.isDevelopmentMock));
     loadLiveTripBudget(itineraryData, email);
     try {
@@ -1140,6 +1155,8 @@ document.addEventListener("DOMContentLoaded", () => {
   const startInput = document.getElementById('itinerary-start');
   const endInput = document.getElementById('itinerary-end');
   const budgetInput = document.getElementById('itinerary-budget');
+  // How many people travel together (1–10); the budget covers the whole group.
+  const travelersInput = document.getElementById('itinerary-travelers');
   const originInput = document.getElementById('itinerary-origin');
   const nameInput = document.getElementById('itinerary-name');
   // Trip name: filled in as "<destination> trip" (the name the app gives a trip) until
@@ -1372,6 +1389,20 @@ document.addEventListener("DOMContentLoaded", () => {
   function showBuilder(show = true) {
     if (!builderEl) return;
     builderEl.style.display = show ? 'block' : 'none';
+    // "No trips currently" shows only when there is no trip and the builder is closed.
+    const noTrips = document.getElementById('no-trips');
+    if (noTrips) {
+      const anyTrip = Boolean(getItineraryForEmail(email))
+        || Boolean(window.SidekickCore.getPlannedTrips?.(email)?.length)
+        || Boolean(window.SidekickCore.getItineraryDraft?.(email));
+      noTrips.hidden = show || anyTrip;
+      // The trip-dates line under the title means nothing without a trip.
+      const dateLine = document.querySelector('.itinerary-header .itinerary-date');
+      if (dateLine) dateLine.style.display = noTrips.hidden ? '' : 'none';
+      // Without any trip the "No trips currently" card has its own "+ New trip" button,
+      // so the one at the top shows only once there is a trip.
+      if (showBuilderBtn) showBuilderBtn.style.display = anyTrip ? '' : 'none';
+    }
     // Keep the Customize button in step: it looks pressed while the builder is open.
     if (showBuilderBtn) {
       showBuilderBtn.setAttribute('aria-expanded', show ? 'true' : 'false');
@@ -1418,6 +1449,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (startInput) startInput.value = formatDateInput(first);
     if (endInput) { endInput.min = formatDateInput(first); endInput.value = formatDateInput(last); }
     if (budgetInput) budgetInput.value = '';
+    if (travelersInput) travelersInput.value = '1';
     updateBuilderDatePreview(startInput?.value, endInput?.value);
   };
   // "+ New trip" opens the builder for a new trip; tapping it again hides it.
@@ -1463,6 +1495,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (normalizedDates?.changed) setItineraryForEmail(email, existing);
     void endDate;
     updateHeaderDate(prefs, existing);
+    setActiveTravelers(existing.meta);
     renderItinerary(existing.itinerary, Boolean(existing.meta?.isDevelopmentMock));
     void syncExistingItineraryForMonitoring(email, existing);
     loadLiveTripBudget(existing, email);
@@ -1487,8 +1520,15 @@ document.addEventListener("DOMContentLoaded", () => {
       endInput.value = formatDateInput(defaultEnd);
     }
     prefillBuilderForNewTrip();
-    showBuilder(!hasAnyTrip);
+    // No trip yet: "No trips currently" with a "+ New trip" button, not the builder.
+    showBuilder(false);
   }
+  document.getElementById('no-trips-new')?.addEventListener('click', () => {
+    prefillBuilderForNewTrip();
+    showBuilder(true);
+    builderEl?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    destinationInput?.focus({ preventScroll: true });
+  });
 
   if (buildBtn) buildBtn.addEventListener('click', async (e) => {
     e.preventDefault();
@@ -1523,7 +1563,7 @@ document.addEventListener("DOMContentLoaded", () => {
       startInput?.focus();
       return;
     }
-    const rawBudget = Number(budgetInput?.value);
+    let rawBudget = Number(budgetInput?.value);
     if (!Number.isFinite(rawBudget) || rawBudget <= 0 || !Number.isSafeInteger(rawBudget)) {
       await window.SidekickUI.alert('Enter a whole-number trip budget in Philippine pesos.', { title: 'Add your budget' });
       budgetInput?.focus();
@@ -1550,8 +1590,10 @@ document.addEventListener("DOMContentLoaded", () => {
       if (!replace) return;
     }
     const originText = String(originInput?.value || '').trim().slice(0, 180);
-    const budgetLabel = `PHP ${rawBudget.toLocaleString()} total`;
-    const tempPrefs = { ...prefs, preferredPlaces: [destinationName], budget: budgetLabel, budgetAmountPhp: rawBudget, transportation: 'DRIVE' };
+    const travelers = window.SidekickCore.normalizeTravelers?.(travelersInput?.value) || 1;
+    const groupText = travelers > 1 ? ` for ${travelers} travelers` : '';
+    let budgetLabel = `PHP ${rawBudget.toLocaleString()} total${groupText}`;
+    const tempPrefs = { ...prefs, preferredPlaces: [destinationName], budget: budgetLabel, budgetAmountPhp: rawBudget, travelers, transportation: 'DRIVE' };
     const shortDate = (date) => date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
     const confirmed = await window.SidekickUI.confirm('', {
       title: `Build your ${durationDays}-day trip?`,
@@ -1561,7 +1603,8 @@ document.addEventListener("DOMContentLoaded", () => {
         ['Trip name', customTripName() || automaticTripName()],
         ['Destination', destinationName],
         ['Dates', durationDays === 1 ? shortDate(startVal) : `${shortDate(startVal)} – ${shortDate(endVal)}`],
-        ['Budget', `₱${rawBudget.toLocaleString()} total`],
+        ['Travelers', window.SidekickCore.travelersLabel?.(travelers) || String(travelers)],
+        ['Budget', `₱${rawBudget.toLocaleString()} total${groupText}`],
         ...(originText ? [['Starting from', originText]] : []),
       ],
     });
@@ -1570,7 +1613,7 @@ document.addEventListener("DOMContentLoaded", () => {
     // Check the budget against the cheapest restaurants and hotels found before
     // generating anything. Skipped when Home already checked this exact trip.
     const budgetKey = window.SidekickCore.tripBudgetKey({
-      destination: destinationName, startDate: formatDateInput(startVal), endDate: formatDateInput(endVal), budgetAmountPhp: rawBudget,
+      destination: destinationName, startDate: formatDateInput(startVal), endDate: formatDateInput(endVal), budgetAmountPhp: rawBudget, travelers,
     });
     if (budgetKey !== preCheckedBudgetKey) {
       const pickedId = destinationInput?.dataset.placeId || '';
@@ -1587,6 +1630,7 @@ document.addEventListener("DOMContentLoaded", () => {
           startDate: formatDateInput(startVal),
           endDate: formatDateInput(endVal),
           budgetAmountPhp: rawBudget,
+          travelers,
         });
       } finally {
         window.SidekickUI?.loading.hide();
@@ -1618,6 +1662,9 @@ document.addEventListener("DOMContentLoaded", () => {
       const pickedPlaceId = destinationInput?.dataset.placeId || '';
       const destinationPlace = pickedPlaceId && _selectedPlace?.placeId === pickedPlaceId && hasPlaceCoordinates(_selectedPlace) ? _selectedPlace : null;
       buildBtn.disabled = true;
+      // Nothing may cover the hotel question (a loading screen left over from an
+      // earlier step would hide it).
+      window.SidekickUI?.loading.hide(true);
       let choice;
       try {
         choice = await window.SidekickBudgetPickers.askHotel({
@@ -1627,9 +1674,19 @@ document.addEventListener("DOMContentLoaded", () => {
           startDate: formatDateInput(startVal),
           endDate: formatDateInput(endVal),
           budgetAmountPhp: rawBudget,
+          travelers,
         });
       } finally {
         buildBtn.disabled = false;
+      }
+      // "Edit trip budget" in the hotel list: the trip uses the new budget from here on.
+      const newBudget = Number(choice?.budgetAmountPhp);
+      if (Number.isSafeInteger(newBudget) && newBudget > 0 && newBudget !== rawBudget) {
+        rawBudget = newBudget;
+        budgetLabel = `PHP ${rawBudget.toLocaleString()} total${groupText}`;
+        tempPrefs.budget = budgetLabel;
+        tempPrefs.budgetAmountPhp = rawBudget;
+        if (budgetInput) budgetInput.value = String(rawBudget);
       }
       if (choice?.status === 'cancel') return;
       if (choice?.status === 'chosen' && choice.hotel) {
@@ -1649,18 +1706,23 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     buildBtn.disabled = true;
-    window.SidekickUI?.loading.show('Building your itinerary… this can take a minute');
+    // A percentage with what is happening (planning, finding places, prices, routes).
+    const buildProgress = window.SidekickCore.startBuildProgress
+      ? window.SidekickCore.startBuildProgress('Building your itinerary…')
+      : (window.SidekickUI?.loading.show('Building your itinerary… this can take a minute'), null);
     try {
       const generated = await window.SidekickCore.apiRequest('/api/itinerary/generate', {
         method: 'POST',
         body: JSON.stringify({
           email,
-          message: `Plan a ${durationDays}-day trip to ${destinationName}. Total budget: PHP ${rawBudget}. Keep the full trip within this budget when possible. Start date: ${formatDateInput(startVal)}. End date: ${formatDateInput(endVal)}.`,
+          ...(buildProgress ? { progressId: buildProgress.id } : {}),
+          message: `Plan a ${durationDays}-day trip to ${destinationName}${groupText}. Total budget: PHP ${rawBudget}. Keep the full trip within this budget when possible. Start date: ${formatDateInput(startVal)}. End date: ${formatDateInput(endVal)}.`,
           selectedDestination: { name: destinationName, placeId: destinationInput?.dataset.placeId || '' },
           profile: { ...tempPrefs, startDate: formatDateInput(startVal), endDate: formatDateInput(endVal), durationDays, ...(chosenStay ? { stay: chosenStay } : {}), ...(tripStyle ? { tripStyle } : {}), ...(Number.isFinite(firstDayStart) ? { firstDayStartMinute: firstDayStart } : {}), clientToday: formatDateInput(new Date()) },
           origin: originText ? { name: originText, address: originText } : null,
         }),
       });
+      await buildProgress?.finish(true);
       generated.itinerary = applyLocalScheduleTimes(generated.itinerary, startVal);
       const itineraryData = {
         itinerary: generated.itinerary,
@@ -1672,6 +1734,7 @@ document.addEventListener("DOMContentLoaded", () => {
           durationDays,
           budget: budgetLabel,
           budgetAmountPhp: rawBudget,
+          travelers,
           // Not saved yet: no server record and no reminders until "Save itinerary".
           isDraft: true,
           // A name the traveler typed; otherwise the trip is named after its destination.
@@ -1685,6 +1748,7 @@ document.addEventListener("DOMContentLoaded", () => {
       }
       setItineraryForEmail(email, itineraryData);
       updateHeaderDate(tempPrefs, itineraryData);
+      setActiveTravelers(itineraryData.meta);
       renderItinerary(itineraryData.itinerary, Boolean(itineraryData.meta?.isDevelopmentMock));
       loadLiveTripBudget(itineraryData, email);
       enrichItineraryWithLiveRoutes(itineraryData, email);
@@ -1700,6 +1764,7 @@ document.addEventListener("DOMContentLoaded", () => {
       try { window.SidekickCore?.syncRemindersFromItinerary?.(email); } catch (error) {}
       try { window.SidekickCore?.scheduleAllFor?.(email); } catch (error) {}
     } catch (error) {
+      await buildProgress?.finish(false);
       window.SidekickUI?.loading.hide(true);
       window.SidekickUI.alert(window.SidekickCore.friendlyError(error, 'Your itinerary couldn’t be built right now. Please try again.'), { title: 'Itinerary not built' });
     } finally {
@@ -1709,6 +1774,7 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   if (existing?.meta?.budgetAmountPhp && budgetInput) budgetInput.value = existing.meta.budgetAmountPhp;
+  if (existing?.meta?.travelers && travelersInput) travelersInput.value = String(window.SidekickCore.normalizeTravelers?.(existing.meta.travelers) || 1);
   if (existing?.meta?.origin && originInput) originInput.value = existing.meta.origin.address || existing.meta.origin.name || '';
 
   // "Generate itinerary" on a Home destination hands its trip here: fill the
@@ -1734,6 +1800,7 @@ document.addEventListener("DOMContentLoaded", () => {
       endInput.value = pendingBuild.endDate;
     }
     if (budgetInput) budgetInput.value = pendingBuild.budgetAmountPhp;
+    if (travelersInput) travelersInput.value = String(window.SidekickCore.normalizeTravelers?.(pendingBuild.travelers) || 1);
     if (originInput) originInput.value = pendingBuild.origin || '';
     updateBuilderDatePreview(startInput?.value, endInput?.value);
     showBuilder(true);

@@ -12,7 +12,7 @@
     <link rel="stylesheet" href="css/dark.css">
     <script src="js/theme-init.js"></script>
 </head>
-<body data-tab="profile">
+<body data-tab="profile" data-nav="away">
   <div class="app-container">
     <div class="screen">
       <div class="header">
@@ -89,7 +89,7 @@
         </section>
         <section class="settings-card danger">
           <h2>Account</h2>
-          <button id="logout-btn" class="btn btn-primary btn-full settings-action" type="button">Logout</button>
+          <button id="logout-btn" class="btn btn-logout btn-full settings-action" type="button">Logout</button>
           <button id="delete-account-btn" class="btn btn-danger-outline btn-full settings-action" type="button">Delete my account</button>
         </section>
 
@@ -101,7 +101,7 @@
   <dialog class="delete-account-dialog" id="delete-account-dialog" aria-labelledby="delete-account-title">
     <form id="delete-account-form" novalidate>
       <h2 id="delete-account-title">Delete your account?</h2>
-      <p>This deletes your Sidekick account, itineraries, preferences and ratings from our server, and clears your Sidekick data on this device. A copy is kept securely for a limited time, then removed for good. This cannot be undone.</p>
+      <p>This deletes your Sidekick account, itineraries and preferences from our server, and clears your Sidekick data on this device. This cannot be undone.</p>
       <label for="delete-account-password">Enter your password to confirm</label>
       <input type="password" id="delete-account-password" autocomplete="current-password" required>
       <p class="auth-error" id="delete-account-error" role="alert" hidden></p>
@@ -156,7 +156,7 @@
   <script src="js/ui.js"></script>
   <script src="js/settings.js"></script>
   <script src="js/nav.js"></script>
-  <script src="js/tab-motion.js"></script>
+  <script src="js/tab-motion.js"></script>
   <script src="js/pull-refresh.js"></script>
 </body>
 </html>

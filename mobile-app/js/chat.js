@@ -15,10 +15,16 @@ const TRAINING_CONTEXT = [
   "Never claim to perform external bookings or payments.",
 ].join(" ");
 
+// The place the traveler just opened (Home or Hotels & restaurants, then "Ask AI").
+// Only a place opened in the last 30 minutes is given to the AI, so an old one isn't
+// brought up when the traveler starts a new conversation (for example, just "hey").
+const SELECTED_DESTINATION_MAX_AGE_MS = 30 * 60 * 1000;
 function getSelectedDestination() {
   try {
     const raw = localStorage.getItem(SELECTED_DESTINATION_KEY);
-    return raw ? JSON.parse(raw) : null;
+    const place = raw ? JSON.parse(raw) : null;
+    const age = Date.now() - Number(place?.selectedAt || 0);
+    return place && age >= 0 && age < SELECTED_DESTINATION_MAX_AGE_MS ? place : null;
   } catch (error) {
     return null;
   }
@@ -344,6 +350,7 @@ async function askSidekickBackend(history, prefs, state, userText, kind = "messa
   const data = await window.SidekickCore.apiRequest("/api/chat", {
     method: "POST",
     body: JSON.stringify(payload),
+    signal: activeReply?.signal,
   });
 
   return data;
@@ -377,14 +384,15 @@ async function generateItineraryWithBackend(prefs, state, userText) {
   // "Today" on this phone (the UTC date was a day behind in the early morning).
   const startDate = state.startDate || window.SidekickCore.localDateValue?.() || new Date().toISOString().slice(0, 10);
   // A trip starting today begins about half an hour from now; late in the day the
-  // first day becomes an evening plan instead of a full day that has already passed.
+  // server makes day 1 an evening plan, and the following days stay full days.
   const firstDayStart = window.SidekickCore.firstDayStartMinute?.(startDate) ?? null;
-  const lateStyle = Number.isFinite(firstDayStart) && firstDayStart > 19 * 60 + 30 ? { tripStyle: { timeOfDay: "night", pace: "packed" } } : {};
+  const lateStyle = Number.isFinite(firstDayStart) && firstDayStart > 19 * 60 + 30 ? { tripStyle: { timeOfDay: "fullday", pace: "packed" } } : {};
   const end = new Date(`${startDate}T00:00:00`);
   end.setDate(end.getDate() + Math.max(1, Number(state.dayCount) || 3) - 1);
   const localEnd = new Date(end.getTime() - end.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
   return window.SidekickCore.apiRequest("/api/itinerary/generate", {
     method: "POST",
+    signal: activeReply?.signal,
     body: JSON.stringify({
       email: session?.email || "",
       message: userText,
@@ -425,6 +433,7 @@ async function researchDraftBudget(email, draft, state) {
     const meta = draft.meta || {};
     const response = await window.SidekickCore.apiRequest("/api/itinerary/estimate-budget", {
       method: "POST",
+      signal: activeReply?.signal,
       body: JSON.stringify({
         email,
         itinerary: draft.itinerary,
@@ -699,6 +708,13 @@ function scrollToBottom() {
   requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
 }
 
+// A short label for a web address in a reply ("Open in Google Maps" for map links).
+function chatLinkLabel(url) {
+  const text = String(url || "").replace(/&amp;/g, "&");
+  if (/^https:\/\/(?:www\.google\.[a-z.]+\/maps|maps\.google\.[a-z.]+|maps\.app\.goo\.gl|goo\.gl\/maps)/i.test(text)) return "Open in Google Maps";
+  try { return new URL(text).hostname.replace(/^www\./, ""); } catch (error) { return "Open link"; }
+}
+
 function formatAssistantMessage(content) {
   const inlineFormat = (text) => {
     let normalized = String(text);
@@ -708,7 +724,9 @@ function formatAssistantMessage(content) {
       .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
       .replace(/(^|[\s(])\*([^*\n]+)\*(?=$|[\s).,!?:;])/g, "$1<em>$2</em>")
       .replace(/`([^`\n]+)`/g, "<code>$1</code>")
-      .replace(/\[([^\]]+)\]\((https:\/\/(?:www\.google\.com\/maps\/|maps\.google\.com\/)[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+      // Links: any https address, as [text](address) or written out, opens in the browser.
+      .replace(/\[([^\]]+)\]\((https:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
+      .replace(/(^|[\s(])(https:\/\/[^\s<]+?)(?=[.,!?;:)]*(?:\s|$|<))/g, (match, before, url) => `${before}<a href="${url}" target="_blank" rel="noopener noreferrer">${chatLinkLabel(url)}</a>`);
   };
   const blocks = String(content || "").trim().split(/\n\s*\n/).filter(Boolean);
   return blocks.map((block) => {
@@ -1000,23 +1018,291 @@ function handleKeyPress(event) {
   if (event.key === "Enter") sendMessage();
 }
 
+// A fresh conversation: just Sidekick's opening message.
+function startFreshChat(email) {
+  try { sessionStorage.removeItem(getChatScrollPositionKey(email)); } catch (error) {}
+  const prefs = window.SidekickCore.getPreferences() || {};
+  const opening = window.SidekickCore.getInitialAssistantMessage(prefs);
+  setChatForEmail(email, [{ role: "ai", content: opening, ts: Date.now() }]);
+  renderMessages(getChatForEmail(email));
+}
+
+// "Delete this chat" (⋯ menu): deletes the current conversation only.
 async function clearChat() {
-  const ok = await window.SidekickUI.confirm("Your messages with Sidekick on this phone will be deleted.", {
-    title: "Clear chat history?", confirmText: "Clear chat", tone: "danger",
+  if (isSending && activeReply) stopReply();
+  const ok = await window.SidekickUI.confirm("This conversation with Sidekick will be deleted from this phone. Your archived chats stay.", {
+    title: "Delete this chat?", confirmText: "Delete", cancelText: "Keep it", tone: "danger",
   });
   if (!ok) return;
   const session = window.SidekickCore.getAuthSession();
   if (!session?.email) return;
-
-  setChatForEmail(session.email, []);
-  try { sessionStorage.removeItem(getChatScrollPositionKey(session.email)); } catch (error) {}
-  const prefs = window.SidekickCore.getPreferences() || {};
-  const opening = window.SidekickCore.getInitialAssistantMessage(prefs);
-  setChatForEmail(session.email, [{ role: "ai", content: opening, ts: Date.now() }]);
-  renderMessages(getChatForEmail(session.email));
+  setCurrentSessionNumber(session.email, null);
+  startFreshChat(session.email);
+  window.SidekickUI.toast("Chat deleted");
 }
 
+// ---- Chat archive (⋯ menu) ------------------------------------------------------
+// Earlier conversations kept on this phone (newest first, up to 30). Archiving keeps
+// the current conversation and starts a new one; opening an archived chat makes it the
+// current one again (the conversation it replaces is archived first, so nothing is lost).
+const CHAT_ARCHIVE_KEY = "sidekick.chatArchiveByEmail.v1";
+const CHAT_ARCHIVE_LIMIT = 30;
+
+function readChatArchive() {
+  try {
+    const all = JSON.parse(localStorage.getItem(CHAT_ARCHIVE_KEY) || "{}");
+    return all && typeof all === "object" ? all : {};
+  } catch (error) {
+    return {};
+  }
+}
+
+function getChatArchive(email) {
+  const all = readChatArchive();
+  const list = Array.isArray(all[email]) ? all[email].filter((item) => item && Array.isArray(item.messages)) : [];
+  // Chats archived before sessions were numbered get numbers, oldest first.
+  if (list.some((item) => !(Number(item.session) > 0))) {
+    let next = list.reduce((max, item) => Math.max(max, Number(item.session) || 0), 0);
+    [...list].reverse().forEach((item) => { if (!(Number(item.session) > 0)) item.session = ++next; });
+  }
+  return list;
+}
+
+function setChatArchive(email, list) {
+  const all = readChatArchive();
+  if (list.length) all[email] = list.slice(0, CHAT_ARCHIVE_LIMIT);
+  else delete all[email];
+  localStorage.setItem(CHAT_ARCHIVE_KEY, JSON.stringify(all));
+}
+
+const hasConversation = (messages) => (messages || []).some((message) => message.role === "user");
+
+// The number of the session being chatted in, once it has one (a reopened session keeps
+// its number; a new conversation gets the next number when it is archived).
+const CHAT_CURRENT_SESSION_KEY = "sidekick.chatCurrentSession.v1";
+
+function getCurrentSessionNumber(email) {
+  try {
+    const all = JSON.parse(localStorage.getItem(CHAT_CURRENT_SESSION_KEY) || "{}") || {};
+    const number = Number(all[email]);
+    return Number.isInteger(number) && number > 0 ? number : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function setCurrentSessionNumber(email, number) {
+  try {
+    const all = JSON.parse(localStorage.getItem(CHAT_CURRENT_SESSION_KEY) || "{}") || {};
+    if (number) all[email] = number;
+    else delete all[email];
+    localStorage.setItem(CHAT_CURRENT_SESSION_KEY, JSON.stringify(all));
+  } catch (error) {}
+}
+
+// The current session's number: its own, or the next free one.
+function sessionNumberForCurrent(email) {
+  const own = getCurrentSessionNumber(email);
+  if (own) return own;
+  return getChatArchive(email).reduce((max, item) => Math.max(max, Number(item.session) || 0), 0) + 1;
+}
+
+// Keeps the current conversation in the archive (if the traveler said anything).
+function archiveCurrentChat(email) {
+  const messages = getChatForEmail(email);
+  if (!hasConversation(messages)) return false;
+  const first = String(messages.find((message) => message.role === "user")?.content || "Chat").trim();
+  const entry = {
+    id: `chat_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    session: sessionNumberForCurrent(email),
+    title: first.length > 60 ? `${first.slice(0, 57)}…` : first,
+    archivedAt: Date.now(),
+    messages,
+  };
+  setChatArchive(email, [entry, ...getChatArchive(email)]);
+  setCurrentSessionNumber(email, null);
+  return true;
+}
+
+function archiveDateText(ts) {
+  const date = new Date(Number(ts));
+  return Number.isFinite(date.getTime())
+    ? date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) + " · " + date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
+    : "";
+}
+
+function closeChatArchive() {
+  const panel = document.getElementById("chat-archive");
+  if (!panel) return;
+  panel.remove();
+  document.documentElement.style.removeProperty("overflow");
+  document.getElementById("chat-menu-btn")?.focus({ preventScroll: true });
+}
+
+const sessionMessageCount = (messages) => messages.filter((m) => m.role === "user").length;
+
+// The chat archive: a sidebar with the current session and the archived sessions.
+function openChatArchive({ animate = true } = {}) {
+  const session = window.SidekickCore.getAuthSession();
+  if (!session?.email) return;
+  closeChatArchive();
+  const email = session.email;
+  const esc = (value) => window.SidekickCore.escapeHtml(String(value ?? ""));
+  const list = getChatArchive(email);
+  const current = getChatForEmail(email);
+  const canArchive = hasConversation(current);
+  const currentTitle = canArchive ? String(current.find((m) => m.role === "user")?.content || "").trim() : "New chat";
+  const count = (messages) => `${sessionMessageCount(messages)} message${sessionMessageCount(messages) === 1 ? "" : "s"}`;
+  const panel = document.createElement("div");
+  panel.id = "chat-archive";
+  panel.className = `chat-archive${animate ? " is-opening" : ""}`;
+  panel.innerHTML = `
+    <div class="chat-archive-backdrop" data-archive-close></div>
+    <aside class="chat-archive-panel" role="dialog" aria-modal="true" aria-labelledby="chat-archive-title">
+      <div class="chat-archive-head">
+        <h2 id="chat-archive-title">Chat archive</h2>
+        <button type="button" class="chat-archive-x" data-archive-close aria-label="Close">×</button>
+      </div>
+      <button type="button" class="btn btn-primary btn-full chat-archive-new" data-archive-new ${canArchive ? "" : "disabled"}>Start a new session</button>
+      <p class="chat-archive-section">Current session</p>
+      <div class="chat-archive-current">
+        <span class="chat-session-chip is-current">Session ${sessionNumberForCurrent(email)}</span>
+        <strong>${esc(currentTitle.length > 60 ? `${currentTitle.slice(0, 57)}…` : currentTitle)}</strong>
+        <small>${canArchive ? `${count(current)} · open now` : "Send a message to start this session"}</small>
+      </div>
+      <p class="chat-archive-section">Archived sessions${list.length ? ` (${list.length})` : ""}</p>
+      ${list.length ? `<ul class="chat-archive-list">${list.map((item) => `
+        <li>
+          <button type="button" class="chat-archive-open" data-archive-open="${esc(item.id)}" aria-label="Open session ${esc(item.session)}: ${esc(item.title)}">
+            <span class="chat-session-chip">Session ${esc(item.session)}</span>
+            <strong>${esc(item.title)}</strong>
+            <small>${esc(archiveDateText(item.archivedAt))} · ${count(item.messages)}</small>
+          </button>
+          <button type="button" class="chat-archive-delete" data-archive-delete="${esc(item.id)}" aria-label="Delete session ${esc(item.session)}">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14H6L5 6"></path><path d="M10 11v6M14 11v6"></path><path d="M9 6V4h6v2"></path></svg>
+          </button>
+        </li>`).join("")}</ul>` : '<p class="chat-archive-empty">No archived sessions yet. Archive a session to keep it here and open it again later.</p>'}
+    </aside>`;
+  document.body.appendChild(panel);
+  document.documentElement.style.overflow = "hidden";
+  panel.querySelector(".chat-archive-x")?.focus({ preventScroll: true });
+
+  panel.addEventListener("click", async (event) => {
+    if (event.target.closest("[data-archive-close]")) { closeChatArchive(); return; }
+    if (event.target.closest("[data-archive-new]")) {
+      if (isSending && activeReply) stopReply();
+      const number = sessionNumberForCurrent(email);
+      if (archiveCurrentChat(email)) {
+        startFreshChat(email);
+        closeChatArchive();
+        window.SidekickUI.toast(`Session ${number} archived. New session started.`);
+      }
+      return;
+    }
+    const openId = event.target.closest("[data-archive-open]")?.dataset.archiveOpen;
+    if (openId) {
+      const chosen = getChatArchive(email).find((item) => item.id === openId);
+      if (!chosen) return;
+      if (isSending && activeReply) stopReply();
+      // The session being replaced goes into the archive first.
+      archiveCurrentChat(email);
+      setChatArchive(email, getChatArchive(email).filter((item) => item.id !== openId));
+      setChatForEmail(email, chosen.messages);
+      setCurrentSessionNumber(email, Number(chosen.session) || null);
+      try { sessionStorage.removeItem(getChatScrollPositionKey(email)); } catch (error) {}
+      renderMessages(getChatForEmail(email));
+      scrollToBottom();
+      closeChatArchive();
+      window.SidekickUI.toast(`Session ${chosen.session} opened`);
+      return;
+    }
+    const deleteId = event.target.closest("[data-archive-delete]")?.dataset.archiveDelete;
+    if (deleteId) {
+      const item = getChatArchive(email).find((entry) => entry.id === deleteId);
+      if (!item) return;
+      const ok = await window.SidekickUI.confirm(`Session ${item.session}, “${item.title}”, will be deleted from this phone.`, {
+        title: "Delete this session?", confirmText: "Delete", cancelText: "Keep it", tone: "danger",
+      });
+      if (!ok) return;
+      setChatArchive(email, getChatArchive(email).filter((entry) => entry.id !== deleteId));
+      openChatArchive({ animate: false });
+      window.SidekickUI.toast(`Session ${item.session} deleted`);
+    }
+  });
+}
+
+// The ⋯ menu in the chat header.
+function setChatMenuOpen(open) {
+  const button = document.getElementById("chat-menu-btn");
+  const list = document.getElementById("chat-menu-list");
+  if (!button || !list) return;
+  list.hidden = !open;
+  button.setAttribute("aria-expanded", String(open));
+  if (open) list.querySelector("[role=menuitem]")?.focus({ preventScroll: true });
+}
+
+document.addEventListener("click", (event) => {
+  const button = event.target.closest("#chat-menu-btn");
+  const list = document.getElementById("chat-menu-list");
+  if (button) { setChatMenuOpen(Boolean(list?.hidden)); return; }
+  const item = event.target.closest("#chat-menu-list [data-chat-menu]");
+  if (item) {
+    setChatMenuOpen(false);
+    if (item.dataset.chatMenu === "archive") openChatArchive();
+    else if (item.dataset.chatMenu === "delete") void clearChat();
+    return;
+  }
+  if (list && !list.hidden && !event.target.closest(".chat-menu")) setChatMenuOpen(false);
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  if (document.getElementById("chat-archive") && !document.querySelector(".sk-dialog")) { closeChatArchive(); return; }
+  const list = document.getElementById("chat-menu-list");
+  if (list && !list.hidden) { setChatMenuOpen(false); document.getElementById("chat-menu-btn")?.focus(); }
+});
+
 let isSending = false;
+// The reply being written: its requests stop when the traveler taps Stop.
+let activeReply = null;
+
+const SEND_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>';
+const STOP_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2.5" fill="currentColor"></rect></svg>';
+
+// While a reply is being written the send button becomes Stop.
+function setSendButtonMode(stop) {
+  const button = getSendBtn();
+  if (!button) return;
+  button.disabled = false;
+  button.classList.toggle("is-stop", stop);
+  button.setAttribute("aria-label", stop ? "Stop the reply" : "Send message");
+  button.title = stop ? "Stop" : "";
+  button.innerHTML = stop ? STOP_ICON : SEND_ICON;
+}
+
+function stopReply() {
+  if (!activeReply || activeReply.signal.aborted) return;
+  activeReply.abort();
+  activeReply = null;
+  isSending = false;
+  removeTypingIndicator();
+  appendMessageToDom("ai", "You stopped this reply.", Date.now(), false);
+  scrollToBottom();
+  setSendButtonMode(false);
+  getInputEl()?.focus?.();
+}
+
+// The send button: sends, or stops the reply being written.
+// A second tap right after sending (a double tap) doesn't count as Stop.
+const STOP_GRACE_MS = 800;
+let replyStartedAt = 0;
+function onSendButtonClick() {
+  if (isSending && activeReply) {
+    if (Date.now() - replyStartedAt >= STOP_GRACE_MS) stopReply();
+    return;
+  }
+  void sendMessage();
+}
 
 async function sendMessage() {
   if (isSending) return;
@@ -1038,8 +1324,10 @@ async function sendMessage() {
     && /\b(?:reviews?|reviewed|ratings?|visitor feedback|worth visiting|what do (?:visitors|people) think)\b/i.test(userText);
 
   isSending = true;
-  const sendBtn = getSendBtn();
-  if (sendBtn) sendBtn.disabled = true;
+  const thisReply = new AbortController();
+  activeReply = thisReply;
+  replyStartedAt = Date.now();
+  setSendButtonMode(true);
 
   appendMessageToDom("user", userText, Date.now(), true);
   scrollToBottom();
@@ -1062,6 +1350,9 @@ async function sendMessage() {
         try {
           const backendReply = await askSidekickBackend(history, prefs, companionState, userText);
           reply = await continueIncompleteReply(backendReply.reply || "I couldn’t retrieve review information for this place.", prefs, companionState, session.email);
+          // The place's photo card: from the reply, or the place being asked about.
+          replyPlaces = sanitizeChatPlaces(backendReply.places);
+          if (!replyPlaces.length) replyPlaces = sanitizeChatPlaces([selectedDestination]);
         } catch (error) {
           reply = "I couldn’t retrieve current Google review details for this place. Please try again in a moment.";
         }
@@ -1120,18 +1411,25 @@ async function sendMessage() {
       }
     }
 
+    // Stopped: the "You stopped this reply." note is already shown.
+    if (thisReply.signal.aborted) return;
     removeTypingIndicator();
     appendMessageToDom("ai", reply, Date.now(), true, replyPlaces);
     scrollToBottom();
     if (generatedItineraryThisReply) window.SidekickAppRating?.afterItineraryGenerated();
   } catch (e) {
+    if (thisReply.signal.aborted) return;
     removeTypingIndicator();
     appendMessageToDom("ai", "I hit an issue while planning. Please try again.", Date.now(), false);
     scrollToBottom();
   } finally {
-    isSending = false;
-    if (sendBtn) sendBtn.disabled = false;
-    input?.focus?.();
+    // A stopped reply has already handed the button back.
+    if (activeReply === thisReply) {
+      activeReply = null;
+      isSending = false;
+      setSendButtonMode(false);
+      input?.focus?.();
+    }
   }
 }
 
@@ -1150,7 +1448,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
   renderMessages(getChatForEmail(session.email));
   restoreChatScrollPosition(session.email);
-  getMessagesEl()?.addEventListener("scroll", saveChatScrollPosition, { passive: true });
+  // Saved once scrolling settles (writing storage on every scroll event costs frames).
+  let scrollSaveTimer = 0;
+  getMessagesEl()?.addEventListener("scroll", () => {
+    clearTimeout(scrollSaveTimer);
+    scrollSaveTimer = setTimeout(saveChatScrollPosition, 150);
+  }, { passive: true });
+  window.addEventListener("pagehide", saveChatScrollPosition);
   let pendingMessage = "";
   try {
     pendingMessage = String(sessionStorage.getItem(PENDING_CHAT_MESSAGE_KEY) || "").trim();
@@ -1164,5 +1468,6 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 window.sendMessage = sendMessage;
+window.onSendButtonClick = onSendButtonClick;
 window.handleKeyPress = handleKeyPress;
 window.clearChat = clearChat;

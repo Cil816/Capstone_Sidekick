@@ -234,11 +234,6 @@ ${DARK} body[data-map-stop="index"] .sk-map-wash {
   background: radial-gradient(ellipse at 50% 55%, hsla(208, 38%, 9%, .8) 0%, hsla(208, 38%, 9%, .55) 55%, hsla(208, 38%, 9%, .36) 100%);
 }
 
-/* Chat composer: the light fade above it becomes a dark one */
-@media (max-width: 599px) {
-  ${DARK} .chat-input-container { box-shadow: 0 -10px 18px hsla(190, 38%, 12%, .95); }
-}
-
 /* Logo loading screen: a slightly lighter box so it stands out on the dimmed page */
 ${DARK} .sk-loader-box { background: #1a2e40; border: 1px solid #2c4659; }
 ${DARK} .sk-loader::backdrop { background: rgba(0, 0, 0, .55); }

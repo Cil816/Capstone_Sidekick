@@ -142,7 +142,7 @@
     cursor: pointer;
     font-size: 16px;
     text-align: left;
-    transition: all 0.2s;
+    transition: background-color 0.2s, color 0.2s, border-color 0.2s, box-shadow 0.2s, transform 0.2s;
 }
 
 .budget-option:hover {
@@ -323,4 +323,46 @@
 .chip:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+}
+
+/* Options with a short explanation under the name (travel style, interests). */
+.option-chip {
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: center;
+    gap: 3px;
+    min-height: 76px;
+    padding: 12px 26px 12px 14px;
+    text-align: left;
+}
+
+.option-chip strong {
+    font-size: 15px;
+    font-weight: 700;
+    line-height: 1.25;
+}
+
+.option-chip small {
+    color: #56708a;
+    font-size: 12.5px;
+    font-weight: 500;
+    line-height: 1.35;
+}
+
+.option-chip.selected small {
+    color: rgba(255, 255, 255, .88);
+}
+
+/* "Show more places" under the suggested spots. */
+.dest-more {
+    display: block;
+    margin: 14px auto 0;
+    padding: 10px 14px;
+    border: 0;
+    background: none;
+    color: #1f6f88;
+    font: inherit;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
 }

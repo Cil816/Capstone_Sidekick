@@ -68,6 +68,10 @@
   }
 
   function open(title) {
+    // A picker still open (or still waiting for its answer) ends as cancelled first, so
+    // its leftover state can never answer for the new one.
+    if ($("budget-picker-modal")?.classList.contains("open")) close("cancel");
+    else if (onClose) { const pending = onClose; onClose = null; pending("cancel"); }
     const modal = ensureModal();
     $("budget-picker-title").textContent = title;
     $("budget-picker-body").replaceChildren();
@@ -257,15 +261,65 @@
       <p class="budget-picker-note">Photos, reviews and details from Google Maps.</p>`;
   }
 
+  // ---- "Edit trip budget" (hotels and restaurants) -------------------------------
+  // Asks for a new total budget and checks it like the builder does (far too much, or
+  // too little for the cheapest hotel and meals). Resolves to the new amount, or null.
+  async function askNewBudget({ current, destination, lat = null, lng = null, startDate, endDate, kind, travelers = 1 }) {
+    let value = current ? String(current) : "";
+    for (;;) {
+      const values = await window.SidekickUI.form({
+        title: "Edit trip budget",
+        icon: "edit",
+        message: `Not happy with these ${kind}? Raise your total budget to see more options, including higher-end ones. Your trip uses the new budget.`,
+        fields: [{ name: "budget", label: "Total budget (PHP)", type: "number", value, min: 1, hint: current ? `Current budget: ${peso(current)}` : "" }],
+        confirmText: "Update budget",
+        validate: ({ budget }) => {
+          const amount = Number(budget);
+          return Number.isFinite(amount) && amount >= 1 ? "" : "Enter your total budget in pesos.";
+        },
+      });
+      if (!values) return null;
+      value = values.budget;
+      const amount = Math.floor(Number(values.budget));
+      if (amount === Number(current)) return null;
+      let check = null;
+      if (destination && startDate && endDate && window.SidekickCore.checkTripBudget) {
+        window.SidekickUI.loading.show("Checking your budget…");
+        try {
+          check = await window.SidekickCore.checkTripBudget({ destination, lat, lng, startDate, endDate, budgetAmountPhp: amount, travelers });
+        } finally {
+          window.SidekickUI.loading.hide();
+        }
+      }
+      if (check?.checked && !check.realistic) {
+        const problem = window.SidekickCore.describeUnrealisticBudget(check, destination);
+        await window.SidekickUI.alert(problem.message, { title: problem.title, details: problem.details, confirmText: "Change budget" });
+        continue;
+      }
+      return amount;
+    }
+  }
+
   // ---- hotels (before generating) ------------------------------------------------
-  // Resolves to { status: "chosen", hotel } | { status: "skip" } | { status: "cancel" }.
-  function askHotel({ destination, lat = null, lng = null, startDate, endDate, budgetAmountPhp }) {
+  // Resolves to { status: "chosen", hotel } | { status: "skip" } | { status: "cancel" },
+  // each with budgetAmountPhp: the trip budget, changed with "Edit trip budget" or not.
+  function askHotel({ destination, lat = null, lng = null, startDate, endDate, budgetAmountPhp: startingBudget, travelers = 1 }) {
+    // A group needs a room for every two people; the nightly rate shown is per room.
+    const people = window.SidekickCore.normalizeTravelers?.(travelers) || 1;
+    let budgetAmountPhp = startingBudget;
     return new Promise((resolve) => {
       let settled = false;
       const finish = (result) => {
         if (settled) return;
         settled = true;
-        resolve(result);
+        resolve({ ...result, budgetAmountPhp });
+      };
+      const editBudget = async () => {
+        const amount = await askNewBudget({ current: budgetAmountPhp, destination, lat, lng, startDate, endDate, kind: "hotels", travelers: people });
+        if (settled || amount === null) return;
+        budgetAmountPhp = amount;
+        selected = null;
+        void loadHotels();
       };
       open("Choose a hotel?");
       onClose = () => finish({ status: "cancel" });
@@ -283,7 +337,7 @@
         try {
           data = await window.SidekickCore.apiRequest("/api/hotels/budget-options", {
             method: "POST",
-            body: JSON.stringify({ destination, lat, lng, startDate, endDate, budgetAmountPhp }),
+            body: JSON.stringify({ destination, lat, lng, startDate, endDate, budgetAmountPhp, travelers: people }),
           });
         } catch (error) {
           if (settled) return;
@@ -297,12 +351,17 @@
         if (settled) return;
         const hotels = Array.isArray(data.hotels) ? data.hotels : [];
         const nights = Number(data.nights) || 1;
-        const summary = `<p class="budget-picker-text">Up to <strong>${peso(data.nightlyCapPhp)} per night</strong> (about 40% of your ${peso(budgetAmountPhp)} budget over ${nights} night${nights === 1 ? "" : "s"}). Best-rated first.</p>`;
+        const rooms = Number(data.rooms) || 1;
+        const roomText = rooms > 1 ? ` per room (${rooms} rooms for ${people} travelers)` : ' per night';
+        const summary = `<p class="budget-picker-text">Up to <strong>${peso(data.nightlyCapPhp)}${rooms > 1 ? ' a night' : ''}${roomText}</strong> (about 40% of your ${peso(budgetAmountPhp)} budget over ${nights} night${nights === 1 ? "" : "s"}). Best-rated first.</p>`;
         if (!hotels.length) {
           const reason = data.message
             || (data.overBudgetCount ? `${data.overBudgetCount} hotel${data.overBudgetCount === 1 ? " was" : "s were"} found, but none fit this budget.` : "No hotels with a confirmed price fit this budget.");
           setBody(`${summary}<p class="budget-picker-status">${esc(reason)}</p>`);
-          setActions([{ label: "Continue without a hotel", kind: "primary", onClick: () => { onClose = null; close(); finish({ status: "skip" }); } }]);
+          setActions([
+            { label: "Edit trip budget", onClick: () => { void editBudget(); } },
+            { label: "Continue without a hotel", kind: "primary", onClick: () => { onClose = null; close(); finish({ status: "skip" }); } },
+          ]);
           return;
         }
         const rows = hotels.map((hotel, index) => {
@@ -350,6 +409,7 @@
             { label: "Continue with this hotel", kind: "primary", id: "budget-picker-confirm", onClick: chooseSelected },
           ]);
           $("budget-picker-confirm").disabled = !selected;
+          addEditBudgetLink(editBudget, "hotels");
           body.scrollTop = listScrollTop;
         }
 
@@ -402,7 +462,7 @@
       method: "POST",
       body: JSON.stringify({
         queries: [`restaurants near ${area}`, `local restaurants near ${area}`],
-        seeds: center ? [{ lat: center.lat, lng: center.lng }] : [],
+        seeds: center ? [{ lat: center.lat, lng: center.lng, radius: NEARBY_KM * 1000 }] : [],
       }),
     });
     const result = { places: data.places || [], isDevelopmentMock: Boolean(data.isDevelopmentMock) };
@@ -410,13 +470,31 @@
     return result;
   }
 
+  // "Want higher-end hotels? Edit trip budget" above a hotel or restaurant list.
+  function addEditBudgetLink(onClick, kind) {
+    const body = $("budget-picker-body");
+    if (!body || body.querySelector(".budget-picker-budget-row")) return;
+    const row = document.createElement("div");
+    row.className = "budget-picker-budget-row";
+    const text = document.createElement("span");
+    text.textContent = kind === "hotels" ? "Want higher-end hotels?" : "Want more restaurant choices?";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "budget-picker-budget-btn";
+    button.textContent = "Edit trip budget";
+    button.addEventListener("click", onClick);
+    row.append(text, button);
+    body.insertBefore(row, body.querySelector(".budget-picker-list"));
+  }
+
   // dayIndex: itinerary day; center: {lat,lng} or null; anchorName: a nearby stop name.
-  async function openRestaurants({ dayIndex, dayLabel, center, anchorName, budgetAmountPhp, durationDays }) {
+  // onBudgetChange(amount): saves a new trip budget chosen with "Edit trip budget".
+  async function openRestaurants({ dayIndex, dayLabel, center, anchorName, budgetAmountPhp, durationDays, destination = "", startDate = "", endDate = "", onBudgetChange = null, travelers = 1 }) {
+    // Menu prices are per person: a group shares the meal budget.
+    const people = window.SidekickCore.normalizeTravelers?.(travelers) || 1;
     open(`Where to eat – ${dayLabel}`);
     onClose = null;
-    const mealCap = Number.isFinite(Number(budgetAmountPhp)) && budgetAmountPhp > 0
-      ? Math.floor((budgetAmountPhp * MEAL_SHARE) / (Math.max(1, durationDays) * MEALS_OUT_PER_DAY))
-      : null;
+    let currentBudget = budgetAmountPhp;
     setBody('<p class="budget-picker-status">Finding restaurants near this day’s stops…</p>' + (window.SidekickUI?.skeleton?.list(3) || ''));
     let result;
     try {
@@ -442,57 +520,72 @@
       .map((place) => ({ ...place, distanceKm: center ? distanceKm(center, place) : null, price: restaurantPrice(place) }))
       .filter((place) => place.distanceKm === null || place.distanceKm <= NEARBY_KM);
     const priced = nearby.filter((place) => place.price);
-    const affordable = mealCap === null ? priced : priced.filter((place) => place.price.low <= mealCap);
-    // Best-rated places the budget covers come first; cheaper wins a tie.
-    affordable.sort((a, b) => (Number(b.rating) || 0) - (Number(a.rating) || 0) || a.price.low - b.price.low);
-
-    const summary = mealCap !== null
-      ? `<p class="budget-picker-text">Up to <strong>${peso(mealCap)} per meal</strong> (about 20% of your ${peso(budgetAmountPhp)} budget, ${MEALS_OUT_PER_DAY} meals a day). Best-rated first.</p>`
-      : '<p class="budget-picker-text">No budget was set for this trip, so all priced restaurants are shown. Best-rated first.</p>';
-    const hidden = [
-      priced.length - affordable.length ? `${priced.length - affordable.length} over budget` : "",
-      nearby.length - priced.length ? `${nearby.length - priced.length} without a listed price` : "",
-    ].filter(Boolean).join(", ");
-    const note = `<p class="budget-picker-note">${hidden ? `Not shown: ${esc(hidden)}. ` : ""}Prices are Google Maps estimates per person and may change.</p>`;
-    if (!affordable.length) {
-      setBody(`${summary}<p class="budget-picker-status">No restaurants near this day's stops fit the budget.</p>${note}`);
-      setActions([{ label: "Close", onClick: () => close() }]);
-      return;
-    }
     const metaText = (place) => [ratingText(place), priceText(place.price), place.distanceKm !== null ? `${place.distanceKm.toFixed(1)} km away` : ""].filter(Boolean).join(" • ");
-    const listHtml = `${summary}<div class="budget-picker-list" role="list">${affordable.map((place, index) => `
-      <button type="button" class="budget-picker-item" data-index="${index}">
-        <span class="budget-picker-item-text">
-          <strong>${esc(place.name)}</strong>
-          <small>${esc(place.address || "")}</small>
-          <small class="budget-picker-meta">${esc(metaText(place))}</small>
-          <small class="budget-picker-more">Photos &amp; details ›</small>
-        </span>
-      </button>`).join("")}</div>${note}`;
     // Same action as before this view existed: close and open the add form for this day.
     const addToDay = (place) => {
       close();
       window.SidekickItineraryEdit?.openAddPlace({ ...place, note: [place.address, priceText(place.price)].filter(Boolean).join(" • ") }, "restaurant", dayIndex);
     };
     let listScrollTop = 0;
+    // "Edit trip budget": a new budget is saved to the trip, then the list is shown again.
+    const editBudget = typeof onBudgetChange === "function" ? async () => {
+      const amount = await askNewBudget({ current: currentBudget, destination, lat: center?.lat ?? null, lng: center?.lng ?? null, startDate, endDate, kind: "restaurants", travelers: people });
+      if (amount === null || !$("budget-picker-modal")?.classList.contains("open")) return;
+      if (onBudgetChange(amount) === false) return;
+      currentBudget = amount;
+      listScrollTop = 0;
+      showList();
+      window.SidekickUI.toast(`Trip budget updated to ${peso(amount)}`);
+    } : null;
 
     function showList() {
-      setBody(listHtml);
+      const mealCap = Number.isFinite(Number(currentBudget)) && currentBudget > 0
+        ? Math.floor((currentBudget * MEAL_SHARE) / (Math.max(1, durationDays) * MEALS_OUT_PER_DAY * people))
+        : null;
+      const affordable = mealCap === null ? priced.slice() : priced.filter((place) => place.price.low <= mealCap);
+      // Best-rated places the budget covers come first; cheaper wins a tie.
+      affordable.sort((a, b) => (Number(b.rating) || 0) - (Number(a.rating) || 0) || a.price.low - b.price.low);
+      const summary = mealCap !== null
+        ? `<p class="budget-picker-text">Up to <strong>${peso(mealCap)} per meal${people > 1 ? " per person" : ""}</strong> (about 20% of your ${peso(currentBudget)} budget, ${MEALS_OUT_PER_DAY} meals a day${people > 1 ? ` for ${people} travelers` : ""}). Best-rated first.</p>`
+        : '<p class="budget-picker-text">No budget was set for this trip, so all priced restaurants are shown. Best-rated first.</p>';
+      const hidden = [
+        priced.length - affordable.length ? `${priced.length - affordable.length} over budget` : "",
+        nearby.length - priced.length ? `${nearby.length - priced.length} without a listed price` : "",
+      ].filter(Boolean).join(", ");
+      const note = `<p class="budget-picker-note">${hidden ? `Not shown: ${esc(hidden)}. ` : ""}Prices are Google Maps estimates per person and may change.</p>`;
+      if (!affordable.length) {
+        setBody(`${summary}<p class="budget-picker-status">No restaurants near this day's stops fit the budget.</p>${note}`);
+        setActions([
+          ...(editBudget ? [{ label: "Edit trip budget", onClick: () => { void editBudget(); } }] : []),
+          { label: "Close", onClick: () => close() },
+        ]);
+        return;
+      }
+      setBody(`${summary}<div class="budget-picker-list" role="list">${affordable.map((place, index) => `
+        <button type="button" class="budget-picker-item" data-index="${index}">
+          <span class="budget-picker-item-text">
+            <strong>${esc(place.name)}</strong>
+            <small>${esc(place.address || "")}</small>
+            <small class="budget-picker-meta">${esc(metaText(place))}</small>
+            <small class="budget-picker-more">Photos &amp; details ›</small>
+          </span>
+        </button>`).join("")}</div>${note}`);
       const body = $("budget-picker-body");
       body.querySelectorAll(".budget-picker-item").forEach((row) => {
         row.addEventListener("click", () => {
           const place = affordable[Number(row.dataset.index)];
           if (!place) return;
           listScrollTop = body.scrollTop;
-          showDetails(place);
+          showDetails(place, mealCap);
         });
       });
       setActions([{ label: "Close", onClick: () => close() }]);
+      if (editBudget) addEditBudgetLink(editBudget, "restaurants");
       body.scrollTop = listScrollTop;
     }
 
     // Detail view: photos and information for the tapped restaurant.
-    function showDetails(place) {
+    function showDetails(place, mealCap) {
       const body = $("budget-picker-body");
       const fitsFully = mealCap !== null && place.price?.high !== null && place.price?.high !== undefined && place.price.high <= mealCap;
       setBody(placeDetailsHtml(place, {
@@ -505,9 +598,9 @@
       }));
       wirePhotoErrors($("hotel-detail-gallery"));
       body.scrollTop = 0;
-      body.querySelector(".hotel-detail-back")?.addEventListener("click", showList);
+      body.querySelector(".hotel-detail-back")?.addEventListener("click", () => showList());
       setActions([
-        { label: "Back to restaurants", onClick: showList },
+        { label: "Back to restaurants", onClick: () => showList() },
         { label: `Add to ${dayLabel}`, kind: "primary", onClick: () => addToDay(place) },
       ]);
       body.querySelector(".hotel-detail-back")?.focus({ preventScroll: true });

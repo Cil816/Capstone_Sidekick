@@ -32,6 +32,11 @@
   var tab = body && body.getAttribute('data-tab');
   var index = TABS.indexOf(tab);
   if (index < 0) return;
+  // Screens opened from a tab without the tab bar (Settings, Past trips: <body
+  // data-nav="away">) sit one level deeper, so they slide in from the right and
+  // slide back out to the right when you return to the tab.
+  var away = body.getAttribute('data-nav') === 'away';
+  var order = away ? index + 0.5 : index;
 
   var navigating = false;
   // Set by js/theme-init.js when the browser swaps tab pages with a view transition.
@@ -55,7 +60,7 @@
     if (browserTransitions) {
       // The browser animates the change (see theme-init.js); just record the
       // direction and go, without first sliding this page out.
-      try { sessionStorage.setItem(LAST_KEY, JSON.stringify({ index: index, time: Date.now() })); } catch (e) {}
+      try { sessionStorage.setItem(LAST_KEY, JSON.stringify({ index: order, time: Date.now() })); } catch (e) {}
       window.location.href = href;
       return;
     }
@@ -80,8 +85,8 @@
     var last = null;
     try { last = JSON.parse(sessionStorage.getItem(LAST_KEY) || 'null'); } catch (e) {}
     if (!last || typeof last.index !== 'number' || Date.now() - Number(last.time || 0) > ARRIVAL_WINDOW) return null;
-    if (last.index === index) return null;
-    return index > last.index ? 'next' : 'prev';
+    if (last.index === order) return null;
+    return order > last.index ? 'next' : 'prev';
   }
 
   function playArrival() {
@@ -110,7 +115,7 @@
 
   // Record this tab whenever the page is left, by any route.
   window.addEventListener('pagehide', function () {
-    try { sessionStorage.setItem(LAST_KEY, JSON.stringify({ index: index, time: Date.now() })); } catch (e) {}
+    try { sessionStorage.setItem(LAST_KEY, JSON.stringify({ index: order, time: Date.now() })); } catch (e) {}
   });
 
   // Back/Forward can restore this page from memory exactly as it was left
@@ -152,7 +157,7 @@
 
   document.addEventListener('touchstart', function (event) {
     start = null;
-    if (navigating || event.touches.length !== 1) return;
+    if (away || navigating || event.touches.length !== 1) return; // not a tab: no tab swipes
     var t = event.touches[0];
     var width = window.innerWidth || document.documentElement.clientWidth;
     if (t.clientX < EDGE || t.clientX > width - EDGE) return;

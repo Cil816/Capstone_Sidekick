@@ -43,7 +43,7 @@
     var reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     if (!reduceMotion && 'CSSViewTransitionRule' in window) {
       root.classList.add('sk-vt');
-      var TAB_ORDER = { dashboard: 0, itinerary: 1, chat: 2, alerts: 3, profile: 4, settings: 4, 'past-trips': 4 };
+      var TAB_ORDER = { dashboard: 0, itinerary: 1, chat: 2, alerts: 3, profile: 4, settings: 4.5, 'past-trips': 4.5 };
       window.addEventListener('pagereveal', function (event) {
         if (!event.viewTransition) return;
         var here = TAB_ORDER[root.getAttribute('data-page')];

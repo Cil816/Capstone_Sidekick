@@ -289,6 +289,7 @@
           startDate: range.start,
           endDate: range.end,
           budgetAmountPhp: budget,
+          travelers: data.meta?.travelers || 1,
         });
       } finally {
         window.SidekickUI.loading.hide();

@@ -13,28 +13,29 @@ let destSessionToken = null;
 const ONBOARDING_STATE_KEY = 'sidekick.onboarding.v1';
 const TOTAL_ONBOARDING_STEPS = 3;
 
-// Data
-const travelTypes = [
-    'Adventure',
-    'Beach & Relaxation',
-    'Cultural',
-    'Food Tour',
-    'Nature & Wildlife',
-    'City Exploration'
-];
+// Choices (shared with Home's recommendations, in core.js). Each step only offers
+// what fits the answers before it: travel styles -> their interests -> Batangas spots.
+const travelStyleOptions = () => window.SidekickCore?.TRAVEL_STYLE_OPTIONS || [];
+const interestOptions = () => window.SidekickCore?.interestsForTravelStyles?.(selectedTravel) || [];
+let showAllSpots = false;
 
-const interests = [
-    'Beaches',
-    'Mountains',
-    'Historical Sites',
-    'Local Cuisine',
-    'Nightlife',
-    'Shopping',
-    'Photography',
-    'Water Sports',
-    'Hiking',
-    'Island Hopping'
-];
+// An option button: its name, with a short line saying what it means.
+function optionButton(option, selected, onClick) {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'chip option-chip' + (selected ? ' selected' : '');
+    chip.setAttribute('aria-pressed', String(selected));
+    const title = document.createElement('strong');
+    title.textContent = option.name;
+    chip.appendChild(title);
+    if (option.detail) {
+        const detail = document.createElement('small');
+        detail.textContent = option.detail;
+        chip.appendChild(detail);
+    }
+    chip.onclick = onClick;
+    return chip;
+}
 
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', () => {
@@ -114,38 +115,29 @@ function renderStep() {
     if (currentStep === 1) {
         content.innerHTML = `
             <h1>What's your travel style?</h1>
-            <p>Select all that apply</p>
-            <div class="chip-container" id="travel-chips"></div>
+            <p>Pick all that sound like you. The next steps follow your choice.</p>
+            <div class="chip-container option-grid" id="travel-chips"></div>
         `;
-        
+
         const chipsContainer = document.getElementById('travel-chips');
-        travelTypes.forEach(type => {
-            const chip = document.createElement('button');
-            chip.className = 'chip';
-            chip.textContent = type;
-            if (selectedTravel.includes(type)) {
-                chip.classList.add('selected');
-            }
-            chip.onclick = () => toggleTravel(type);
-            chipsContainer.appendChild(chip);
+        travelStyleOptions().forEach((option) => {
+            chipsContainer.appendChild(optionButton(option, selectedTravel.includes(option.name), () => toggleTravel(option.name)));
         });
     } else if (currentStep === 2) {
+        const options = interestOptions();
+        const styles = selectedTravel.join(', ');
         content.innerHTML = `
             <h1>What interests you?</h1>
-            <p>Select your interests</p>
-            <div class="chip-container" id="interest-chips"></div>
+            <p></p>
+            <div class="chip-container option-grid" id="interest-chips"></div>
         `;
-        
+        content.querySelector('p').textContent = styles
+            ? 'Picked for your ' + styles + ' style. Choose what you want to do in Batangas.'
+            : 'Choose what you want to do in Batangas.';
+
         const chipsContainer = document.getElementById('interest-chips');
-        interests.forEach(interest => {
-            const chip = document.createElement('button');
-            chip.className = 'chip';
-            chip.textContent = interest;
-            if (selectedInterests.includes(interest)) {
-                chip.classList.add('selected');
-            }
-            chip.onclick = () => toggleInterest(interest);
-            chipsContainer.appendChild(chip);
+        options.forEach((option) => {
+            chipsContainer.appendChild(optionButton(option, selectedInterests.includes(option.name), () => toggleInterest(option.name)));
         });
     }
     else if (currentStep === 3) {
@@ -340,11 +332,21 @@ function renderDestinationStep(content) {
         <div class="dest-status" id="dest-status" role="status" aria-live="polite"></div>
         <div class="dest-counter" id="dest-counter"></div>
         <div class="chip-container" id="dest-selected"></div>
-        <h2 class="dest-subheading">Popular picks</h2>
+        <h2 class="dest-subheading" id="dest-popular-title">Picked for your interests</h2>
         <div class="chip-container" id="dest-popular"></div>
+        <button type="button" class="dest-more" id="dest-more" hidden></button>
     `;
 
-    const popular = window.SidekickCore?.POPULAR_PH_SPOTS || [];
+    // Spots that match the chosen interests first; the rest on request.
+    const { matches, others } = window.SidekickCore?.spotsForInterests?.(selectedInterests) || { matches: [], others: window.SidekickCore?.POPULAR_PH_SPOTS || [] };
+    const popular = matches.length ? (showAllSpots ? matches.concat(others) : matches) : matches.concat(others);
+    if (!matches.length) document.getElementById('dest-popular-title').textContent = 'Popular picks';
+    const moreBtn = document.getElementById('dest-more');
+    if (matches.length && others.length) {
+        moreBtn.hidden = false;
+        moreBtn.textContent = showAllSpots ? 'Show only places for my interests' : 'Show more places in Batangas (' + others.length + ')';
+        moreBtn.onclick = () => { showAllSpots = !showAllSpots; renderStep(); };
+    }
     const popularWrap = document.getElementById('dest-popular');
     popular.forEach((spot) => {
         const chip = document.createElement('button');
@@ -418,6 +420,11 @@ function handleBack() {
 
 async function handleNext() {
     if (currentStep < TOTAL_ONBOARDING_STEPS) {
+        // Interests that no longer fit the chosen travel styles are let go.
+        if (currentStep === 1) {
+            const allowed = new Set(interestOptions().map((option) => option.name));
+            selectedInterests = selectedInterests.filter((interest) => allowed.has(interest));
+        }
         currentStep++;
         renderStep();
     } else {

@@ -925,6 +925,7 @@
   let userLastActiveTrackingAvailable = false;
   const itineraryTableState = { page: 1, total: 0, limit: 25 };
   const appReviewTableState = { page: 1, total: 0, limit: 25 };
+  const popularTableState = { page: 1, total: 0, limit: 20 };
   let selectedItineraryTripId = null;
 
   function updatePagination(summaryId, previousId, nextId, state) {
@@ -1388,6 +1389,58 @@
     } catch (error) {
       summary.innerHTML = '<div class="admin-card ax-empty" style="grid-column:1/-1">Rating summary is unavailable.</div>';
       list.innerHTML = '<div class="admin-card ax-empty">We couldn’t load app reviews. Check the database setup and try again.</div>';
+      setStatus(getReadableError(error), 'error');
+    }
+  }
+
+  // ---- Popular places (the ranking behind the app's Home "Popular destinations") ----
+  async function loadPopularPlaces(page = popularTableState.page) {
+    const body = document.getElementById('popular-table-body');
+    const summary = document.getElementById('popular-summary');
+    if (!body || !summary) return;
+    body.innerHTML = skel.rows(5, 5);
+    if (!summary.children.length) summary.innerHTML = skel.kpis(4);
+    try {
+      const params = new URLSearchParams({ page: String(page), limit: String(popularTableState.limit) });
+      const payload = await request(`/api/admin/popular-places?${params}`);
+      if (!payload?.available) {
+        summary.innerHTML = '';
+        body.innerHTML = '<tr><td colspan="5" class="empty-state">Place counting isn’t set up on this database yet. Run migration 009_place_popularity.sql, then travelers’ saved trips will be counted here.</td></tr>';
+        popularTableState.total = 0;
+        updatePagination('popular-page-summary', 'popular-page-previous', 'popular-page-next', popularTableState);
+        return;
+      }
+      popularTableState.page = payload.page || page;
+      popularTableState.total = payload.total || 0;
+      const totals = payload.totals || {};
+      renderKpis(summary, [
+        { icon: 'pin', label: 'Places used', value: formatNumber(totals.places || 0), sub: 'in saved trips' },
+        { icon: 'users', label: 'Travelers', value: formatNumber(totals.travelers || 0), sub: 'who saved a trip' },
+        { icon: 'calendar', label: 'Trips counted', value: formatNumber(totals.trips || 0), sub: `${formatNumber(totals.uses || 0)} stops in all` },
+        { icon: 'pulse', label: 'Last 30 days', value: formatNumber(totals.usesLast30Days || 0), sub: 'stops added' },
+      ]);
+      const places = payload.places || [];
+      body.innerHTML = places.length
+        ? places.map((place) => {
+          const maps = place.placeId
+            ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place.name)}&query_place_id=${encodeURIComponent(place.placeId)}`
+            : '';
+          const name = maps
+            ? `<a href="${escapeHtml(maps)}" target="_blank" rel="noopener noreferrer">${escapeHtml(place.name)}</a>`
+            : escapeHtml(place.name);
+          return `<tr>
+            <td><strong>${escapeHtml(String(place.rank))}</strong></td>
+            <td><div class="ax-person-text"><strong>${name}${place.onHome ? ' <span class="ax-pill ok">On Home</span>' : ''}</strong><small>${escapeHtml(place.address || '—')}</small></div></td>
+            <td>${escapeHtml(formatNumber(place.travelers))}</td>
+            <td>${escapeHtml(formatNumber(place.trips))}</td>
+            <td class="hide-sm">${escapeHtml(formatDateOnly(place.lastUsed))}</td>
+          </tr>`;
+        }).join('')
+        : '<tr><td colspan="5" class="empty-state">No places counted yet. Places are counted when travelers save trips in the app; until then, Home shows Google’s top-rated Batangas spots.</td></tr>';
+      updatePagination('popular-page-summary', 'popular-page-previous', 'popular-page-next', popularTableState);
+    } catch (error) {
+      summary.innerHTML = '';
+      body.innerHTML = '<tr><td colspan="5" class="empty-state">We couldn’t load popular places. Please try again.</td></tr>';
       setStatus(getReadableError(error), 'error');
     }
   }
@@ -2339,6 +2392,11 @@
     }
     if (currentPage === 'itineraries') {
       loadItineraryTable();
+    }
+    if (currentPage === 'popular') {
+      loadPopularPlaces();
+      document.getElementById('popular-page-previous')?.addEventListener('click', () => loadPopularPlaces(popularTableState.page - 1));
+      document.getElementById('popular-page-next')?.addEventListener('click', () => loadPopularPlaces(popularTableState.page + 1));
     }
     if (currentPage === 'analytics') {
       void initReportsPage();

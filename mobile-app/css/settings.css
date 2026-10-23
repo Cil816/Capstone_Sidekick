@@ -119,10 +119,6 @@
   font-weight: 600;
 }
 
-.settings-card.danger .btn {
-  background: #334155;
-}
-
 .settings-message {
   font-size: 13px;
   color: #065f46;
@@ -163,11 +159,6 @@
   .settings-card {
     padding: 12px;
   }
-}
-
-/* Keep the dark logout button (a11y.css darkens all primary buttons). */
-.settings-card.danger .btn-primary {
-  background: #334155 !important;
 }
 
 .settings-card.danger .btn-danger-outline {

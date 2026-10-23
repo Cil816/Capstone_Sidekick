@@ -70,6 +70,20 @@ body {
 
 .btn-primary:hover { background: linear-gradient(135deg, #24819e, #55cfcb); }
 
+/* Logout (Profile and Settings): a solid red button. */
+.btn-logout {
+    background: #d63d3d;
+    color: #fff;
+    border: none;
+    font-weight: 700;
+}
+.btn-logout:hover:not(:disabled) { background: #b93232; }
+.btn-logout:active:not(:disabled) { background: #a32b2b; }
+.btn-logout:focus-visible { outline: 3px solid #f2a3a3; outline-offset: 2px; }
+.profile-logout { margin: 0 0 24px; }
+html[data-theme="dark"] .btn-logout { background: #c94444; color: #fff; }
+html[data-theme="dark"] .btn-logout:hover:not(:disabled) { background: #b23a3a; }
+
 .btn-outline {
     background: rgba(255, 255, 255, .9);
     color: var(--sk-primary-dark);
@@ -390,6 +404,46 @@ body {
     to { transform: rotate(360deg); }
 }
 
+/* Progress mode (building an itinerary): the ring fills to the percentage instead of
+   spinning, with the number and a bar under the logo. The bar grows with a transform
+   so updates don't redraw the page. */
+.sk-loader.is-progress .sk-loader-ring {
+    animation: none;
+    background: conic-gradient(#2c91b0 calc(var(--sk-progress, 0) * 3.6deg), rgba(44, 145, 176, .16) 0);
+}
+
+.sk-loader-percent {
+    margin: -4px 0 0;
+    font-family: "Manrope", "Avenir Next", sans-serif;
+    font-size: 28px;
+    font-weight: 800;
+    line-height: 1;
+    color: #1f6f88;
+    font-variant-numeric: tabular-nums;
+}
+
+.sk-loader-bar {
+    width: 210px;
+    max-width: 100%;
+    height: 8px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: rgba(44, 145, 176, .16);
+}
+
+.sk-loader-bar span {
+    display: block;
+    width: 100%;
+    height: 100%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, #2c91b0, #68ddd9);
+    transform: scaleX(calc(var(--sk-progress, 0) / 100));
+    transform-origin: left center;
+    transition: transform 500ms ease;
+}
+
+html[data-theme="dark"] .sk-loader-percent { color: #8fd8e6; }
+
 /* With "reduce motion" on, the ring still turns (slowly): it is the only sign that
    the app is working. */
 @media (prefers-reduced-motion: reduce) {
@@ -404,12 +458,26 @@ body {
    content is still loading.
    ========================================================================== */
 .sk-skel {
+    position: relative;
     display: block;
+    overflow: hidden;
     border-radius: 8px;
     background-color: #e3ecf1;
-    background-image: linear-gradient(90deg, #e3ecf1 0%, #f2f7f9 45%, #e3ecf1 90%);
-    background-size: 220% 100%;
+}
+
+/* The shimmer is a soft highlight sliding across: moved by the graphics chip
+   (transform), so the grey shapes are not redrawn on every frame. */
+.sk-skel::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, rgba(255, 255, 255, 0) 0%, rgba(255, 255, 255, .6) 50%, rgba(255, 255, 255, 0) 100%);
+    transform: translateX(-100%);
     animation: skShimmer 1.3s ease-in-out infinite;
+}
+
+html[data-theme="dark"] .sk-skel::after {
+    background: linear-gradient(90deg, rgba(255, 255, 255, 0) 0%, rgba(255, 255, 255, .07) 50%, rgba(255, 255, 255, 0) 100%);
 }
 
 .sk-skel-line {
@@ -472,8 +540,8 @@ body {
 }
 
 @keyframes skShimmer {
-    from { background-position: 100% 0; }
-    to { background-position: -120% 0; }
+    from { transform: translateX(-100%); }
+    to { transform: translateX(100%); }
 }
 
 /* ==========================================================================

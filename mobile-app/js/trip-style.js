@@ -1,7 +1,9 @@
 // "Plan your trip style": asked just before an itinerary is built (styles in css/theme.css).
 //   SidekickTripStyle.ask({ destination, days, preferences, firstDayStartMinute }) -> Promise<{ timeOfDay, pace, focus } | null>
 // firstDayStartMinute is set when the trip starts today (see SidekickCore.firstDayStartMinute):
-// times of day that are already over today can't be picked.
+// on a one-day trip, times of day that are already over today can't be picked. On a
+// longer trip every time of day can be picked: if it is over for today, day 1 (today)
+// gets the next time of day that still has time left, and later days keep the choice.
 // The focus choices start with the traveler's onboarding preferences (already
 // selected), followed by other ideas they can add. null means the traveler went back.
 (function () {
@@ -59,11 +61,16 @@
         .map((item) => String(item || "").trim()).filter(Boolean)));
       const others = [...ONBOARDING_CHOICES, ...EXTRA_CHOICES].filter((item) => !mine.includes(item));
       const last = lastChoice();
-      const usable = TIMES.filter((item) => fitsToday(item, firstDayStartMinute));
+      // Only a one-day trip is limited to what is left of today.
+      const multiDay = Number(days) > 1;
+      const canPick = (item) => multiDay || fitsToday(item, firstDayStartMinute);
+      const usable = TIMES.filter(canPick);
       let timeOfDay = usable.some((item) => item.value === last?.timeOfDay) ? last.timeOfDay
         : usable.some((item) => item.value === "fullday") ? "fullday" : (usable[0]?.value || "night");
       const lateNote = Number.isFinite(firstDayStartMinute) && firstDayStartMinute > 7 * 60
-        ? `Your trip starts today, so day 1 begins around ${clockText(firstDayStartMinute)}.${usable.length < TIMES.length ? " Times of day that are over for today can’t be picked." : ""}`
+        ? `Your trip starts today, so day 1 begins around ${clockText(firstDayStartMinute)}.${multiDay
+          ? (TIMES.some((item) => !fitsToday(item, firstDayStartMinute)) ? " If you pick a time that’s over for today, day 1 becomes an evening plan and your choice starts on day 2." : "")
+          : (usable.length < TIMES.length ? " Times of day that are over for today can’t be picked." : "")}`
         : "";
       let pace = PACES.some((item) => item.value === last?.pace) ? last.pace : "packed";
       // The traveler's own preferences start selected; extra picks from last time stay picked.
@@ -83,9 +90,9 @@
               ${lateNote ? `<p class="sk-style-late-note">${esc(lateNote)}</p>` : ""}
               <div class="sk-style-times" role="radiogroup" aria-label="When do you want to explore?">
                 ${TIMES.map((item) => `
-                  <button type="button" class="sk-style-time" role="radio" data-time="${item.value}" aria-checked="${item.value === timeOfDay}"${fitsToday(item, firstDayStartMinute) ? "" : " disabled aria-disabled=\"true\""}>
+                  <button type="button" class="sk-style-time" role="radio" data-time="${item.value}" aria-checked="${item.value === timeOfDay}"${canPick(item) ? "" : " disabled aria-disabled=\"true\""}>
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${item.icon}</svg>
-                    <span><strong>${esc(item.title)}</strong><small>${esc(fitsToday(item, firstDayStartMinute) ? item.detail : "Over for today")}</small></span>
+                    <span><strong>${esc(item.title)}</strong><small>${esc(fitsToday(item, firstDayStartMinute) ? item.detail : multiDay ? `${item.detail} · from day 2` : "Over for today")}</small></span>
                   </button>`).join("")}
               </div>
             </fieldset>

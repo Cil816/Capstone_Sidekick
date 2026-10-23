@@ -9,6 +9,7 @@
     info: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>',
     question: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/></svg>',
     danger: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></svg>',
+    logout: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>',
     edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>',
   };
 
@@ -184,6 +185,8 @@
           <span class="sk-loader-ring"></span>
           <img class="sk-loader-logo" src="assets/sidekick-logo-192.png" alt="" width="60" height="60">
         </div>
+        <p class="sk-loader-percent" hidden></p>
+        <div class="sk-loader-bar" hidden><span></span></div>
         <p class="sk-loader-text" hidden></p>
         <span class="sr-only">Loading, please wait.</span>
       </div>`;
@@ -197,6 +200,28 @@
     const node = loaderNode().querySelector(".sk-loader-text");
     node.textContent = String(text || "");
     node.hidden = !node.textContent;
+  }
+
+  // Progress mode (building an itinerary): a percentage, a filling ring and bar, and a
+  // line saying what is happening, instead of the spinning ring.
+  function setLoadingProgress(percent, label) {
+    const el = loaderNode();
+    const value = Math.max(0, Math.min(100, Math.round(Number(percent) || 0)));
+    el.classList.add("is-progress");
+    el.style.setProperty("--sk-progress", String(value));
+    const pct = el.querySelector(".sk-loader-percent");
+    pct.textContent = `${value}%`;
+    pct.hidden = false;
+    el.querySelector(".sk-loader-bar").hidden = false;
+    el.querySelector(".sk-loader-box").setAttribute("aria-valuenow", String(value));
+    if (label) setLoadingText(label);
+  }
+
+  function clearLoadingProgress() {
+    if (!loaderEl) return;
+    loaderEl.classList.remove("is-progress");
+    loaderEl.querySelector(".sk-loader-percent").hidden = true;
+    loaderEl.querySelector(".sk-loader-bar").hidden = true;
   }
 
   function showLoading(text = "") {
@@ -218,6 +243,7 @@
   function hideLoading(all = false) {
     loaderCount = all ? 0 : Math.max(0, loaderCount - 1);
     if (loaderCount > 0 || !loaderEl) return;
+    clearLoadingProgress();
     if (loaderEl.open) {
       try { loaderEl.close(); } catch (error) { loaderEl.removeAttribute("open"); }
     }
@@ -249,7 +275,7 @@
     alert: alertDialog,
     form: formDialog,
     toast,
-    loading: { show: showLoading, hide: hideLoading, setText: setLoadingText },
+    loading: { show: showLoading, hide: hideLoading, setText: setLoadingText, progress: setLoadingProgress },
     skeleton,
   };
 
