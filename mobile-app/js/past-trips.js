@@ -142,7 +142,7 @@
     const ids = chosen.map((box) => Number(box.dataset.selectPastTrip)).filter(Number.isSafeInteger);
     if (!ids.length) return;
     const many = ids.length > 1;
-    const ok = await window.SidekickUI.confirm(`${many ? "They" : "It"} will no longer appear in your app. Sidekick keeps a copy in its secure archive for up to ${retentionDays} day${retentionDays === 1 ? "" : "s"} for support, then deletes ${many ? "them" : "it"} for good.`, {
+    const ok = await window.SidekickUI.confirm(`${many ? "They" : "It"} will be removed from your app. A secure copy is kept for up to ${retentionDays} day${retentionDays === 1 ? "" : "s"} for support, then deleted for good.`, {
       title: many ? `Remove ${ids.length} trips?` : `Remove “${chosen[0].closest(".past-trip")?.querySelector(".past-trip-name")?.textContent || "this trip"}”?`,
       confirmText: "Remove", cancelText: "Keep", tone: "danger",
     });
@@ -196,7 +196,7 @@
     const id = Number(button.dataset.removePastTrip);
     if (!card || !Number.isSafeInteger(id)) return;
     const name = card.querySelector(".past-trip-name")?.textContent || "this trip";
-    const ok = await window.SidekickUI.confirm(`It will no longer appear in your app. Sidekick keeps a copy in its secure archive for up to ${retentionDays} day${retentionDays === 1 ? "" : "s"} for support, then deletes it for good.`, {
+    const ok = await window.SidekickUI.confirm(`It will be removed from your app. A secure copy is kept for up to ${retentionDays} day${retentionDays === 1 ? "" : "s"} for support, then deleted for good.`, {
       title: `Remove “${name}”?`, confirmText: "Remove", cancelText: "Keep it", tone: "danger",
     });
     if (!ok) return;
@@ -251,7 +251,7 @@
       const values = await window.SidekickUI.form({
         title: "Do this trip again",
         icon: "question",
-        message: `When do you want to go? “${tripName(trip)}” (${dayCount} day${dayCount === 1 ? "" : "s"}) is copied with the same activities and times, and you can change anything before you save it.`,
+        message: `When do you want to go? “${tripName(trip)}” (${dayCount} day${dayCount === 1 ? "" : "s"}) keeps its activities and times. You can edit it before saving.`,
         fields: [
           { name: "start", label: "New start date", type: "date", value: start, min: core.localDateValue() },
           { name: "budget", label: "Total budget (PHP)", type: "number", value: budgetText, min: 1, placeholder: "Enter your budget", hint: oldBudget ? `Last time: ₱${oldBudget.toLocaleString()}` : "" },
@@ -346,7 +346,7 @@
       const trips = Array.isArray(data?.trips) ? data.trips : [];
       const days = Number(data?.retentionDays) || 30;
       retentionDays = days;
-      if (intro) intro.textContent = `Your finished itineraries, with every activity as you last planned it. A trip appears here 2 days after its last day and is kept for ${days} day${days === 1 ? "" : "s"}.`;
+      if (intro) intro.textContent = `Finished trips, with every activity as planned. Each appears 2 days after it ends and stays for ${days} day${days === 1 ? "" : "s"}.`;
       pastById.clear();
       trips.forEach((trip) => pastById.set(Number(trip.id), trip));
       if (trips.length) {

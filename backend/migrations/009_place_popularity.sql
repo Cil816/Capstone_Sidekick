@@ -13,7 +13,7 @@ BEGIN
         address        nvarchar(300) NULL,
         latitude       decimal(9, 6) NULL,
         longitude      decimal(9, 6) NULL,
-        photo_resource nvarchar(400) NULL,
+        photo_resource nvarchar(1000) NULL,
         first_used_at  datetime2 NOT NULL CONSTRAINT DF_popular_places_first_used DEFAULT SYSUTCDATETIME(),
         last_used_at   datetime2 NOT NULL CONSTRAINT DF_popular_places_last_used DEFAULT SYSUTCDATETIME()
     );
@@ -28,6 +28,15 @@ BEGIN
         used_at   datetime2 NOT NULL CONSTRAINT DF_place_usage_used_at DEFAULT SYSUTCDATETIME(),
         CONSTRAINT PK_place_usage PRIMARY KEY (place_key, trip_id)
     );
+END;
+
+-- Google photo names can be longer than 400 characters. Widen the column on
+-- databases created before this change, and clear names that were cut off at 400
+-- (they can't load; the next saved trip with that place stores the full name).
+IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.popular_places') AND name = N'photo_resource' AND max_length < 2000)
+BEGIN
+    ALTER TABLE dbo.popular_places ALTER COLUMN photo_resource nvarchar(1000) NULL;
+    UPDATE dbo.popular_places SET photo_resource = NULL WHERE LEN(photo_resource) = 400;
 END;
 
 -- Every usage row belongs to a counted place.

@@ -108,6 +108,8 @@
 /* Embedded in the registration dialog: hide page chrome. */
 .legal-embedded .legal-back,
 .legal-embedded .legal-nav { display: none; }
+/* Comfortable tap size for the links between the legal pages. */
+.legal-nav a { display: inline-block; padding: 6px 0; }
 .legal-embedded .legal-page { padding-top: 4px; }
 
 /* Links to the legal pages used across the app */

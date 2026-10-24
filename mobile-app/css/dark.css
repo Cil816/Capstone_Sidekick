@@ -159,7 +159,7 @@ html[data-theme="dark"] .btn-outline:hover {
 }
 html[data-theme="dark"] .bottom-nav.overlay {
   border: 1px solid hsla(212, 30%, 23%, 0.92);
-  background: hsla(208, 32%, 11%, 0.9);
+  background: hsla(208, 32%, 11%, 0.97);
 }
 html[data-theme="dark"] .place-card:hover,
 html[data-theme="dark"] .destination-card:hover,
@@ -171,7 +171,7 @@ html[data-theme="dark"] .chat-input-container input {
   background: hsla(214, 38%, 12%, 0.95);
 }
 html[data-theme="dark"] .chat-input-container {
-  background: hsla(208, 32%, 11%, 0.86);
+  background: hsla(208, 32%, 11%, 0.96);
 }
 html[data-theme="dark"] .auth-error {
   border-color: hsl(351, 30%, 25%);
@@ -501,7 +501,7 @@ html[data-theme="dark"]:where([data-page="chat"]) .chat-screen {
   background: radial-gradient(circle at 90% 0%, rgba(104, 221, 217, .18), transparent 32%), hsl(190, 38%, 12%);
 }
 html[data-theme="dark"]:where([data-page="chat"]) .chat-header {
-  background: hsla(208, 32%, 11%, 0.84);
+  background: hsla(208, 32%, 11%, 0.96);
 }
 html[data-theme="dark"]:where([data-page="chat"]) .ai-message .message-bubble {
   background: linear-gradient(135deg, hsl(188, 38%, 13%), hsl(189, 38%, 12%));
@@ -1761,7 +1761,7 @@ html[data-theme="dark"]:where([data-page="login"], [data-page="profile"], [data-
 
 /* ---- from onboarding.css (onboarding) ---- */
 html[data-theme="dark"]:where([data-page="onboarding"]) .onboarding-screen .onboarding-footer {
-  background: hsla(208, 32%, 11%, 0.9);
+  background: hsla(208, 32%, 11%, 0.96);
   border-top-color: hsla(191, 30%, 29%, 0.5);
 }
 html[data-theme="dark"]:where([data-page="onboarding"]) .step-indicator {
@@ -2058,7 +2058,7 @@ html[data-theme="dark"]:where([data-page="login"], [data-page="register"], [data
   color: hsl(212, 28%, 81%);
 }
 html[data-theme="dark"]:where([data-page="login"], [data-page="register"], [data-page="verify"]) .terms-dialog::backdrop {
-  background: rgb(20 35 50 / 48%);
+  background: rgb(20 35 50 / 56%);
 }
 html[data-theme="dark"]:where([data-page="login"], [data-page="register"], [data-page="verify"]) .terms-close {
   background: hsl(206, 37%, 13%);

@@ -73,7 +73,7 @@ function bindRegisterForm() {
       showStep("code");
       // A code from a recent request still works: no new email was sent.
       setRegisterStatus(result.alreadySent
-        ? "You’ve already requested a code. Enter the code we sent to your email. Didn’t get it? Check your spam folder or tap “Didn’t receive the code?”."
+        ? "A code was already sent to your email. Didn’t get it? Check spam or tap “Didn’t receive the code?”."
         : "Verification code sent. Check your inbox and spam folder.");
       otpInput.focus();
     } catch (error) {

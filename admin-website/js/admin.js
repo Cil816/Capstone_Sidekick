@@ -550,8 +550,8 @@
       },
       {
         icon: 'online', label: 'Online now', value: formatNumber(metrics.onlineUsers), live: true,
-        sub: 'App open in the last 90 s',
-        help: 'Users with the app open in the past 90 seconds.',
+        sub: 'Using the app in the last 3 min',
+        help: 'Users who had the app open in the past 3 minutes.',
       },
       {
         icon: 'signin', label: 'Sign-ins', value: usageTracked ? formatNumber(metrics.signInsLast30Days) : '—',
@@ -1053,9 +1053,9 @@
         <h3>Permanent account deletion</h3>
         <p class="stat-detail">${user.lastActiveTrackingAvailable
           ? user.inactiveLongerThan180Days
-            ? 'No recorded app activity for at least 180 days. You may delete this account now, but the inactivity period is only a reference. Deletion permanently removes linked trips, itinerary activities, reviews, reminders, preferences, and account data.'
-            : 'The 180-day inactivity period is a reference only. You may delete this account at any time. Deletion permanently removes linked Sidekick data.'
-          : 'Last-active tracking is unavailable, but you may still delete this account at any time. Deletion permanently removes linked Sidekick data.'}</p>
+            ? 'No app activity for 180+ days. You can delete this account (the 180 days are only a guide). Deleting permanently removes its trips, activities, reviews, reminders, preferences and account data.'
+            : 'The 180-day inactivity mark is only a guide; you can delete this account anytime. Deleting permanently removes all its Sidekick data.'
+          : 'Last-active tracking is unavailable, but you can still delete this account. Deleting permanently removes all its Sidekick data.'}</p>
         <button class="admin-button-danger" type="button" data-delete-user="${Number(user.userId)}" data-user-email="${escapeHtml(user.email || '')}">Delete account permanently</button>
       </section>
     `;
@@ -1316,7 +1316,7 @@
   async function deleteUserPermanently(userId, userEmail) {
     const confirmationEmail = await askTypedConfirmation({
       title: 'Delete this account?',
-      message: `This deletes ${userEmail} and their linked Sidekick data (trips, reviews, preferences). The user can no longer sign in. A copy is kept in the archive (see Settings) for the retention period, then removed for good.`,
+      message: `This deletes ${userEmail} with their trips, reviews and preferences, and they can no longer sign in. An archive copy is kept for the retention period (see Settings).`,
       label: 'Type the account email to confirm',
       expected: userEmail,
       confirmText: 'Delete account',
@@ -1436,7 +1436,7 @@
             <td class="hide-sm">${escapeHtml(formatDateOnly(place.lastUsed))}</td>
           </tr>`;
         }).join('')
-        : '<tr><td colspan="5" class="empty-state">No places counted yet. Places are counted when travelers save trips in the app; until then, Home shows Google’s top-rated Batangas spots.</td></tr>';
+        : '<tr><td colspan="5" class="empty-state">No places counted yet. They’re counted when travelers save trips; until then, Home shows Google’s top-rated Batangas spots.</td></tr>';
       updatePagination('popular-page-summary', 'popular-page-previous', 'popular-page-next', popularTableState);
     } catch (error) {
       summary.innerHTML = '';

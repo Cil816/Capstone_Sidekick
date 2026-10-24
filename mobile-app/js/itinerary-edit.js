@@ -734,7 +734,7 @@
     const oldMidnight = dayDate(dayIndex);
     openForm({
       title: `Change date for Day ${day.dayNumber || dayIndex + 1}`,
-      intro: "All activities on this day move to the new date and keep their times. If that date already has activities, they are combined.",
+      intro: "Activities move to the new date at the same times. If that date has activities, they’re combined.",
       fields: [{ name: "date", label: "New date", type: "date", required: true, value: dateValue(oldMidnight), min: dateValue(Date.now()) }],
       onSubmit: ({ date }) => {
         const target = parseDateValue(date);

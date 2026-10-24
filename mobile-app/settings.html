@@ -71,6 +71,11 @@
         </section>
 
         <section class="settings-card">
+          <h2>Help</h2>
+          <button id="app-tour-btn" class="btn btn-outline btn-full settings-action" type="button">Show app tour</button>
+        </section>
+
+        <section class="settings-card">
           <h2>Travel Data</h2>
           <button id="sync-reminders-btn" class="btn btn-outline btn-full settings-action" type="button">Sync reminders from itinerary</button>
           <button id="clear-chat-btn" class="btn btn-outline btn-full settings-action" type="button">Clear chat history</button>
@@ -101,7 +106,7 @@
   <dialog class="delete-account-dialog" id="delete-account-dialog" aria-labelledby="delete-account-title">
     <form id="delete-account-form" novalidate>
       <h2 id="delete-account-title">Delete your account?</h2>
-      <p>This deletes your Sidekick account, itineraries and preferences from our server, and clears your Sidekick data on this device. This cannot be undone.</p>
+      <p>This permanently deletes your account, trips and preferences, and clears Sidekick’s data on this phone. It can’t be undone.</p>
       <label for="delete-account-password">Enter your password to confirm</label>
       <input type="password" id="delete-account-password" autocomplete="current-password" required>
       <p class="auth-error" id="delete-account-error" role="alert" hidden></p>

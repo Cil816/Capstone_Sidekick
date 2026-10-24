@@ -1,0 +1,106 @@
+/* App tour (js/tour.js): the screen is dimmed and blurred except the highlighted part,
+   which gets a glowing outline, with a short card that explains it. Above the bottom
+   bar (z-index 10000), below the app's pop-ups and toasts. */
+
+.sk-tour-blocker {
+    position: fixed;
+    inset: 0;
+    z-index: 15000;
+}
+
+.sk-tour-shade {
+    position: fixed;
+    inset: 0;
+    z-index: 15001;
+    pointer-events: none;
+    /* A plain dim (no live blur, which is costly on low-end phones). */
+    background: rgba(9, 22, 34, .66);
+}
+/* Older WebViews without clip-path holes: the outline's shadow does the dimming instead. */
+.sk-tour-shade-plain { background: transparent; }
+
+.sk-tour-ring {
+    position: fixed;
+    z-index: 15002;
+    pointer-events: none;
+    border-radius: 16px;
+    border: 2px solid #ffffff;
+    box-shadow: 0 0 0 4px rgba(79, 199, 204, .55), 0 0 24px rgba(79, 199, 204, .6);
+    /* Each step jumps to its place and fades in: only opacity animates. */
+    transition: opacity 180ms ease;
+}
+.sk-tour-ring-dim { box-shadow: 0 0 0 4px rgba(79, 199, 204, .55), 0 0 0 9999px rgba(9, 22, 34, .6); }
+
+.sk-tour-card {
+    position: fixed;
+    z-index: 15003;
+    left: 16px;
+    right: 16px;
+    max-width: 420px;
+    margin: 0 auto;
+    padding: 18px 18px 14px;
+    border-radius: 18px;
+    background: #ffffff;
+    color: #163457;
+    box-shadow: 0 18px 48px rgba(9, 22, 34, .35);
+    transition: opacity 180ms ease;
+    outline: none;
+}
+.sk-tour-count {
+    margin: 0 0 4px;
+    font-size: 13px;
+    font-weight: 700;
+    color: #1f6f88;
+}
+.sk-tour-title {
+    margin: 0 0 6px;
+    font-family: "Manrope", "DM Sans", sans-serif;
+    font-size: 19px;
+    font-weight: 800;
+    line-height: 1.25;
+}
+.sk-tour-text {
+    margin: 0;
+    font-size: 16px;
+    line-height: 1.5;
+    color: #2b4560;
+}
+.sk-tour-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 14px;
+}
+.sk-tour-spacer { flex: 1; }
+.sk-tour-actions button {
+    min-height: 44px;
+    padding: 0 16px;
+    border-radius: 12px;
+    font: inherit;
+    font-size: 15px;
+    font-weight: 700;
+    cursor: pointer;
+}
+.sk-tour-skip { border: 0; background: transparent; color: #56708a; padding: 0 8px; }
+.sk-tour-back { border: 1px solid #d5e3ea; background: #ffffff; color: #163457; }
+.sk-tour-next { border: 0; background: linear-gradient(135deg, #1b6e84, #2c91b0 55%, #4fc7cc); color: #ffffff; min-width: 88px; }
+.sk-tour-actions button:focus-visible { outline: 3px solid #ef8a69; outline-offset: 2px; }
+
+/* Hidden for a moment while the next step is measured and placed. */
+.sk-tour-ring.sk-tour-moving, .sk-tour-card.sk-tour-moving { opacity: 0; }
+
+/* The bottom bar stays visible during the tour. */
+.sk-tour-active .bottom-nav.overlay.navbar-hidden {
+    transform: translateX(-50%) translateY(0);
+    opacity: 1;
+}
+
+html[data-theme="dark"] .sk-tour-card { background: #152739; color: #e2edf5; box-shadow: 0 18px 48px rgba(0, 0, 0, .55); }
+html[data-theme="dark"] .sk-tour-count { color: #6fd0dc; }
+html[data-theme="dark"] .sk-tour-text { color: #c4d4e1; }
+html[data-theme="dark"] .sk-tour-skip { color: #9db3c5; }
+html[data-theme="dark"] .sk-tour-back { background: #152739; border-color: #2c4659; color: #e2edf5; }
+
+@media (prefers-reduced-motion: reduce) {
+    .sk-tour-ring, .sk-tour-card { transition: none; }
+}

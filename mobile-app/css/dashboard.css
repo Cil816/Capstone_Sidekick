@@ -164,7 +164,7 @@
     cursor: pointer;
     touch-action: manipulation;
     box-shadow: 0 8px 20px rgba(52, 76, 104, .07);
-    transition: transform .2s ease, box-shadow .2s ease, border-color .2s ease;
+    transition: transform .2s ease, border-color .2s ease;
 }
 
 .place-image {
@@ -251,7 +251,7 @@
     .destination-card:hover {
         transform: translateY(-2px);
         box-shadow: 0 8px 18px rgba(44, 62, 80, 0.08);
-        transition: transform 0.2s, box-shadow 0.2s;
+        transition: transform 0.2s;
     }
 }
 

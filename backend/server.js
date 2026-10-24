@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import compression from 'compression';
 import dotenv from 'dotenv';
 import sql from 'mssql';
 import bcrypt from 'bcryptjs';
@@ -23,6 +24,9 @@ const app = express();
 // when the server is reached directly, or visitors could fake their address.
 const trustProxy = String(process.env.TRUST_PROXY || '').trim();
 if (trustProxy) app.set('trust proxy', /^\d+$/.test(trustProxy) ? Number(trustProxy) : trustProxy);
+// Text responses (pages, scripts, styles and API data) are gzip-compressed, so they
+// download several times faster, mostly on mobile data. Images are already compressed.
+app.use(compression({ threshold: 1024 }));
 const port = Number(process.env.PORT || 3001);
 const configuredServer = process.env.DB_SERVER || 'localhost\\SQLEXPRESS';
 const [serverName, configuredInstance] = configuredServer.split('\\', 2);
@@ -173,12 +177,14 @@ if (!isProduction) app.use(express.static(mobileAppDir, { index: false }));
 // is needed. /admin redirects to /admin/, whose index page opens the admin sign-in.
 const adminWebsiteDir = path.join(projectRoot, 'admin-website');
 if (isProduction) {
-  // Production: the admin website lives at the site root with clean addresses
+  // Production: the site root is the landing page (download the app), the admin
+  // sign-in is /admin, and the other admin pages keep clean addresses
   // (app.sidekickph.me/users instead of /admin/admin-users.html). Old .html and
   // /admin/... addresses redirect to the clean ones, and only the pages below plus
   // the css, js and assets folders are public.
   const ADMIN_PAGES = {
-    '/': 'admin-login.html',
+    '/': 'landing.html',
+    '/admin': 'admin-login.html',
     '/dashboard': 'admin.html',
     '/users': 'admin-users.html',
     '/travel-plans': 'admin-itineraries.html',
@@ -191,7 +197,7 @@ if (isProduction) {
     '/settings': 'admin-controls.html',
   };
   const ADMIN_PAGE_ROUTES = Object.fromEntries(Object.entries(ADMIN_PAGES).map(([route, file]) => [file, route]));
-  ADMIN_PAGE_ROUTES['index.html'] = '/';
+  ADMIN_PAGE_ROUTES['index.html'] = '/admin';
   // "Connections" and "App setup" were merged into one System status page.
   ADMIN_PAGE_ROUTES['admin-settings.html'] = '/system';
   const RENAMED_ROUTES = { '/connections': '/system', '/setup': '/system' };
@@ -202,11 +208,14 @@ if (isProduction) {
 
   app.use((req, res, next) => {
     if (req.method !== 'GET' && req.method !== 'HEAD') return next();
-    // Old addresses: /admin/... and /<page>.html -> the clean address.
-    if (req.path === '/admin' || req.path.startsWith('/admin/')) {
-      const rest = req.path.slice('/admin'.length) || '/';
-      const file = rest.replace(/^\/+/, '');
-      return res.redirect(302, (ADMIN_PAGE_ROUTES[file] || rest) + queryOf(req));
+    // Old addresses: /admin/... and /<page>.html -> the clean address. /admin itself
+    // is the sign-in page, and /admin/ goes there too.
+    // Only known pages and the css/js/assets files are redirect targets; anything else
+    // goes to the sign-in page, so "/admin//other-site.com" can't send visitors elsewhere.
+    if (req.path.startsWith('/admin/')) {
+      const file = req.path.slice('/admin/'.length);
+      const isSiteFile = /^(css|js|assets)\/[\w-]+(\/[\w-]+)*\.[a-z0-9]+$/i.test(file);
+      return res.redirect(302, (ADMIN_PAGE_ROUTES[file] || (isSiteFile ? `/${file}` : '/admin')) + queryOf(req));
     }
     const file = req.path.replace(/^\/+/, '');
     if (ADMIN_PAGE_ROUTES[file]) return res.redirect(302, ADMIN_PAGE_ROUTES[file] + queryOf(req));
@@ -245,6 +254,51 @@ if (isProduction) {
 } else {
   app.use('/admin', express.static(adminWebsiteDir));
 }
+
+// The app's legal pages, also readable on the website (the landing page links to
+// them): /legal/privacy, /legal/terms, /legal/cookies. Same files as in the app, with
+// only the style sheets and the two scripts they use made public under /legal/.
+const LEGAL_PAGES = { privacy: 'privacy.html', terms: 'terms.html', cookies: 'cookies.html' };
+app.use('/legal/css', express.static(path.join(mobileAppDir, 'css'), { index: false }));
+app.get('/legal/js/legal.js', (req, res) => res.sendFile(path.join(mobileAppDir, 'js', 'legal.js')));
+// On the website the legal pages follow the landing page's light/dark choice
+// ('sidekick.admin.theme', set by its Dark mode button) instead of the app's own setting;
+// with no choice saved, both follow the device. The app's theme-init.js runs after this.
+const LEGAL_THEME_SYNC = "try { var siteTheme = localStorage.getItem('sidekick.admin.theme');"
+  + " if (siteTheme === 'dark' || siteTheme === 'light') localStorage.setItem('sidekick.theme', siteTheme);"
+  + " else localStorage.removeItem('sidekick.theme'); } catch (error) {}\n";
+app.get('/legal/js/theme-init.js', async (req, res, next) => {
+  try {
+    const script = await readFile(path.join(mobileAppDir, 'js', 'theme-init.js'), 'utf8');
+    res.set('Cache-Control', 'no-cache');
+    return res.type('application/javascript').send(LEGAL_THEME_SYNC + script);
+  } catch (error) {
+    return next(error);
+  }
+});
+app.get('/legal/:page', async (req, res, next) => {
+  const file = LEGAL_PAGES[String(req.params.page).replace(/\.html$/, '')];
+  if (!file) return next();
+  try {
+    const html = await readFile(path.join(mobileAppDir, file), 'utf8');
+    res.set('Cache-Control', 'no-cache');
+    // Back goes to the landing page; links between the legal pages stay on the website.
+    return res.type('html').send(html
+      .replace(/href="index\.html"/g, 'href="/"')
+      .replace(/href="(privacy|terms|cookies)\.html"/g, 'href="/legal/$1"'));
+  } catch (error) {
+    return next(error);
+  }
+});
+
+// The landing page's "Download for Android" button. The APK is a public file in its
+// own S3 bucket (never the private deploy bucket); APK_DOWNLOAD_URL can point elsewhere.
+const APK_DOWNLOAD_URL = process.env.APK_DOWNLOAD_URL
+  || 'https://sidekick-downloads-031228339113.s3.ap-southeast-1.amazonaws.com/Sidekick.apk';
+app.get('/download/android', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.redirect(302, APK_DOWNLOAD_URL);
+});
 
 // ---- Admin settings ---------------------------------------------------------------
 // Settings changed from the admin website, stored in dbo.app_settings (migration
@@ -655,7 +709,8 @@ function getMaintenanceMessage() {
 app.use('/api', (req, res, next) => {
   void refreshSettings(); // non-blocking; keeps the settings at most ~10 s old
   if (!isMaintenanceMode()) return next();
-  if (req.path === '/maintenance-status' || req.path === '/admin' || req.path.startsWith('/admin/')) return next();
+  // The landing page's contact form keeps working too: the website stays up during maintenance.
+  if (req.path === '/maintenance-status' || req.path === '/contact' || req.path === '/admin' || req.path.startsWith('/admin/')) return next();
   res.set('Retry-After', '3600');
   return sendJson(res, 503, { error: getMaintenanceMessage(), maintenance: true });
 });
@@ -687,7 +742,21 @@ const appSessions = new Map();
 let expiredItineraryCleanupInProgress = false;
 const appPresence = new Map();
 const APP_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-const APP_PRESENCE_TTL_MS = 90 * 1000;
+// The app sends a heartbeat about once a minute while it is open; a user counts as
+// online until 2.5 minutes after the last one (one missed beat doesn't flicker them off).
+const APP_PRESENCE_TTL_MS = 150 * 1000;
+// The admin pages read "online" from users.last_active_at, which is saved at most every
+// 2 minutes (LAST_ACTIVE_SAVE_EVERY_MS) from beats a minute apart, so it can be up to about
+// 3 minutes old while the app is open. Online there means active in the last 3 minutes.
+const ONLINE_WINDOW_SECONDS = 180;
+// Sessions found in the database are remembered for 30 seconds, so a burst of requests
+// (opening a screen, a heartbeat) checks the database once instead of every time.
+// Logging out, deleting an account and resetting a password forget them at once.
+const verifiedSessionCache = new Map();
+const VERIFIED_SESSION_CACHE_MS = 30 * 1000;
+function forgetCachedSessions(match) {
+  for (const [token, entry] of verifiedSessionCache) if (match(token, entry.session)) verifiedSessionCache.delete(token);
+}
 
 function getAppTokenFromRequest(req) {
   const authorization = String(req.headers.authorization || '').trim();
@@ -755,6 +824,11 @@ async function findAppSession(token) {
     appSessions.delete(token);
     return null;
   }
+  const cached = verifiedSessionCache.get(token);
+  if (cached) {
+    if (cached.until > Date.now() && cached.session.expiresAt > Date.now()) return cached.session;
+    verifiedSessionCache.delete(token);
+  }
   if (!await hasSessionTables()) return null;
   const result = await new sql.Request()
     .input('tokenHash', sql.Char(64), hashSessionToken(token))
@@ -764,16 +838,21 @@ async function findAppSession(token) {
       WHERE token_hash = @tokenHash AND expires_at > SYSUTCDATETIME()
     `);
   const row = result.recordset[0];
-  return row ? {
+  if (!row) return null;
+  const session = {
     userId: Number(row.user_id),
     email: String(row.email || ''),
     name: String(row.name || ''),
     expiresAt: new Date(row.expires_at).getTime(),
-  } : null;
+  };
+  if (verifiedSessionCache.size >= 5000) verifiedSessionCache.delete(verifiedSessionCache.keys().next().value);
+  verifiedSessionCache.set(token, { session, until: Date.now() + VERIFIED_SESSION_CACHE_MS });
+  return session;
 }
 
 async function deleteAppSession(token) {
   appSessions.delete(token);
+  verifiedSessionCache.delete(token);
   if (SESSION_TOKEN_PATTERN.test(token) && await hasSessionTables()) {
     await new sql.Request()
       .input('tokenHash', sql.Char(64), hashSessionToken(token))
@@ -787,6 +866,7 @@ async function deleteUserAppSessions(userId) {
   for (const [token, session] of appSessions) {
     if (session.userId === id) appSessions.delete(token);
   }
+  forgetCachedSessions((token, session) => session.userId === id);
   if (Number.isSafeInteger(id) && await hasSessionTables()) {
     await new sql.Request()
       .input('userId', sql.Int, id)
@@ -1025,6 +1105,25 @@ function rawPlaceInBatangas(place) {
   });
 }
 
+// Google's opening periods ({ open: { day, hour, minute }, close: {...} }, day 0 = Sunday)
+// as { day, open, close } in minutes after that day's midnight. A close on the next
+// day counts past 24:00 (a bar open 6 PM - 2 AM closes at 26:00). No close at all means
+// open around the clock.
+function mapOpenPeriods(periods) {
+  if (!Array.isArray(periods)) return [];
+  return periods.slice(0, 21).map((period) => {
+    const open = period?.open;
+    if (!open || !Number.isInteger(open.day)) return null;
+    const openMinute = (Number(open.hour) || 0) * 60 + (Number(open.minute) || 0);
+    if (!period.close) return { day: open.day, open: 0, close: 7 * 24 * 60, allDay: true };
+    let closeMinute = (Number(period.close.hour) || 0) * 60 + (Number(period.close.minute) || 0);
+    const dayGap = ((Number(period.close.day) - open.day) % 7 + 7) % 7;
+    closeMinute += dayGap * 24 * 60;
+    if (closeMinute <= openMinute) closeMinute += 7 * 24 * 60;
+    return { day: open.day, open: openMinute, close: closeMinute };
+  }).filter(Boolean);
+}
+
 function mapPlace(place) {
   const location = place.location || place.geometry?.location;
   const photo = place.photos?.[0];
@@ -1046,7 +1145,10 @@ function mapPlace(place) {
     priceLevel: place.priceLevel ?? null,
     priceRange: mapPriceRange(place.priceRange),
     openingHours: place.regularOpeningHours?.weekdayDescriptions || [],
-    types: Array.isArray(place.types) ? place.types.slice(0, 6) : [],
+    // Opening times as numbers, so itineraries visit a place only while it is open.
+    openPeriods: mapOpenPeriods(place.regularOpeningHours?.periods),
+    // Enough types to tell a destination from a town, an office or a shop.
+    types: Array.isArray(place.types) ? place.types.slice(0, 10) : [],
     photoResource,
     photoAttribution: photoAttributions[0] || null,
     photoAttributions,
@@ -1162,7 +1264,7 @@ async function callGooglePlacesApiRaw(path, payload) {
       headers: {
         'Content-Type': 'application/json',
         'X-Goog-Api-Key': apiKey,
-        'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.priceLevel,places.priceRange,places.regularOpeningHours.weekdayDescriptions,places.types,places.photos.name,places.photos.authorAttributions,places.photos.googleMapsUri',
+        'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.priceLevel,places.priceRange,places.regularOpeningHours.weekdayDescriptions,places.regularOpeningHours.periods,places.types,places.photos.name,places.photos.authorAttributions,places.photos.googleMapsUri',
       },
       body: JSON.stringify(payload),
     });
@@ -1171,10 +1273,10 @@ async function callGooglePlacesApiRaw(path, payload) {
       const reason = data?.error?.message || data?.error?.status;
       throw new Error(reason ? 'Google Places request failed: ' + reason : 'Google Maps is currently unavailable.');
     }
-    if (placesSearchCache.size >= 500) {
+    if (placesSearchCache.size >= 1500) {
       const now = Date.now();
       for (const [key, entry] of placesSearchCache) {
-        if (entry.expiresAt <= now || placesSearchCache.size >= 450) placesSearchCache.delete(key);
+        if (entry.expiresAt <= now || placesSearchCache.size >= 1350) placesSearchCache.delete(key);
       }
     }
     // Kept for 24 hours and shared by every user: ratings and details rarely change within a day.
@@ -2309,8 +2411,10 @@ async function calculateRoute({ origin, destination, travelMode = 'DRIVE' }) {
       source: 'google-routes',
     };
   }
-  if (routeCache.size >= 500) routeCache.delete(routeCache.keys().next().value);
-  routeCache.set(key, { value: result, expiresAt: Date.now() + 10 * 60 * 1000 });
+  if (routeCache.size >= 1500) routeCache.delete(routeCache.keys().next().value);
+  // Kept for 6 hours: travel times are shown as estimates ("traffic may change this"),
+  // so the same trip between the same two places isn't paid for again.
+  routeCache.set(key, { value: result, expiresAt: Date.now() + 6 * 60 * 60 * 1000 });
   return result;
 }
 
@@ -2327,9 +2431,25 @@ const NON_VACATION_TYPES = new Set([
   'train_station', 'airport', 'supermarket', 'grocery_store', 'convenience_store', 'market', 'shopping_mall',
   'department_store', 'hardware_store', 'home_goods_store', 'electronics_store', 'storage', 'cemetery',
   'funeral_home', 'laundry', 'veterinary_care', 'real_estate_agency', 'moving_company', 'gym',
+  // Homes, workplaces and everyday services.
+  'apartment_building', 'apartment_complex', 'condominium_complex', 'housing_complex', 'corporate_office',
+  'manufacturer', 'warehouse_store', 'auto_parts_store', 'car_rental', 'electric_vehicle_charging_station',
+  'ferry_terminal', 'bus_stop', 'taxi_stand', 'truck_stop', 'rest_stop', 'park_and_ride',
+  'hair_salon', 'beauty_salon', 'barber_shop', 'nail_salon', 'preschool', 'child_care_agency',
+  'courier_service', 'plumber', 'electrician', 'general_contractor', 'roofing_contractor', 'locksmith', 'painter',
 ]);
-const NON_VACATION_NAME = /\b(police|pnp|fire station|bfp|municipal hall|city hall|town hall|barangay hall|hall of justice|court|post office|hospital|clinic|medical|health center|pharmacy|drugstore|elementary school|high school|integrated school|central school|university|college|bank|pawnshop|terminal|gas station|gasoline|public market|wet market|fish market|meat market|palengke|talipapa|supermarket|grocery|mall|hardware|cemetery|funeral|memorial park|government|office)\b/i;
+const NON_VACATION_NAME = /\b(police|pnp|fire station|bfp|municipal hall|city hall|town hall|barangay hall|hall of justice|court|post office|hospital|clinic|medical|health center|pharmacy|drugstore|elementary school|high school|integrated school|central school|university|college|bank|pawnshop|terminal|gas station|gasoline|public market|wet market|fish market|meat market|palengke|talipapa|supermarket|grocery|mall|hardware|cemetery|funeral|memorial park|government|office|barangay|subdivision|residences|condominium|apartment|dormitory|boarding house|warehouse|factory|refinery|power plant|power station|substation|depot|industrial|economic zone|ecozone|headquarters|jail|prison|detention|police station|capitol compound|lto|bir|sss|philhealth|pag-?ibig|deped|dswd|salon|barbershop|car wash|repair shop|vulcanizing|junk ?shop|iglesia ni cristo|kingdom hall|jehovah|bible baptist|baptist church|born again|christian fellowship|ministries|assembly of god|seventh[- ]day)\b/i;
 const EVENING_MARKET_NAME = /\b(night market|food park|night bazaar|food bazaar)\b/i;
+
+// A town, barangay, street or building rather than a place to visit. Some real spots
+// (an island that is also a barangay) carry these too, so they only rule a place out
+// when it has none of the tourist types below.
+const AREA_ONLY_TYPES = new Set([
+  'locality', 'sublocality', 'sublocality_level_1', 'political', 'neighborhood', 'route', 'street_address',
+  'premise', 'subpremise', 'postal_code', 'plus_code', 'administrative_area_level_1',
+  'administrative_area_level_2', 'administrative_area_level_3', 'administrative_area_level_4',
+]);
+const TOURIST_TYPES = /tourist_attraction|natural_feature|beach|park|hiking|campground|museum|historical|landmark|monument|church|place_of_worship|amusement|zoo|aquarium|marina|resort|scenic|observation|island|lake|waterfall|spa/;
 
 function isVacationPlace(place) {
   if (!place) return false;
@@ -2337,7 +2457,9 @@ function isVacationPlace(place) {
   const eveningMarket = EVENING_MARKET_NAME.test(name);
   if (!eveningMarket && NON_VACATION_NAME.test(name)) return false;
   const types = (place.types || []).map((type) => String(type).toLowerCase());
-  return !types.some((type) => NON_VACATION_TYPES.has(type) && !(eveningMarket && /market|store/.test(type)));
+  if (types.some((type) => NON_VACATION_TYPES.has(type) && !(eveningMarket && /market|store/.test(type)))) return false;
+  if (types.some((type) => AREA_ONLY_TYPES.has(type)) && !types.some((type) => TOURIST_TYPES.test(type))) return false;
+  return true;
 }
 
 async function findVerifiedPlaces(query, destination) {
@@ -2466,6 +2588,54 @@ const BEST_TIME_EARLIEST = {
   sunset: 16 * 60 + 30, evening: 18 * 60, night: 19 * 60,
 };
 
+// How long each kind of stop really takes, whatever the AI suggested: a hike with its
+// views is half a day, island hopping most of one, a night out runs late, a church is a
+// short visit. [min, max] minutes; the AI's own estimate is kept when it is in range.
+// night: the stop may run past midnight (it still starts before 11:30 PM).
+// latest: the latest sensible start, so a beach or an island is never visited in the dark
+// and a hike or boat trip starts early enough to finish in daylight.
+const ACTIVITY_LENGTHS = [
+  { test: /\b(hike|hiking|trek|trekking|trail|summit|mount|mt|volcano|peak|climb)\b/i, min: 240, max: 360, latest: 10 * 60 },
+  { test: /\b(island[- ]hopping|boat tour|snorkel|snorkeling|dive|diving|kayak|kayaking|dolphin|whale)\b/i, min: 180, max: 360, latest: 11 * 60 },
+  { test: /\b(nightlife|night ?club|club|clubbing|bar|bars|pub|party|disco|live music|acoustic|karaoke)\b/i, min: 180, max: 300, night: true },
+  { test: /\b(night market|food park|night food)\b/i, min: 75, max: 150 },
+  { test: /\b(theme park|water ?park|amusement|zipline|adventure park)\b/i, min: 150, max: 300, latest: 13 * 60 },
+  { test: /\b(beach|cove|sandbar|resort|island|swimming|falls|waterfall|hot spring)\b/i, min: 120, max: 300, latest: 16 * 60 + 30 },
+  { test: /\b(museum|gallery|heritage house|ancestral house)\b/i, min: 60, max: 150, latest: 15 * 60 + 30 },
+  { test: /\b(church|basilica|cathedral|shrine|chapel|monument|marker|plaza|lighthouse|viewpoint|view ?deck|viewing deck|bridge)\b/i, min: 30, max: 90, latest: 19 * 60 },
+];
+// The latest start for each part of the day the AI suggested.
+const BEST_TIME_LATEST = {
+  'early-morning': 8 * 60, morning: 11 * 60, midday: 14 * 60 + 30, afternoon: 16 * 60 + 30,
+  sunset: 18 * 60, evening: 21 * 60 + 30, night: 23 * 60 + 30,
+};
+const LATE_NIGHT_END = 26 * 60 + 30; // 2:30 AM, as minutes after the day's midnight
+function activityLengthRule(entry) {
+  // The place's own name and type decide first; the AI's notes only when they say nothing.
+  const named = [entry.activity?.category, entry.activity?.searchQuery, entry.place?.name, entry.place?.category].filter(Boolean).join(' ');
+  return ACTIVITY_LENGTHS.find((rule) => rule.test.test(named))
+    || ACTIVITY_LENGTHS.find((rule) => rule.test.test(String(entry.activity?.notes || '')))
+    || null;
+}
+// Whether a visit from start for duration minutes (minutes after the trip day's
+// midnight) falls inside the place's opening hours on that weekday. Returns
+// { open: true } when it fits (or the hours are unknown), { opensAt } when it fits
+// later that day, or { open: false } when the place is closed for that visit.
+function openingHoursFit(place, weekday, start, duration) {
+  const periods = Array.isArray(place?.openPeriods) ? place.openPeriods : [];
+  if (!periods.length || !Number.isInteger(weekday)) return { open: true };
+  if (periods.some((period) => period.allDay)) return { open: true };
+  const today = periods.filter((period) => period.day === weekday).sort((a, b) => a.open - b.open);
+  if (!today.length) return { open: false };
+  if (today.some((period) => period.open <= start && start + duration <= period.close)) return { open: true };
+  const later = today.find((period) => period.open > start && period.open + duration <= period.close);
+  return later ? { opensAt: later.open } : { open: false };
+}
+
+function runsLateAtNight(entry) {
+  return Boolean(activityLengthRule(entry)?.night) || String(entry.activity?.bestTime || '').toLowerCase() === 'night';
+}
+
 // Fits a day's ordered stops into the time window. Each step takes the first remaining
 // stop (in visiting order) that can start now: not before its part of the day, not
 // clashing with the next meal, and finishing before the day ends. When nothing fits
@@ -2474,12 +2644,23 @@ const BEST_TIME_EARLIEST = {
 // breaks (meals, and resting at night) to show between them.
 // earliestStart (minutes after midnight) is set for a trip that starts later today: the
 // day then begins at that time, and meals that are already over are left out.
-function fitItineraryDay({ entries, window: baseWindow, pace, maxStops, travelMinutesFor, isLastDay, stayName, earliestStart = null }) {
+// afterLateNight: the late start follows a night out (the traveler still has breakfast
+// before going out), not a trip that begins later today.
+// weekday (0 = Sunday) is the trip day's day of the week, for the places' opening hours.
+function fitItineraryDay({ entries, window: baseWindow, pace, maxStops, travelMinutesFor, isLastDay, stayName, earliestStart = null, afterLateNight = false, weekday = null }) {
   const lateStart = Number.isFinite(earliestStart) && earliestStart > baseWindow.start;
-  const window = lateStart ? { ...baseWindow, start: Math.ceil(earliestStart / 5) * 5 } : baseWindow;
+  // A day whose first stop is a sunrise spot or an early hike starts at 5:00 AM
+  // (morning and full-day plans only).
+  const firstBestTime = String(entries[0]?.activity?.bestTime || '').toLowerCase();
+  const earlyStart = !lateStart && firstBestTime === 'early-morning' && baseWindow.start <= 8 * 60
+    ? BEST_TIME_EARLIEST['early-morning'] : null;
+  const window = lateStart ? { ...baseWindow, start: Math.ceil(earliestStart / 5) * 5 }
+    : earlyStart !== null ? { ...baseWindow, start: earlyStart } : baseWindow;
+  // Nights out may run past midnight, except on morning-and-daytime plans.
+  const canRunLate = window.end >= 21 * 60;
   const meals = window.meals
     // A meal whose usual time ended less than an hour ago is still offered (served right away).
-    .filter((meal) => !lateStart || (!meal.beforeStart && meal.start + meal.minutes + 60 > window.start))
+    .filter((meal) => !lateStart || afterLateNight || (!meal.beforeStart && meal.start + meal.minutes + 60 > window.start))
     .map((meal) => ({ ...meal, placed: false }))
     .sort((a, b) => a.start - b.start);
   const breaks = [];
@@ -2488,11 +2669,26 @@ function fitItineraryDay({ entries, window: baseWindow, pace, maxStops, travelMi
     meal.placed = true;
     return startMinute + meal.minutes;
   };
-  for (const meal of meals) if (meal.beforeStart) addMeal(meal, meal.start);
+  // Meals before the day starts (breakfast) are placed once the first stop is known.
 
   const roundUp = (minutes) => Math.ceil(minutes / 5) * 5;
-  const durationOf = (entry) => Math.max(30, Math.min(240, Math.round((Number(entry.activity?.durationMinutes) || 90) * pace.durationScale / 5) * 5));
+  const durationOf = (entry) => {
+    const rule = activityLengthRule(entry);
+    const min = rule ? rule.min : 30;
+    const max = rule ? rule.max : 240;
+    const suggested = Number(entry.activity?.durationMinutes) || 90;
+    const scaled = Math.round(Math.min(max, Math.max(min, suggested)) * pace.durationScale / 5) * 5;
+    return Math.max(min, Math.min(max, scaled));
+  };
+  // The latest sensible start: the stricter of its kind (a beach by 4:30 PM) and its part
+  // of the day (a morning spot by 11 AM).
+  const latestOf = (entry) => Math.min(
+    activityLengthRule(entry)?.latest ?? Infinity,
+    BEST_TIME_LATEST[String(entry.activity?.bestTime || '').toLowerCase()] ?? Infinity,
+  );
   const earliestOf = (entry) => {
+    // Bars, clubs and parties don't get going before about 8:30 PM.
+    if (activityLengthRule(entry)?.night) return 20 * 60 + 30;
     const time = BEST_TIME_EARLIEST[String(entry.activity?.bestTime || '').toLowerCase()];
     return Number.isFinite(time) ? time - 60 : -Infinity;
   };
@@ -2501,7 +2697,7 @@ function fitItineraryDay({ entries, window: baseWindow, pace, maxStops, travelMi
   let clock = window.start;
   let previous = null;
   for (let guard = 0; remaining.length && kept.length < maxStops && guard < 300; guard += 1) {
-    const nextMeal = meals.find((meal) => !meal.placed && meal.start < window.end);
+    const nextMeal = meals.find((meal) => !meal.placed && !meal.beforeStart && meal.start < window.end);
     let chosen = null;
     let waitUntil = Infinity;
     for (let index = 0; index < remaining.length; index += 1) {
@@ -2511,8 +2707,16 @@ function fitItineraryDay({ entries, window: baseWindow, pace, maxStops, travelMi
       const start = roundUp(clock + travel);
       const earliest = earliestOf(entry);
       if (start < earliest) { waitUntil = Math.min(waitUntil, earliest - travel); continue; }
+      if (start > latestOf(entry)) continue;
+      // Only while the place is open that day (Google's hours): wait for it to open, or
+      // leave it for a backup stop when it is closed or closes before the visit ends.
+      const hours = openingHoursFit(entry.place, weekday, start, duration);
+      if (hours.opensAt !== undefined) { waitUntil = Math.min(waitUntil, hours.opensAt - travel); continue; }
+      if (!hours.open) continue;
       if (nextMeal && (start >= nextMeal.start - 15 || start + duration > nextMeal.start + 45)) continue;
-      if (start + duration > window.end) continue;
+      const endLimit = canRunLate && runsLateAtNight(entry) ? Math.max(window.end, LATE_NIGHT_END) : window.end;
+      if (start + duration > endLimit) continue;
+      if (endLimit > window.end && start > 23 * 60 + 30) continue;
       chosen = { index, entry, start, duration, travel };
       break;
     }
@@ -2554,13 +2758,28 @@ function fitItineraryDay({ entries, window: baseWindow, pace, maxStops, travelMi
     }
   }
   const lastEnd = kept.length ? kept[kept.length - 1].startMinute + kept[kept.length - 1].durationMinutes : window.start;
+  // Breakfast (or lunch on an afternoon plan) just before the day's first stop: a quick
+  // bite before a sunrise start, otherwise the usual meal, later when the day starts later.
+  const firstStop = kept.length ? kept.reduce((a, b) => (a.startMinute <= b.startMinute ? a : b)) : null;
+  for (const meal of meals.filter((item) => item.beforeStart && !item.placed)) {
+    if (!firstStop) { addMeal(meal, meal.start); continue; }
+    const quick = meal.kind === 'breakfast' && firstStop.startMinute < 6 * 60 + 30;
+    const minutes = quick ? 30 : meal.minutes;
+    const latest = firstStop.startMinute - (firstStop.travelMinutes || 0) - minutes - 15;
+    const at = Math.floor(Math.min(latest, meal.start + 150) / 5) * 5;
+    meal.placed = true;
+    addMeal({ ...meal, minutes, label: quick ? 'Quick breakfast' : meal.label }, at);
+  }
   for (const meal of meals) {
     if (meal.placed || meal.start >= window.end + 60) continue;
-    addMeal(meal, Math.max(meal.start, lastEnd + 15));
+    const at = Math.max(meal.start, lastEnd + 15);
+    // A meal more than three hours past its usual time (after a late night) is left out.
+    if (at > meal.start + 180) continue;
+    addMeal(meal, at);
   }
   if (!isLastDay) {
     const lastBreakEnd = breaks.reduce((latest, item) => Math.max(latest, item.endMinute), 0);
-    const restStart = Math.min(Math.max(lastEnd, lastBreakEnd) + 15, 24 * 60);
+    const restStart = Math.min(Math.max(lastEnd, lastBreakEnd) + 15, LATE_NIGHT_END + 30);
     breaks.push({
       kind: 'rest',
       label: stayName ? `Back to ${stayName} to rest` : 'Back to your stay to rest',
@@ -2690,7 +2909,9 @@ async function generateVerifiedItineraryFromAi({ email, message, selectedDestina
   if (firstDayStartMinute !== null && firstDayStartMinute > firstDayWindow.end - 60) {
     throw new Error(`It’s too late today for a “${firstDayWindow.label}” plan, which ends at ${formatMinuteOfDay(firstDayWindow.end)}. Start your trip tomorrow${firstDayWindowKey === 'night' ? '' : ' or choose a later time of day'}.`);
   }
-  const scheduleDay = (entries, dayIndex, travelMinutesFor) => fitItineraryDay({
+  // previousDayEnd: when the day before ran past midnight, this day starts about eight
+  // hours after it ended (a 2:00 AM night out means a 10:00 AM start).
+  const scheduleDay = (entries, dayIndex, travelMinutesFor, previousDayEnd = null) => fitItineraryDay({
     entries,
     window: dayIndex === 0 ? firstDayWindow : tripWindow,
     pace: tripPace,
@@ -2698,8 +2919,12 @@ async function generateVerifiedItineraryFromAi({ email, message, selectedDestina
     travelMinutesFor,
     isLastDay: dayIndex === durationDays - 1,
     stayName: stay?.name || '',
-    earliestStart: dayIndex === 0 ? firstDayStartMinute : null,
+    earliestStart: dayIndex === 0 ? firstDayStartMinute
+      : Number.isFinite(previousDayEnd) && previousDayEnd > 24 * 60 ? previousDayEnd - 24 * 60 + 8 * 60 : null,
+    afterLateNight: dayIndex > 0 && Number.isFinite(previousDayEnd) && previousDayEnd > 24 * 60,
+    weekday: (new Date(`${startDate}T00:00:00Z`).getUTCDay() + dayIndex) % 7,
   });
+  const dayEndMinute = (kept) => kept.reduce((latest, entry) => Math.max(latest, entry.startMinute + entry.durationMinutes), 0);
   const tripStyleMeta = {
     ...tripStyle,
     windowLabel: tripWindow.label,
@@ -2713,6 +2938,7 @@ async function generateVerifiedItineraryFromAi({ email, message, selectedDestina
   if (isDevelopmentMode) {
     // Sample places (no Google calls), scheduled exactly like a real itinerary.
     const sampleTimes = ['morning', 'morning', 'midday', 'afternoon', 'afternoon', 'sunset', 'evening', 'night', 'night', 'afternoon'];
+    let mockPreviousEnd = null;
     const itinerary = Array.from({ length: durationDays }, (_, dayIndex) => {
       const entries = Array.from({ length: maxActivitiesPerDay }, (_, slot) => {
         const index = (dayIndex * 3 + slot) % developmentPlaceCatalog.length;
@@ -2720,7 +2946,8 @@ async function generateVerifiedItineraryFromAi({ email, message, selectedDestina
         return { place, activity: { durationMinutes: 60 + (slot % 3) * 30, bestTime: sampleTimes[slot % sampleTimes.length], notes: `Development sample matching ${place.category}.` } };
       });
       const { kept, breaks } = scheduleDay(orderStopsForDay(entries), dayIndex,
-        (from, to) => developmentRoute(from.place, to.place, travelMode).durationMinutes);
+        (from, to) => developmentRoute(from.place, to.place, travelMode).durationMinutes, mockPreviousEnd);
+      mockPreviousEnd = dayEndMinute(kept);
       const activities = kept.map((entry, activityIndex) => {
         const route = activityIndex ? developmentRoute(kept[activityIndex - 1].place, entry.place, travelMode) : null;
         const dueAt = Date.parse(`${startDate}T00:00:00Z`) + dayIndex * 86400000 + entry.startMinute * 60000;
@@ -2795,7 +3022,7 @@ async function generateVerifiedItineraryFromAi({ email, message, selectedDestina
     ] : []),
     `Group: ${travelers === 1 ? '1 traveler (solo)' : `${travelers} travelers traveling together (${rooms} room${rooms === 1 ? '' : 's'})`}. ${travelers >= 4 ? 'Prefer stops that welcome groups (spacious beaches, island hopping by boat, group-friendly tours) over places that only fit one or two people.' : ''}`.trim(),
     `Dates: ${startDate} through ${endDate}, inclusive (${durationDays} days).`,
-    `Daily schedule (${tripWindow.label}): sightseeing from ${formatMinuteOfDay(tripWindow.start)} to ${formatMinuteOfDay(tripWindow.end)}. Meal breaks are kept free: ${tripWindow.meals.map((meal) => `${meal.label.toLowerCase()} around ${formatMinuteOfDay(meal.start)}`).join(', ')}. Nights are for rest.`,
+    `Daily schedule (${tripWindow.label}): sightseeing from ${formatMinuteOfDay(tripWindow.start)} to ${formatMinuteOfDay(tripWindow.end)}. Meal breaks are kept free: ${tripWindow.meals.map((meal) => `${meal.label.toLowerCase()} around ${formatMinuteOfDay(meal.start)}`).join(', ')}. The day may start earlier for a sunrise spot or an early hike, and a night out (bars, live music, beach parties) may run past midnight.`,
     ...(firstDayStartMinute !== null ? [
       `Day 1 is today and starts late: plan day 1 only from ${formatMinuteOfDay(firstDayStartMinute)} to ${formatMinuteOfDay(firstDayWindow.end)}, with fewer stops that suit that time of day (no morning places on day 1).${firstDayWindowKey !== tripStyle.timeOfDay ? ' From day 2 on, follow the daily schedule above, including its morning and daytime places.' : ''}`,
     ] : []),
@@ -2810,10 +3037,11 @@ async function generateVerifiedItineraryFromAi({ email, message, selectedDestina
   const preliminaryText = await callGeminiApi({
     message,
     contextText: planningContext,
-    systemInstruction: `Return JSON only: {"destination":"...","durationDays":${durationDays},"days":[{"day":1,"theme":"...","activities":[{"searchQuery":"exact name of one real place","category":"attraction|museum|park|beach|landmark|activity|shopping|tour|nightlife|night market","bestTime":"early-morning|morning|midday|afternoon|sunset|evening|night","durationMinutes":90,"notes":"..."}]}]}. Return exactly ${durationDays} days from ${startDate} through ${endDate}, with exactly ${maxActivitiesPerDay} activities per day: enough to fill the daily schedule, listed in visiting order; the last ones are backups used only if time allows. Every searchQuery must be the exact, official name of one specific, real, currently operating tourist spot, tour or experience in or near the selected destination (never a generic category such as "beach" or "museum"), because it is looked up on Google Maps and the top match is used. Do not include restaurants, cafes, or hotels; meal breaks are already reserved and the traveler picks meals and lodging separately (night markets and food parks are fine as evening stops). Every stop must be somewhere a tourist on vacation would go: never police or fire stations, town or barangay halls, government offices, courts, public or wet markets (palengke), malls, supermarkets, schools, hospitals, banks, bus terminals, gas stations or cemeteries. Give each stop a realistic durationMinutes (30-240) and the bestTime to be there, and fit stops to the daily schedule: sunrise spots and hikes early, museums and indoor places at midday heat, viewpoints and beaches at sunset, and night markets, light shows, night views or nightlife in the evening. Keep each day's stops close together, grouped by area, within the selected destination. Match the trip focus first, then the traveler's interests, and still include the destination's must-see highlights.`
+    systemInstruction: `Return JSON only: {"destination":"...","durationDays":${durationDays},"days":[{"day":1,"theme":"...","activities":[{"searchQuery":"exact name of one real place","category":"attraction|museum|park|beach|landmark|activity|shopping|tour|nightlife|night market","bestTime":"early-morning|morning|midday|afternoon|sunset|evening|night","durationMinutes":90,"notes":"..."}]}]}. Return exactly ${durationDays} days from ${startDate} through ${endDate}, with exactly ${maxActivitiesPerDay} activities per day: enough to fill the daily schedule, listed in visiting order; the last ones are backups used only if time allows. Every searchQuery must be the exact, official name of one specific, real, currently operating tourist spot, tour or experience in or near the selected destination (never a generic category such as "beach" or "museum"), because it is looked up on Google Maps and the top match is used. Do not include restaurants, cafes, or hotels; meal breaks are already reserved and the traveler picks meals and lodging separately (night markets and food parks are fine as evening stops). Every stop must be somewhere a tourist on vacation would go: never police or fire stations, town or barangay halls, government offices, courts, public or wet markets (palengke), malls, supermarkets, schools, hospitals, banks, bus terminals, gas stations or cemeteries. Give each stop a realistic durationMinutes (30-360) for what people actually do there, including getting around inside it: a mountain hike with the summit views 240-360 (bestTime early-morning), island hopping or a snorkeling or diving trip 180-360, a beach or resort day 120-300, a theme or water park 150-300, a museum 60-150, a church, shrine, monument, lighthouse or viewpoint 30-90, a night market 75-150, and nightlife (bars, clubs, live music, beach parties) 180-300 with bestTime night, since it runs late into the night. Give the bestTime to be there and fit stops to the daily schedule: sunrise spots and hikes early, museums and indoor places at midday heat, viewpoints and beaches at sunset, and night markets, light shows, night views or nightlife in the evening. Use what is generally known about each place's busy hours and atmosphere when choosing bestTime (popular beaches are calmer early in the morning and best again late afternoon, bars and beach parties get lively later at night, heritage towns and churches are quieter in the morning, and the most popular spots are busiest on weekends), and when useful add a short tip to notes, such as "quieter before 9 AM" or "liveliest after 10 PM", written as general advice, not as exact data. Beaches, islands, coves, hikes and boat trips are daytime stops that start by mid-afternoon at the latest; every evening or night stop must be a place that is good after dark (night markets, food parks, night views, bars, live music, beach parties, lit-up plazas), never a beach, an island or a museum at night. Keep each day's stops close together, grouped by area, within the selected destination. Match the trip focus first, then the traveler's interests, and still include the destination's must-see highlights.`
       + ` Treat the stated budget as the ceiling for the whole trip, not just admission tickets. Use the entrance fees and tours allowance well: when it is generous, include the destination's best paid experiences (island hopping, guided tours, adventure activities, top attractions) rather than only free places; when it is tight, favor excellent free or low-cost places but still fill every day. Avoid repeating places. Never invent place IDs, addresses, ratings, opening hours, ticket prices, transportation fares, or travel times. Leave unverified prices unavailable.`,
     responseMimeType: 'application/json',
-    maxOutputTokens: Math.min(9000, 1200 + durationDays * maxActivitiesPerDay * 140),
+    // Room for each stop's notes and timing tip, so the plan is never cut off mid-answer.
+    maxOutputTokens: Math.min(12000, 1500 + durationDays * maxActivitiesPerDay * 200),
     thinkingLevel: 'low',
   });
   const preliminary = extractJsonObject(preliminaryText);
@@ -2906,7 +3134,10 @@ async function generateVerifiedItineraryFromAi({ email, message, selectedDestina
   // hotel returned for an attraction search). Each day's stops are then put in
   // visiting order: by the best time of day for each, then by distance.
   const isLodging = (place) => (place.types || []).some((type) => /(^|_)(lodging|hotel|motel|hostel|guest_house|bed_and_breakfast)$/.test(String(type)));
-  const isFood = (place) => (place.types || []).some((type) => /restaurant|cafe|food|bakery|meal_/.test(String(type)));
+  // By type, or by name when Google's types miss it ("San Diego Restaurant").
+  const isFood = (place) => (place.types || []).some((type) => /restaurant|cafe|food|bakery|meal_/.test(String(type)))
+    || (/\b(restaurant|resto|cafe|café|coffee|eatery|grill|bistro|kitchen|carinderia|kainan|bulalohan|lomihan|food house)\b/i.test(String(place.name || ''))
+      && !EVENING_MARKET_NAME.test(String(place.name || '')));
   const fitsSlot = (place, category) => {
     const wanted = String(category || '').toLowerCase();
     if (/hotel/.test(wanted)) return true;
@@ -2922,7 +3153,7 @@ async function generateVerifiedItineraryFromAi({ email, message, selectedDestina
     for (const set of pricedCandidateSets.filter((item) => item.day === dayIndex + 1)) {
       const requested = requestedByKey.get(set.sourceKey) || {};
       const place = set.candidates.find((candidate) => !usedPlaces.has(candidate.placeId) && fitsSlot(candidate, set.category))
-        || set.candidates.find((candidate) => !usedPlaces.has(candidate.placeId) && !isLodging(candidate));
+        || set.candidates.find((candidate) => !usedPlaces.has(candidate.placeId) && !isLodging(candidate) && !isFood(candidate));
       if (!place || !verifiedById.has(place.placeId)) continue;
       usedPlaces.add(place.placeId);
       selected.push({
@@ -2984,7 +3215,13 @@ async function generateVerifiedItineraryFromAi({ email, message, selectedDestina
   // routes are only requested for stops that are actually kept.
   const estimatedTravel = (from, to) => estimateTravelMinutes(from.place, to.place, travelMode);
   progress(70, 80, 'Fitting stops into each day');
-  const plannedDays = selectedDays.map((entries, dayIndex) => scheduleDay(entries, dayIndex, estimatedTravel).kept);
+  // Days are scheduled in order, so a late night pushes the next day's start later.
+  let plannedPreviousEnd = null;
+  const plannedDays = selectedDays.map((entries, dayIndex) => {
+    const { kept } = scheduleDay(entries, dayIndex, estimatedTravel, plannedPreviousEnd);
+    plannedPreviousEnd = dayEndMinute(kept);
+    return kept;
+  });
   progress(80, 95, 'Working out travel times');
 
   const routePairs = plannedDays.flatMap((activities, dayIndex) => activities.slice(1).map((entry, index) => ({
@@ -3004,10 +3241,15 @@ async function generateVerifiedItineraryFromAi({ email, message, selectedDestina
 
   // Second pass: the final times with real travel times (a stop that no longer fits
   // before the day ends is left out).
-  const finalDays = plannedDays.map((entries, dayIndex) => scheduleDay(entries, dayIndex, (from, to) => {
-    const route = routeByEdge.get(`${dayIndex + 1}:${from.place.placeId}:${to.place.placeId}`)?.route;
-    return Number.isFinite(route?.durationMinutes) ? route.durationMinutes : estimatedTravel(from, to);
-  }));
+  let finalPreviousEnd = null;
+  const finalDays = plannedDays.map((entries, dayIndex) => {
+    const day = scheduleDay(entries, dayIndex, (from, to) => {
+      const route = routeByEdge.get(`${dayIndex + 1}:${from.place.placeId}:${to.place.placeId}`)?.route;
+      return Number.isFinite(route?.durationMinutes) ? route.durationMinutes : estimatedTravel(from, to);
+    }, finalPreviousEnd);
+    finalPreviousEnd = dayEndMinute(day.kept);
+    return day;
+  });
 
   let selectedBudgetResearch = null;
   if (candidatePriceResearch) {
@@ -3357,6 +3599,58 @@ async function sendPasswordResetEmail(email, otp) {
     text: `Your Sidekick password reset code is ${otp}. It expires in 10 minutes. If you did not ask to reset your password, you can ignore this email.`,
   });
 }
+
+// ---- Contact form on the landing page ------------------------------------------------
+// Sends a visitor's message to the team's inbox (CONTACT_EMAIL). The message goes as plain
+// text, the visitor's address goes in Reply-To (never From, so no one can send mail as
+// someone else), and each visitor can send 3 messages an hour (50 a day for the whole site).
+const CONTACT_EMAIL = String(process.env.CONTACT_EMAIL || 's2023101800@firstasia.edu.ph').trim();
+const CONTACT_MESSAGE_MAX = 2000;
+// The same email and message within 10 minutes is sent once (a repeated click or a
+// retried request is answered as sent without a second email).
+const CONTACT_REPEAT_MS = 10 * MINUTE_MS;
+const recentContactMessages = new Map(); // hash of email + message -> time sent
+app.post('/api/contact', async (req, res) => {
+  // Bots fill in the hidden "website" field; they get a normal answer and nothing is sent.
+  if (String(req.body?.website || '').trim()) return sendJson(res, 200, { ok: true });
+  const email = normalizeEmail(req.body?.email);
+  const message = String(req.body?.message || '').replace(/\r\n?/g, '\n').trim();
+  if (email.length > 254 || !emailPattern.test(email)) {
+    return sendJson(res, 400, { error: 'Enter a valid email address so we can reply to you.' });
+  }
+  if (message.length < 10) return sendJson(res, 400, { error: 'Write a message of at least 10 characters.' });
+  if (message.length > CONTACT_MESSAGE_MAX) {
+    return sendJson(res, 400, { error: `Keep your message under ${CONTACT_MESSAGE_MAX.toLocaleString('en-US')} characters.` });
+  }
+  const now = Date.now();
+  for (const [key, time] of recentContactMessages) {
+    if (now - time >= CONTACT_REPEAT_MS) recentContactMessages.delete(key);
+  }
+  const messageKey = crypto.createHash('sha256').update(`${email}\n${message}`).digest('hex');
+  if (recentContactMessages.has(messageKey)) return sendJson(res, 200, { ok: true });
+  if (isRateLimited(`contact:${req.ip}`, 3, HOUR_MS)) {
+    return sendJson(res, 429, { error: 'You’ve sent a few messages already. Please wait an hour, or email us directly.' });
+  }
+  if (isRateLimited('contact:site', 50, 24 * HOUR_MS)) {
+    return sendJson(res, 429, { error: 'The contact form is busy right now. Please email us directly.' });
+  }
+  // Marked before sending, so a second identical request arriving mid-send is not sent too.
+  recentContactMessages.set(messageKey, now);
+  try {
+    await getMailer().sendMail({
+      from: process.env.SMTP_FROM || process.env.SMTP_USER,
+      to: CONTACT_EMAIL,
+      replyTo: email,
+      subject: 'Sidekick website: new message',
+      text: `From: ${email}\nSent: ${new Date().toISOString()}\n\n${message}\n\n(Reply to this email to answer the sender.)`,
+    });
+  } catch (error) {
+    recentContactMessages.delete(messageKey); // not sent: the visitor may try again
+    console.error('Contact message could not be sent:', error.message);
+    return sendJson(res, 503, { error: 'Your message couldn’t be sent right now. Please try again later, or email us directly.' });
+  }
+  return sendJson(res, 200, { ok: true });
+});
 
 async function validateRegistrationEmail(email) {
   const apiKey = String(process.env.ZEROBOUNCE_API_KEY || '').trim();
@@ -3766,11 +4060,11 @@ app.get('/api/admin/summary', requireAdminAuth, async (req, res) => {
       pool.query`SELECT (SELECT COUNT_BIG(*) FROM dbo.trip_days) AS total_trip_days, (SELECT COUNT_BIG(*) FROM dbo.itinerary_activities) AS total_activities`,
       hasAdminAuditLogTable(pool),
       lastActiveTrackingAvailable
-        // Online = checked in within 90 seconds. Read from the database so it is
+        // Online = active within ONLINE_WINDOW_SECONDS. Read from the database so it is
         // correct when several servers share the load.
         ? pool.query(`
             SELECT COUNT_BIG(*) AS recently_active_users,
-                   SUM(CASE WHEN last_active_at >= DATEADD(second, -90, SYSUTCDATETIME()) THEN 1 ELSE 0 END) AS online_users
+                   SUM(CASE WHEN last_active_at >= DATEADD(second, -${ONLINE_WINDOW_SECONDS}, SYSUTCDATETIME()) THEN 1 ELSE 0 END) AS online_users
             FROM dbo.users WHERE last_active_at >= DATEADD(day, -30, SYSUTCDATETIME())
           `)
         : Promise.resolve(null),
@@ -3835,7 +4129,7 @@ app.get('/api/admin/summary', requireAdminAuth, async (req, res) => {
       },
       notes: {
         userStatusDefinition: 'Account enabled and verified statuses are reported independently using dbo.users.is_active and dbo.users.is_verified; these are not live presence.',
-        onlinePresenceDefinition: 'Online users have an authenticated app session that sent a heartbeat while the app page was visible and focused within the last 90 seconds. Presence is in-memory and resets when the backend restarts.',
+        onlinePresenceDefinition: 'Online users have an authenticated app session that was active (the app open and in use) within the last 3 minutes, from users.last_active_at.',
         activityDefinition: 'Registration and trip creation history is derived from row created_at timestamps. The database does not record AI usage, route calculations, or per-user activity events.',
         adminAuthenticationAuditAvailable: adminAuditAvailable,
         unavailableMetrics: ['AI requests', 'route calculations', 'itinerary generation method', 'per-user activity events', 'administrator data-change history'],
@@ -3894,7 +4188,7 @@ app.get('/api/admin/users', requireAdminAuth, async (req, res) => {
     const query = `
       SELECT u.user_id, u.name, u.email, u.created_at, u.is_active, u.is_verified,
              ${lastActiveTrackingAvailable
-    ? 'u.last_active_at, CASE WHEN u.last_active_at >= DATEADD(second, -90, SYSUTCDATETIME()) THEN 1 ELSE 0 END AS is_online'
+    ? `u.last_active_at, CASE WHEN u.last_active_at >= DATEADD(second, -${ONLINE_WINDOW_SECONDS}, SYSUTCDATETIME()) THEN 1 ELSE 0 END AS is_online`
     : 'CAST(NULL AS datetime2(7)) AS last_active_at, CAST(0 AS int) AS is_online'},
              ts.saved_itinerary_count, ts.last_itinerary_saved_at,
              ${usageTrackingAvailable
@@ -5081,14 +5375,22 @@ app.get('/api/admin/archive', requireAdminAuth, async (req, res) => {
   }
 });
 
+// The load balancer checks this every few seconds. It answers 200 whenever this server
+// is running, so a short database pause (small RDS instances sometimes stall for a few
+// seconds) doesn't get the server marked unhealthy and replaced, which caused 502s for
+// everyone. The database status is still reported, with a short time limit.
 app.get('/health', async (req, res) => {
+  let database = 'connected';
   try {
     const pool = await getPool();
-    await pool.query('SELECT 1 AS ok');
-    return sendJson(res, 200, { ok: true, database: 'SQL Server connected' });
+    await Promise.race([
+      pool.query('SELECT 1 AS ok'),
+      new Promise((resolve, reject) => setTimeout(() => reject(new Error('slow')), 3000)),
+    ]);
   } catch (error) {
-    return sendJson(res, 500, { ok: false, error: error.message });
+    database = error.message === 'slow' ? 'slow' : 'unavailable';
   }
+  return sendJson(res, 200, { ok: true, database });
 });
 
 // Passwords: at least 8 characters, with both letters and numbers (not numbers only).
@@ -5577,6 +5879,7 @@ app.post('/api/password/reset', async (req, res) => {
     for (const [token, session] of appSessions) {
       if (session.userId === Number(code.user_id)) appSessions.delete(token);
     }
+    forgetCachedSessions((token, session) => session.userId === Number(code.user_id));
     return sendJson(res, 200, { reset: true });
   } catch (error) {
     if (transactionStarted && !transactionFinished) {
@@ -5847,14 +6150,30 @@ app.post('/api/auth/google/exchange', async (req, res) => {
   }
 });
 
+// "Last active" is saved at most every 2 minutes per user (the admin site shows it to
+// the minute); the online status itself is kept in memory on every beat.
+const lastActiveSavedAt = new Map();
+const LAST_ACTIVE_SAVE_EVERY_MS = 2 * 60 * 1000;
+let lastActiveColumnState = { known: false, checkedAt: 0 };
+
 app.post('/api/app-presence/heartbeat', requireAppAuth, async (req, res) => {
-  appPresence.set(req.appUser.userId, Date.now());
+  const userId = req.appUser.userId;
+  appPresence.set(userId, Date.now());
+  if (Date.now() - (lastActiveSavedAt.get(userId) || 0) < LAST_ACTIVE_SAVE_EVERY_MS) {
+    return sendJson(res, 200, { online: true });
+  }
   try {
     const pool = await getPool();
-    if (await hasUserLastActiveColumn(pool)) {
+    // Once the column exists it stays; while missing, look again at most once a minute.
+    if (!lastActiveColumnState.known && Date.now() - lastActiveColumnState.checkedAt >= 60 * 1000) {
+      lastActiveColumnState = { known: await hasUserLastActiveColumn(pool), checkedAt: Date.now() };
+    }
+    if (lastActiveColumnState.known) {
       await new sql.Request()
         .input('userId', sql.Int, req.appUser.userId)
         .query('UPDATE dbo.users SET last_active_at = SYSUTCDATETIME() WHERE user_id = @userId');
+      if (lastActiveSavedAt.size >= 20000) lastActiveSavedAt.clear();
+      lastActiveSavedAt.set(userId, Date.now());
     }
   } catch (error) {
     console.error('App last-active timestamp update failed:', error.message);
@@ -6283,7 +6602,8 @@ async function recordPlaceUsage(userId, tripId, itinerary) {
         places.set(`id:${placeId}`, {
           placeId, name, lat, lng,
           address: String(activity?.location || '').slice(0, 300),
-          photoResource: /^places\/[A-Za-z0-9_-]+\/photos\/[A-Za-z0-9_-]+$/.test(String(activity?.photoResource || '')) ? String(activity.photoResource).slice(0, 400) : null,
+          // Google photo names can pass 400 characters; a cut-off name can't load, so an over-long one is skipped.
+          photoResource: /^places\/[A-Za-z0-9_-]+\/photos\/[A-Za-z0-9_-]+$/.test(String(activity?.photoResource || '')) && String(activity.photoResource).length <= 1000 ? String(activity.photoResource) : null,
         });
       }
     }
@@ -6297,7 +6617,7 @@ async function recordPlaceUsage(userId, tripId, itinerary) {
         .input('address', sql.NVarChar(300), place.address || null)
         .input('lat', sql.Decimal(9, 6), place.lat)
         .input('lng', sql.Decimal(9, 6), place.lng)
-        .input('photo', sql.NVarChar(400), place.photoResource)
+        .input('photo', sql.NVarChar(1000), place.photoResource)
         .input('tripId', sql.Int, tripId)
         .input('userId', sql.Int, userId)
         .query(`
@@ -7798,8 +8118,9 @@ app.post('/api/hotels/budget-options', requireAppAuth, async (req, res) => {
       photoAttribution: place.photoAttribution,
       nightlyLowPhp: rate.lowPhp,
       nightlyHighPhp: rate.highPhp,
-      stayLowPhp: rate.lowPhp * nights,
-      stayHighPhp: rate.highPhp * nights,
+      // Whole stay for the group: every room, every night.
+      stayLowPhp: rate.lowPhp * nights * rooms,
+      stayHighPhp: rate.highPhp * nights * rooms,
       fullyWithinBudget: rate.highPhp <= nightlyCapPhp,
       basis: rate.basis,
       sourceUrls: rate.sourceUrls.slice(0, 3),
@@ -8015,6 +8336,19 @@ if (isProduction) {
   for (const warning of warnings) console.warn(`[security] ${warning}`);
 }
 
-app.listen(port, () => {
+const httpServer = app.listen(port, () => {
   console.log(`Sidekick backend listening on http://localhost:${port}`);
+});
+// The AWS load balancer keeps idle connections open for up to 300 seconds. Node closes
+// them after 5 seconds by default, and a request sent on a connection Node had just
+// closed fails with "502 Bad Gateway". Keeping them open a little longer than the load
+// balancer does prevents that.
+httpServer.keepAliveTimeout = 310 * 1000;
+httpServer.headersTimeout = 315 * 1000;
+
+// A dropped database connection or a stray failed promise is logged instead of stopping
+// the whole server (which made every request fail with 502 until it restarted).
+sql.on('error', (error) => console.error('Database connection error:', error.message));
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled promise rejection:', reason instanceof Error ? reason.stack || reason.message : reason);
 });

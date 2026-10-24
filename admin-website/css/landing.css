@@ -1,0 +1,223 @@
+/* Sidekick landing page (served at the site root). Same colours and fonts as the app
+   and the admin website; dark mode follows js/theme.js (data-theme on <html>). */
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@600;700;800&display=swap');
+
+:root {
+  --lp-primary: #2c91b0;
+  --lp-primary-dark: #1f6f88;
+  --lp-gradient: linear-gradient(135deg, #1b6e84 0%, #2c91b0 55%, #4fc7cc 100%);
+  --lp-ink: #163457;
+  --lp-muted: #56708a;
+  --lp-line: #e1ebf0;
+  --lp-soft: #eef8fa;
+  --lp-bg: #f4f9fb;
+  --lp-card: #ffffff;
+  --lp-coral: #ef8a69;
+  --lp-shadow: 0 10px 30px rgba(22, 52, 87, .08);
+  --lp-phone-shadow: 0 24px 60px rgba(22, 52, 87, .22);
+}
+[data-theme="dark"] {
+  --lp-primary: #4fb4cf;
+  --lp-primary-dark: #2f9ab6;
+  --lp-ink: #e2edf5;
+  --lp-muted: #9db3c5;
+  --lp-line: #263a4c;
+  --lp-soft: #122130;
+  --lp-bg: #0c1722;
+  --lp-card: #122130;
+  --lp-shadow: 0 10px 30px rgba(0, 0, 0, .35);
+  --lp-phone-shadow: 0 24px 60px rgba(0, 0, 0, .55);
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  font-family: "DM Sans", system-ui, sans-serif;
+  color: var(--lp-ink);
+  background: var(--lp-bg);
+  line-height: 1.6;
+}
+h1, h2, h3 { font-family: "Manrope", "DM Sans", sans-serif; line-height: 1.2; margin: 0; }
+a { color: var(--lp-primary); }
+img { max-width: 100%; }
+
+/* The whole page sits on the app's illustrated travel map (map-bg.css, body.site-map),
+   which stays in place while the page scrolls. */
+
+/* Top bar */
+.lp-nav {
+  position: sticky; top: 0; z-index: 10;
+  display: flex; align-items: center; gap: 24px;
+  padding: 12px clamp(16px, 5vw, 64px);
+  background: color-mix(in srgb, var(--lp-bg) 88%, transparent);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--lp-line);
+}
+.lp-brand { display: flex; align-items: center; gap: 10px; text-decoration: none; color: var(--lp-ink); font-family: "Manrope", sans-serif; font-weight: 800; font-size: 1.2rem; }
+.lp-nav-links { display: flex; gap: 22px; margin-left: auto; }
+.lp-nav-links a { color: var(--lp-muted); text-decoration: none; font-weight: 600; font-size: .95rem; }
+.lp-nav-links a:hover { color: var(--lp-primary); }
+.lp-theme {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 7px 14px; border-radius: 999px;
+  border: 1px solid var(--lp-line); background: var(--lp-card); color: var(--lp-ink);
+  font: inherit; font-size: .85rem; font-weight: 600; cursor: pointer;
+}
+.lp-theme svg { width: 16px; height: 16px; }
+
+/* Top section */
+.lp-hero {
+  display: grid; grid-template-columns: 1fr 1.1fr; gap: clamp(24px, 5vw, 64px); align-items: center;
+  padding: clamp(40px, 7vw, 96px) clamp(16px, 5vw, 64px) clamp(40px, 6vw, 80px);
+  max-width: 1240px; margin: 0 auto;
+}
+.lp-eyebrow { margin: 0 0 12px; color: var(--lp-primary); font-weight: 700; letter-spacing: .04em; text-transform: uppercase; font-size: .82rem; }
+.lp-hero h1 { font-size: clamp(2.1rem, 4.6vw, 3.4rem); font-weight: 800; }
+.lp-lead { margin: 18px 0 28px; color: var(--lp-muted); font-size: 1.1rem; max-width: 34em; }
+.lp-cta { display: flex; flex-wrap: wrap; align-items: center; gap: 14px 18px; }
+.lp-download {
+  display: inline-flex; align-items: center; gap: 10px;
+  padding: 14px 26px; border-radius: 14px;
+  background: var(--lp-gradient); color: #fff; text-decoration: none;
+  font-family: "Manrope", sans-serif; font-weight: 800; font-size: 1.05rem;
+  box-shadow: 0 10px 24px rgba(44, 145, 176, .35);
+  transition: transform .15s ease, box-shadow .15s ease;
+}
+.lp-download:hover { transform: translateY(-2px); box-shadow: 0 14px 30px rgba(44, 145, 176, .42); }
+.lp-download svg { width: 20px; height: 20px; }
+.lp-cta-note { color: var(--lp-muted); font-size: .92rem; }
+
+.lp-phones { display: flex; justify-content: center; align-items: center; gap: 0; }
+.lp-phone {
+  width: 36%; height: auto; border-radius: 22px;
+  border: 1px solid var(--lp-line); box-shadow: var(--lp-phone-shadow);
+}
+.lp-phone-main { width: 42%; position: relative; z-index: 2; }
+.lp-phone-side { margin: 0 -5%; transform: scale(.92); opacity: .97; }
+/* Light screenshots in light mode, dark screenshots in dark mode (the hidden copy isn't downloaded). */
+.lp-shot-dark { display: none; }
+[data-theme="dark"] .lp-shot-light { display: none; }
+[data-theme="dark"] .lp-shot-dark { display: block; }
+
+/* Sections */
+.lp-section { padding: clamp(48px, 7vw, 88px) clamp(16px, 5vw, 64px); max-width: 1240px; margin: 0 auto; text-align: center; }
+/* See-through, so the map shows behind these sections too. */
+.lp-soft { max-width: none; background: color-mix(in srgb, var(--lp-soft) 72%, transparent); }
+.lp-section h2 { font-size: clamp(1.6rem, 3vw, 2.2rem); font-weight: 800; }
+.lp-section-lead { margin: 10px auto 0; color: var(--lp-muted); max-width: 40em; }
+
+.lp-features { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-top: 36px; text-align: left; }
+.lp-feature { padding: 24px; border-radius: 18px; background: var(--lp-card); border: 1px solid var(--lp-line); box-shadow: var(--lp-shadow); }
+.lp-feature h3 { font-size: 1.1rem; margin: 14px 0 6px; }
+.lp-feature p { margin: 0; color: var(--lp-muted); font-size: .96rem; }
+.lp-icon { display: inline-grid; place-items: center; width: 46px; height: 46px; border-radius: 14px; background: var(--lp-soft); color: var(--lp-primary); }
+[data-theme="dark"] .lp-icon { background: #172a3b; }
+.lp-icon svg { width: 24px; height: 24px; }
+
+.lp-steps { list-style: none; padding: 0; margin: 36px auto 0; max-width: 1100px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; text-align: left; }
+.lp-steps li { padding: 24px; border-radius: 18px; background: var(--lp-card); border: 1px solid var(--lp-line); }
+.lp-step-num { display: inline-grid; place-items: center; width: 36px; height: 36px; border-radius: 50%; background: var(--lp-gradient); color: #fff; font-family: "Manrope", sans-serif; font-weight: 800; }
+.lp-steps h3 { font-size: 1.08rem; margin: 14px 0 6px; }
+.lp-steps p { margin: 0; color: var(--lp-muted); font-size: .96rem; }
+
+.lp-install { margin: 28px auto 30px; padding: 22px 26px 22px 46px; max-width: 560px; text-align: left; border-radius: 18px; background: var(--lp-card); border: 1px solid var(--lp-line); }
+.lp-install li { padding: 5px 0; }
+.lp-download-small { padding: 12px 22px; font-size: 1rem; }
+
+/* FAQ: native <details>, so it opens and closes without JavaScript */
+.lp-faq { max-width: 760px; margin: 32px auto 0; display: grid; gap: 12px; text-align: left; }
+.lp-faq details { border-radius: 16px; background: var(--lp-card); border: 1px solid var(--lp-line); }
+.lp-faq summary {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 18px 22px; cursor: pointer; list-style: none;
+  font-family: "Manrope", "DM Sans", sans-serif; font-weight: 700; font-size: 1.02rem;
+}
+.lp-faq summary::-webkit-details-marker { display: none; }
+.lp-faq summary::after {
+  content: ""; flex: none; width: 10px; height: 10px; margin-top: -4px;
+  border-right: 2.5px solid var(--lp-primary); border-bottom: 2.5px solid var(--lp-primary);
+  transform: rotate(45deg); transition: transform .2s ease;
+}
+.lp-faq details[open] summary::after { transform: rotate(225deg); margin-top: 4px; }
+.lp-faq details p { margin: 0; padding: 0 22px 18px; color: var(--lp-muted); }
+
+/* Contact pop-up (native <dialog>) */
+.lp-dialog {
+  width: min(520px, calc(100vw - 32px)); max-height: calc(100vh - 32px); padding: 0;
+  border: 1px solid var(--lp-line); border-radius: 20px;
+  background: var(--lp-card); color: var(--lp-ink); box-shadow: 0 30px 80px rgba(13, 32, 54, .3);
+}
+.lp-dialog::backdrop { background: rgba(12, 23, 34, .55); backdrop-filter: blur(3px); }
+.lp-contact-form { display: flex; flex-direction: column; padding: 24px; }
+.lp-dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.lp-dialog-head h2 { font-size: 1.35rem; font-weight: 800; }
+.lp-dialog-close { display: grid; place-items: center; width: 38px; height: 38px; border: 0; border-radius: 50%; background: var(--lp-soft); color: var(--lp-ink); cursor: pointer; }
+.lp-dialog-close svg { width: 18px; height: 18px; }
+.lp-dialog-lead { margin: 10px 0 18px; color: var(--lp-muted); font-size: .96rem; overflow-wrap: anywhere; }
+.lp-contact-form label { margin: 0 0 6px; font-weight: 600; font-size: .92rem; }
+.lp-contact-form input, .lp-contact-form textarea {
+  width: 100%; margin-bottom: 14px; padding: 12px 14px;
+  border: 1px solid var(--lp-line); border-radius: 12px; background: var(--lp-bg); color: var(--lp-ink);
+  font: inherit; font-size: 1rem;
+}
+.lp-contact-form textarea { resize: none; height: 140px; margin-bottom: 4px; }
+.lp-contact-form input:focus, .lp-contact-form textarea:focus { outline: 2px solid var(--lp-primary); outline-offset: 1px; border-color: transparent; }
+.lp-contact-count { align-self: flex-end; color: var(--lp-muted); font-size: .8rem; }
+/* The bot trap stays out of sight and out of reach. */
+.lp-hp { position: absolute; left: -10000px; width: 1px; height: 1px; overflow: hidden; }
+.lp-contact-status { min-height: 1.4em; margin: 8px 0; font-size: .92rem; color: var(--lp-muted); }
+.lp-contact-status.is-error { color: #b42332; }
+.lp-contact-status.is-success { color: #18794e; font-weight: 600; }
+[data-theme="dark"] .lp-contact-status.is-error { color: #ff8a8f; }
+[data-theme="dark"] .lp-contact-status.is-success { color: #5fd39a; }
+.lp-dialog-actions { display: flex; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
+.lp-btn-primary, .lp-btn-secondary { padding: 11px 20px; border-radius: 12px; font: inherit; font-weight: 700; cursor: pointer; }
+.lp-btn-primary { border: 0; background: var(--lp-gradient); color: #fff; }
+.lp-btn-primary:disabled { opacity: .6; cursor: default; }
+.lp-btn-secondary { border: 1px solid var(--lp-line); background: var(--lp-card); color: var(--lp-ink); }
+.lp-dialog-note { margin: 14px 0 0; color: var(--lp-muted); font-size: .82rem; }
+
+/* Footer */
+.lp-footer { padding: 32px clamp(16px, 5vw, 64px); border-top: 1px solid var(--lp-line); display: flex; flex-wrap: wrap; align-items: center; gap: 14px 28px; }
+.lp-footer-brand { display: flex; align-items: center; gap: 8px; font-family: "Manrope", sans-serif; font-weight: 800; }
+.lp-footer-links { display: flex; flex-wrap: wrap; gap: 8px 20px; }
+.lp-footer-links a { display: inline-block; padding: 8px 2px; color: var(--lp-muted); text-decoration: none; font-size: .92rem; }
+.lp-footer-links a:hover { color: var(--lp-primary); text-decoration: underline; }
+.lp-footer-note { flex-basis: 100%; margin: 0; color: var(--lp-muted); font-size: .85rem; }
+
+a:focus-visible, button:focus-visible { outline: 3px solid var(--lp-coral); outline-offset: 3px; }
+
+/* Tablets and phones */
+@media (max-width: 900px) {
+  .lp-hero { grid-template-columns: 1fr; text-align: center; }
+  .lp-lead { margin-left: auto; margin-right: auto; }
+  .lp-cta { justify-content: center; }
+  .lp-phones { max-width: 520px; margin: 0 auto; }
+  .lp-features { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 600px) {
+  .lp-nav { gap: 12px; }
+  .lp-nav-links { display: none; }
+  .lp-theme { margin-left: auto; }
+  .lp-features, .lp-steps { grid-template-columns: 1fr; }
+  .lp-download { width: 100%; justify-content: center; }
+  .lp-download-small { width: auto; }
+}
+@media (max-width: 380px) {
+  .lp-hero h1 { font-size: 1.85rem; }
+  .lp-lead { font-size: 1rem; }
+  /* Icon only; the label stays readable for screen readers. */
+  .lp-theme { padding: 8px; }
+  .lp-theme span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .lp-feature, .lp-steps li { padding: 20px; }
+  .lp-install { padding: 18px 18px 18px 38px; }
+  .lp-faq summary { padding: 16px 18px; font-size: .98rem; }
+  .lp-faq details p { padding: 0 18px 16px; }
+}
+/* Sections scroll below the sticky top bar instead of under it. */
+section[id] { scroll-margin-top: 72px; }
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  .lp-download, .lp-faq summary::after { transition: none; }
+}

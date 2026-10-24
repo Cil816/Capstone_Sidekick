@@ -899,7 +899,7 @@ async function showDestinationDetails(place, prefs, session) {
         setText(
           "destination-route-error-message",
           noRouteExists
-            ? "Google Maps could not find a driving or public-transit route between these locations. Try a different starting point or destination."
+            ? "No driving or transit route found between these places. Try another starting point or destination."
             : "The route service is temporarily unavailable. Please try again later.",
         );
         setText("destination-route-error-details", window.SidekickCore.friendlyError(error, "No other details are available. Please try again later."));

@@ -216,8 +216,7 @@
 }
 
 .terms-dialog::backdrop {
-    background: rgb(20 35 50 / 48%);
-    backdrop-filter: blur(3px);
+    background: rgb(20 35 50 / 56%);
 }
 
 .terms-dialog-header {

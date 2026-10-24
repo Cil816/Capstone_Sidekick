@@ -126,71 +126,6 @@ function hasPriceBand(band) {
     && Number.isFinite(Number(band.lowPhp)) && Number.isFinite(Number(band.highPhp));
 }
 
-function formatPhpBand(band) {
-  if (!hasPriceBand(band)) return "unavailable";
-  const low = Number(band?.lowPhp);
-  const high = Number(band?.highPhp);
-  const format = (value) => `PHP ${Math.round(value).toLocaleString()}`;
-  return low === high ? format(low) : `${format(low)}–${format(high)}`;
-}
-
-function sumPriceBands(bands) {
-  if (!bands.length || bands.some((band) => !hasPriceBand(band))) return null;
-  return {
-    lowPhp: bands.reduce((sum, band) => sum + Number(band.lowPhp), 0),
-    highPhp: bands.reduce((sum, band) => sum + Number(band.highPhp), 0),
-  };
-}
-
-function buildItineraryDraftReply(draft) {
-  const days = Array.isArray(draft.itinerary) ? draft.itinerary : [];
-  const budget = draft.meta?.liveTripBudget || null;
-  const activityCosts = new Map((draft.meta?.liveActivityCosts || []).map((item) => [String(item.placeId), item]));
-  const lines = [`I’ve prepared a ${days.length}-day itinerary for **${draft.meta?.destination || "your trip"}**. Take a look at the schedule and estimates below.`];
-
-  for (const [index, day] of days.entries()) {
-    const activities = Array.isArray(day.activities) ? day.activities : [];
-    const visitMinutes = activities.reduce((sum, activity) => sum + (Number(activity.durationMinutes) || 0), 0);
-    const travelMinutes = activities.reduce((sum, activity) => sum + (Number(activity.travelMinutes) || 0), 0);
-    const ticketBands = activities.map((activity) => activityCosts.get(String(activity.placeId)))
-      .filter(hasPriceBand);
-    const knownTickets = sumPriceBands(ticketBands);
-    const missingTicketCount = Math.max(0, activities.length - ticketBands.length);
-    const dayItems = activities.map((activity) => {
-      const ticket = activityCosts.get(String(activity.placeId));
-      const visit = Number(activity.durationMinutes) > 0 ? `about ${activity.durationMinutes} min on site` : "visit duration unavailable";
-      const transfer = Number(activity.travelMinutes) > 0 ? `; about ${activity.travelMinutes} min travel from the previous stop` : "";
-      const ticketText = ticket ? `; admission ${formatPhpBand(ticket)}` : "";
-      return `- **${activity.timeLabel || "Flexible"}: ${activity.title}** (${visit}${transfer}${ticketText})`;
-    });
-    const dayCost = knownTickets
-      ? `Estimated activity costs: **${formatPhpBand(knownTickets)}** for ${ticketBands.length}/${activities.length} priced stops${missingTicketCount ? `; ${missingTicketCount} stop(s) have no verified price` : ""}.`
-      : `Activity cost estimates are unavailable for these stops (${ticketBands.length}/${activities.length} priced).`;
-    if (knownTickets) {
-      day.estimatedDayCostPhp = Math.round((knownTickets.lowPhp + knownTickets.highPhp) / 2);
-      day.estimatedDayCostLowPhp = knownTickets.lowPhp;
-      day.estimatedDayCostHighPhp = knownTickets.highPhp;
-    }
-    lines.push(`\n**Day ${day.dayNumber || index + 1}${day.dateLabel ? ` — ${day.dateLabel}` : ""}**`);
-    lines.push("");
-    lines.push(...dayItems);
-    lines.push("");
-    lines.push(`Planned time: about ${Math.floor(visitMinutes / 60)} hr ${visitMinutes % 60} min at stops, plus about ${travelMinutes} min between stops. ${dayCost}`);
-  }
-
-  const totalBudget = hasPriceBand(budget && { lowPhp: budget.totalLowPhp, highPhp: budget.totalHighPhp })
-    ? `\n\nEstimated activity costs: **${formatPhpBand({ lowPhp: budget.totalLowPhp, highPhp: budget.totalHighPhp })}** for ${budget.pricedActivityCount || 0}/${budget.totalActivityCount || days.reduce((count, day) => count + (day.activities || []).length, 0)} priced stops.`
-    : "\n\nI couldn’t verify a total for the activity costs; any unavailable prices are left out rather than guessed.";
-  const enteredBudget = Number(draft.meta?.budgetAmountPhp) > 0
-    ? ` I used your whole-trip budget of PHP ${Number(draft.meta.budgetAmountPhp).toLocaleString()} to choose value-focused stops, with about PHP ${Number(draft.meta.activityBudgetTargetPhp || Math.floor(Number(draft.meta.budgetAmountPhp) * 0.25)).toLocaleString()} planned for activity admission. The rest is reserved for travel, lodging, meals, local transport, and a buffer; the activity prices above are estimates, not a complete trip quote.`
-    : '';
-  const sourcesNote = draft.meta?.isDevelopmentMock
-    ? " This is development sample data, not a live verified estimate."
-    : budget?.sources?.length ? " These ranges use current web sources; prices can change. Route durations are estimates and traffic can change."
-      : " Live price sources were unavailable, so I have not filled in unsupported prices.";
-  return `${lines.join("\n")}${totalBudget}${enteredBudget}${sourcesNote}\n\nWould you like to keep this plan? Reply **Save itinerary** to add it to your planned trips on the Itinerary tab, or **Discard**.`;
-}
-
 function normalizeBudget(value) {
   const t = String(value || "").toLowerCase();
   if (!t) return "";
@@ -294,10 +229,6 @@ function applySignals(email, text) {
   return { state: getCompanionState(email), signals: s, reset: false };
 }
 
-function companionNeedsEssentials(state) {
-  return !state.destination || !state.dayCount;
-}
-
 function buildSystemPrompt(prefs, state) {
   const profileInterests = (prefs?.interests || []).join(", ") || "not set";
   const profileTravelStyle = (prefs?.travelTypes || []).join(", ") || "not set";
@@ -377,109 +308,6 @@ async function continueIncompleteReply(reply, prefs, state, email) {
   } catch (error) {}
 
   return `${initial}\n\nIt looks like my answer was cut off. Reply “continue” and I’ll finish it.`;
-}
-
-async function generateItineraryWithBackend(prefs, state, userText) {
-  const session = window.SidekickCore.getAuthSession();
-  // "Today" on this phone (the UTC date was a day behind in the early morning).
-  const startDate = state.startDate || window.SidekickCore.localDateValue?.() || new Date().toISOString().slice(0, 10);
-  // A trip starting today begins about half an hour from now; late in the day the
-  // server makes day 1 an evening plan, and the following days stay full days.
-  const firstDayStart = window.SidekickCore.firstDayStartMinute?.(startDate) ?? null;
-  const lateStyle = Number.isFinite(firstDayStart) && firstDayStart > 19 * 60 + 30 ? { tripStyle: { timeOfDay: "fullday", pace: "packed" } } : {};
-  const end = new Date(`${startDate}T00:00:00`);
-  end.setDate(end.getDate() + Math.max(1, Number(state.dayCount) || 3) - 1);
-  const localEnd = new Date(end.getTime() - end.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
-  return window.SidekickCore.apiRequest("/api/itinerary/generate", {
-    method: "POST",
-    signal: activeReply?.signal,
-    body: JSON.stringify({
-      email: session?.email || "",
-      message: userText,
-      // Lets the server count this as a chatbot message (other screens also generate itineraries).
-      source: "chat",
-      selectedDestination: state.destination ? { name: state.destination } : null,
-      profile: {
-        ...prefs,
-        budget: state.budget || prefs?.budget || "",
-        budgetAmountPhp: state.budgetAmountPhp || prefs?.budgetAmountPhp || null,
-        startDate,
-        endDate: localEnd,
-        durationDays: Math.max(1, Number(state.dayCount) || 3),
-        pace: state.pace || "",
-        mustSee: state.mustSee || [],
-        avoid: state.avoid || [],
-        ...(Number.isFinite(firstDayStart) ? { firstDayStartMinute: firstDayStart } : {}),
-        ...lateStyle,
-        clientToday: window.SidekickCore.localDateValue?.() || "",
-      },
-    }),
-  });
-}
-
-async function researchDraftBudget(email, draft, state) {
-  if (draft.meta?.liveTripBudget && Array.isArray(draft.meta.liveActivityCosts)) {
-    draft.meta.liveTripBudgetCacheKey = getDraftBudgetCacheKey(draft);
-    draft.meta.liveTripBudgetCachedAt = Date.now();
-    return draft;
-  }
-  if (draft.meta?.isDevelopmentMock) {
-    draft.meta.liveTripBudget = null;
-    draft.meta.liveActivityCosts = [];
-    draft.meta.budgetEstimateError = "Live estimates are disabled in development sample mode.";
-    return draft;
-  }
-  try {
-    const meta = draft.meta || {};
-    const response = await window.SidekickCore.apiRequest("/api/itinerary/estimate-budget", {
-      method: "POST",
-      signal: activeReply?.signal,
-      body: JSON.stringify({
-        email,
-        itinerary: draft.itinerary,
-        destination: meta.destination || state.destination,
-        startDate: meta.startDate || state.startDate,
-        endDate: meta.endDate,
-        budgetTier: state.budget || "User-entered budget",
-        budgetAmountPhp: Number(state.budgetAmountPhp || 0) > 0 ? Number(state.budgetAmountPhp) : null,
-        origin: meta.origin || null,
-        travelMode: meta.travelMode || "DRIVE",
-      }),
-    });
-    draft.meta.liveTripBudget = response.tripBudget || null;
-    draft.meta.liveActivityCosts = Array.isArray(response.activityCosts) ? response.activityCosts : [];
-    return draft;
-  } catch (error) {
-    draft.meta.liveTripBudget = null;
-    draft.meta.liveActivityCosts = [];
-    draft.meta.budgetEstimateError = window.SidekickCore.friendlyError(error, "Price research is unavailable.");
-    return draft;
-  }
-}
-
-function getDraftBudgetCacheKey(itineraryData) {
-  const meta = itineraryData?.meta || {};
-  const input = JSON.stringify({
-    destination: String(meta.destination || meta.focusedPlace || ''),
-    startDate: String(meta.startDate || ''),
-    endDate: String(meta.endDate || ''),
-    itinerary: (itineraryData?.itinerary || []).map((day) => ({
-      activities: (day.activities || []).map((activity) => ({
-        placeId: String(activity.placeId || ''),
-        title: String(activity.title || ''),
-        location: String(activity.location || ''),
-        category: String(activity.category || 'activity'),
-      })),
-    })),
-  });
-  let firstHash = 0x811c9dc5;
-  let secondHash = 0x9e3779b9;
-  for (let index = 0; index < input.length; index += 1) {
-    const code = input.charCodeAt(index);
-    firstHash = Math.imul(firstHash ^ code, 0x01000193);
-    secondHash = Math.imul(secondHash ^ code, 0x85ebca6b);
-  }
-  return `trip-budget-v3-${(firstHash >>> 0).toString(16)}-${(secondHash >>> 0).toString(16)}`;
 }
 
 // Shown when the AI can't answer. An honest "try again" beats a canned reply
@@ -659,7 +487,7 @@ async function generateItineraryFromCompanion(email, prefs, state) {
 
   await saveGeneratedItinerary(email, generated);
 
-  return `Itinerary ready. I generated a ${state.dayCount || generated.itinerary.length}-day plan for ${state.destination}. Open the Itinerary tab to view and edit it.\n\nIf you want changes, tell me: \"make day 2 more relaxed\" or \"adjust budget to luxury\".`;
+  return `Your ${state.dayCount || generated.itinerary.length}-day plan for ${state.destination} is ready. Open the Itinerary tab to view and edit it.\n\nWant changes? Try \"make day 2 more relaxed\" or \"adjust budget to luxury\".`;
 }
 
 function formatTime(ts) {
@@ -1340,7 +1168,7 @@ async function sendMessage() {
     const companionState = merged.state;
     let reply = "";
     let replyPlaces = [];
-    let generatedItineraryThisReply = false;
+    let tripPlan = null;
 
     if (merged.reset) {
       reply = "Companion memory reset. Tell me destination and number of days, then I can build your travel plan again.";
@@ -1370,32 +1198,10 @@ async function sendMessage() {
             ? `I couldn’t save it: ${error.message} Ask me for the trip on other dates.`
             : `I couldn’t save the itinerary right now, so I kept the draft here. ${window.SidekickCore.friendlyError(error, "Please try again in a moment.")}`;
         }
-      } else if (merged.signals.wantsGenerate && !companionNeedsEssentials(companionState)) {
-        try {
-          const generated = await generateItineraryWithBackend(prefs, companionState, userText);
-          if (!generated?.itinerary || !Array.isArray(generated.itinerary)) {
-            throw new Error("The itinerary service returned no itinerary.");
-          }
-          const draftStartDate = companionState.startDate || generated.meta?.startDate || new Date().toISOString().slice(0, 10);
-          const draft = {
-            itinerary: window.SidekickCore.applyLocalScheduleTimes(generated.itinerary, draftStartDate),
-            meta: {
-              ...(generated.meta || {}),
-              startDate: draftStartDate,
-              source: generated.meta?.source || "sidekick-chat-ai",
-              serverTripId: generated.tripId,
-            },
-          };
-          await researchDraftBudget(session.email, draft, companionState);
-          setPendingItinerary(session.email, draft);
-          reply = buildItineraryDraftReply(draft);
-          generatedItineraryThisReply = true;
-        } catch (error) {
-          reply = `I couldn’t prepare a verified itinerary right now. ${window.SidekickCore.friendlyError(error, "Please check the destination and try again.")}`;
-        }
-      } else if (merged.signals.wantsGenerate && companionNeedsEssentials(companionState)) {
-        const missing = [!companionState.destination ? "destination" : "", !companionState.dayCount ? "number of days" : ""].filter(Boolean).join(" and ");
-        reply = `I can prepare a detailed itinerary. What ${missing} would you like?`;
+      } else if ((tripPlan = window.SidekickChatPlanner?.handle(session.email, userText, Boolean(merged.signals.wantsGenerate)))) {
+        // Planning a trip: the chat asks for the trip's details (js/chat-planner.js), then
+        // opens the Itinerary tab, which builds it the same way as its own button.
+        reply = tripPlan.reply;
       } else if (pendingDraft) {
         reply = `I have an itinerary for **${pendingDraft.meta?.destination || "your trip"}** ready for review. Reply **Save itinerary** to add it to your planned trips, or **Discard** to remove it.`;
       } else {
@@ -1416,7 +1222,8 @@ async function sendMessage() {
     removeTypingIndicator();
     appendMessageToDom("ai", reply, Date.now(), true, replyPlaces);
     scrollToBottom();
-    if (generatedItineraryThisReply) window.SidekickAppRating?.afterItineraryGenerated();
+    // The trip's details are complete: give a moment to read the summary, then open the planner.
+    if (tripPlan?.openPlanner) window.setTimeout(() => { window.location.href = "itinerary.html"; }, 1800);
   } catch (e) {
     if (thisReply.signal.aborted) return;
     removeTypingIndicator();

@@ -212,7 +212,8 @@ function getPreferences() {
 function escapeHtml(text) {
   const div = document.createElement("div");
   div.textContent = String(text ?? "");
-  return div.innerHTML;
+  // Quotes too, so escaped text is also safe inside an attribute such as a link's href.
+  return div.innerHTML.replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
 async function hashPasswordSHA256(password) {
@@ -313,7 +314,94 @@ function waitForOnline(signal) {
   });
 }
 
+// ---- Saved answers for Google-backed requests ---------------------------------------------
+// Place searches, place details, routes and price checks are saved on the phone for a while,
+// so the same lookup isn't paid for again (whichever server answers). Only these public
+// lookups are saved, never sign-in, trips, chats or AI answers. Lifetimes stay within
+// Google's terms (place data refreshed at least daily, prices every few hours).
+const API_CACHE_KEY = "sidekick.apiCache.v1";
+const API_CACHE_MAX_ENTRIES = 250;
+const API_CACHE_MAX_CHARS = 1500000; // about 1.5 MB on the phone
+const API_CACHE_HOUR_MS = 60 * 60 * 1000;
+const API_CACHE_RULES = [
+  { prefix: "/api/maps/place-suggestions", ttl: 24 * API_CACHE_HOUR_MS },
+  { prefix: "/api/maps/place-details", ttl: 24 * API_CACHE_HOUR_MS },
+  { prefix: "/api/maps/places", ttl: 24 * API_CACHE_HOUR_MS },
+  { prefix: "/api/maps/route", ttl: 12 * API_CACHE_HOUR_MS },
+  { prefix: "/api/hotels/budget-options", ttl: 6 * API_CACHE_HOUR_MS },
+  { prefix: "/api/trip/budget-check", ttl: 6 * API_CACHE_HOUR_MS },
+  { prefix: "/api/places/popular", ttl: 0.5 * API_CACHE_HOUR_MS },
+];
+
+function apiCacheTtl(path) {
+  const pathOnly = String(path || "").split("?")[0];
+  const rule = API_CACHE_RULES.find((item) => pathOnly === item.prefix || pathOnly.startsWith(`${item.prefix}/`));
+  return rule ? rule.ttl : 0;
+}
+
+function apiCacheEntryKey(path, options) {
+  let body = typeof options.body === "string" ? options.body : "";
+  // A search's Google session token changes every time the traveler types, so it is left
+  // out: the same search text finds the saved answer.
+  try {
+    const parsed = JSON.parse(body);
+    if (parsed && typeof parsed === "object" && "sessionToken" in parsed) {
+      delete parsed.sessionToken;
+      body = JSON.stringify(parsed);
+    }
+  } catch (error) { /* not JSON: used as is */ }
+  const text = `${String(options.method || "GET").toUpperCase()} ${path} ${body}`;
+  // A short hash keeps the saved keys small.
+  let hash = 5381;
+  for (let index = 0; index < text.length; index += 1) hash = ((hash * 33) ^ text.charCodeAt(index)) >>> 0;
+  return `${hash.toString(36)}:${text.length}`;
+}
+
+function readApiCache() {
+  try { return JSON.parse(localStorage.getItem(API_CACHE_KEY) || "{}") || {}; } catch (error) { return {}; }
+}
+
+function cachedApiAnswer(key) {
+  const entry = readApiCache()[key];
+  return entry && entry.expiresAt > Date.now() ? entry.value : null;
+}
+
+function saveApiAnswer(key, value, ttl) {
+  try {
+    const now = Date.now();
+    const cache = readApiCache();
+    cache[key] = { value, expiresAt: now + ttl, savedAt: now };
+    // Drop expired answers, then the oldest ones, to stay small.
+    let keys = Object.keys(cache).filter((item) => cache[item]?.expiresAt > now);
+    keys.sort((a, b) => cache[a].savedAt - cache[b].savedAt);
+    while (keys.length > API_CACHE_MAX_ENTRIES) keys.shift();
+    let text = JSON.stringify(Object.fromEntries(keys.map((item) => [item, cache[item]])));
+    while (text.length > API_CACHE_MAX_CHARS && keys.length > 1) {
+      keys = keys.slice(Math.ceil(keys.length / 4));
+      text = JSON.stringify(Object.fromEntries(keys.map((item) => [item, cache[item]])));
+    }
+    localStorage.setItem(API_CACHE_KEY, text);
+  } catch (error) { /* the phone is out of space: the answer just isn't saved */ }
+}
+
 async function apiRequest(path, options = {}) {
+  const cacheTtl = apiCacheTtl(path);
+  const cacheKey = cacheTtl ? apiCacheEntryKey(path, options) : "";
+  if (cacheKey) {
+    const saved = cachedApiAnswer(cacheKey);
+    if (saved) return saved;
+  }
+  const payload = await apiRequestFromServer(path, options);
+  // Only complete answers are saved: not error notes, development samples, or empty lists
+  // (a search that briefly found nothing is asked again next time).
+  const emptyList = ["suggestions", "places", "hotels"].some((field) => Array.isArray(payload?.[field]) && !payload[field].length);
+  if (cacheKey && payload && typeof payload === "object" && !payload.error && !payload.isDevelopmentMock && !emptyList) {
+    saveApiAnswer(cacheKey, payload, cacheTtl);
+  }
+  return payload;
+}
+
+async function apiRequestFromServer(path, options = {}) {
   // options.waitForConnection = false makes a request fail right away when offline.
   const waitForConnection = options.waitForConnection !== false;
   if (waitForConnection) await waitForOnline(options.signal);
@@ -536,13 +624,13 @@ function getItinerarySyncPayload(itineraryData) {
         startTime: activity?.dueAt != null && Number.isFinite(Number(activity.dueAt))
           ? `${String(new Date(Number(activity.dueAt)).getHours()).padStart(2, "0")}:${String(new Date(Number(activity.dueAt)).getMinutes()).padStart(2, "0")}`
           : "",
-        // When the stop ends: its start plus the time planned there (same day only).
+        // When the stop ends: its start plus the time planned there. A late stop (a night
+        // out) may end after midnight; it is read back as ending the next morning.
         endTime: (() => {
           const start = Number(activity?.dueAt);
           const minutes = Number(activity?.durationMinutes);
-          if (!Number.isFinite(start) || !(minutes > 0)) return "";
-          const end = start + minutes * 60000;
-          return localDateValue(new Date(end)) === localDateValue(new Date(start)) ? clock(end) : "";
+          if (!Number.isFinite(start) || !(minutes > 0) || minutes >= 24 * 60) return "";
+          return clock(start + minutes * 60000);
         })(),
         estimatedTotalCostPhp: activity?.estimatedTotalCostPhp ?? activity?.estimatedActivityCostPhp ?? null,
         // The Google place, so the server can count how often each place is used
@@ -943,7 +1031,9 @@ function repeatTripData(pastTrip, full, startDate) {
           const ends = /^(\d{1,2}):(\d{2})/.exec(String(activity.endTime || ""));
           const hours = begins ? Number(begins[1]) : 9;
           const minutes = begins ? Number(begins[2]) : 0;
-          const length = begins && ends ? (Number(ends[1]) * 60 + Number(ends[2])) - (hours * 60 + minutes) : 0;
+          let length = begins && ends ? (Number(ends[1]) * 60 + Number(ends[2])) - (hours * 60 + minutes) : 0;
+          // An end time earlier than the start is after midnight (a night out).
+          if (begins && ends && length < 0) length += 24 * 60;
           const dueAt = tripDayTime(start, offset, hours, minutes);
           return {
             id: createItineraryActivityId(),
@@ -2074,6 +2164,28 @@ function describeUnrealisticBudget(result, destination) {
   };
 }
 
+// "I'm online" heartbeat and the saved-trip check. Each tab is its own page, so this
+// starts again on every tab change: the last times are kept for the browsing session,
+// so switching tabs (or coming back to the app, which fires two events) doesn't send
+// them again until they are due.
+const HEARTBEAT_EVERY_MS = 60_000;
+const ITINERARY_CHECK_EVERY_MS = 5 * 60_000;
+const HEARTBEAT_LAST_KEY = "sidekick.presence.lastSent";
+const ITINERARY_CHECK_LAST_KEY = "sidekick.itineraryCheck.lastRun";
+
+function dueSince(key, everyMs) {
+  try {
+    const last = Number(sessionStorage.getItem(key) || 0);
+    return !(last > 0 && Date.now() - last < everyMs);
+  } catch (error) {
+    return true;
+  }
+}
+
+function markDone(key) {
+  try { sessionStorage.setItem(key, String(Date.now())); } catch (error) { /* storage unavailable */ }
+}
+
 function startAppPresenceHeartbeat() {
   let requestInProgress = false;
   let lastErrorAt = 0;
@@ -2083,11 +2195,13 @@ function startAppPresenceHeartbeat() {
   async function verifyStoredItinerary() {
     const session = getAuthSession();
     if (!session?.email || !session?.apiToken || document.visibilityState !== "visible" || itineraryCheckInProgress) return;
+    if (!dueSince(ITINERARY_CHECK_LAST_KEY, ITINERARY_CHECK_EVERY_MS - 5_000)) return;
     const email = session.email;
     const trips = getPlannedTrips(email);
     const draft = getItineraryDraft(email);
     if (!trips.length && !draft) return;
     itineraryCheckInProgress = true;
+    markDone(ITINERARY_CHECK_LAST_KEY);
     try {
       let removed = false;
       // Each planned trip: gone from the server (expired or deleted), or past its last day + retention.
@@ -2128,7 +2242,10 @@ function startAppPresenceHeartbeat() {
   async function sendHeartbeat() {
     const session = getAuthSession();
     if (!session?.email || !session?.apiToken || document.visibilityState !== "visible" || !document.hasFocus() || requestInProgress) return;
+    // Sent within the last minute (on this or the previous screen): not due yet.
+    if (!dueSince(HEARTBEAT_LAST_KEY, HEARTBEAT_EVERY_MS - 5_000)) return;
     requestInProgress = true;
+    markDone(HEARTBEAT_LAST_KEY);
     try {
       await apiRequest("/api/app-presence/heartbeat", { method: "POST" });
       lastErrorAt = 0;
@@ -2149,8 +2266,8 @@ function startAppPresenceHeartbeat() {
     const prefs = session?.email ? getPreferencesByEmail()[session.email] : null;
     if (prefs) void syncPreferencesToServer(session.email, prefs);
   } catch (error) {}
-  window.setInterval(sendHeartbeat, 30_000);
-  window.setInterval(verifyStoredItinerary, 5 * 60_000);
+  window.setInterval(sendHeartbeat, HEARTBEAT_EVERY_MS);
+  window.setInterval(verifyStoredItinerary, ITINERARY_CHECK_EVERY_MS);
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") {
       void sendHeartbeat();

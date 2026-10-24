@@ -484,6 +484,9 @@ async function handleNext() {
         // Clear persisted onboarding state
         try { sessionStorage.removeItem(ONBOARDING_STATE_KEY); } catch (e) {}
 
+        // A new user gets the app tour once on Home (js/tour.js).
+        try { localStorage.setItem('sidekick.tour.pending', '1'); } catch (e) {}
+
         window.location.href = 'dashboard.html';
     }
 }

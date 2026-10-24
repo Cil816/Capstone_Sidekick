@@ -270,7 +270,7 @@
       const values = await window.SidekickUI.form({
         title: "Edit trip budget",
         icon: "edit",
-        message: `Not happy with these ${kind}? Raise your total budget to see more options, including higher-end ones. Your trip uses the new budget.`,
+        message: `Want more ${kind}? Raise your total budget to see more, including higher-end ones. Your trip will use the new budget.`,
         fields: [{ name: "budget", label: "Total budget (PHP)", type: "number", value, min: 1, hint: current ? `Current budget: ${peso(current)}` : "" }],
         confirmText: "Update budget",
         validate: ({ budget }) => {
@@ -323,7 +323,7 @@
       };
       open("Choose a hotel?");
       onClose = () => finish({ status: "cancel" });
-      setBody(`<p class="budget-picker-text">Would you like to pick a hotel near <strong>${esc(destination)}</strong> before your itinerary is built? We'll only show hotels whose nightly rate fits your budget.</p>`);
+      setBody(`<p class="budget-picker-text">Pick a hotel near <strong>${esc(destination)}</strong> before building? Only hotels within your budget are shown.</p>`);
       setActions([
         { label: "No, build without a hotel", onClick: () => { onClose = null; close(); finish({ status: "skip" }); } },
         { label: "Yes, show hotels", kind: "primary", onClick: () => { void loadHotels(); } },

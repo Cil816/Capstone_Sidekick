@@ -440,7 +440,7 @@
 .day-info .day-cost-estimate { margin-top: 4px; color: #0f766e; font-size: 12px; line-height: 1.45; font-weight: 650; }
 
 .activities-list { margin-left: 19px; border-left: 2px solid #dce6f1; padding-left: 24px; gap: 16px; }
-.activity-card { position: relative; background: rgba(255, 255, 255, .92); border: 1px solid #e1e9f2; border-radius: 18px; padding: 17px 18px; box-shadow: 0 8px 22px rgba(52, 76, 104, .07); transition: transform .2s ease, box-shadow .2s ease, border-color .2s ease; }
+.activity-card { position: relative; background: rgba(255, 255, 255, .92); border: 1px solid #e1e9f2; border-radius: 18px; padding: 17px 18px; box-shadow: 0 8px 22px rgba(52, 76, 104, .07); transition: transform .2s ease, border-color .2s ease; }
 .activity-card::before { content: ""; position: absolute; left: -31px; top: 22px; width: 10px; height: 10px; border: 3px solid #fff; border-radius: 50%; background: var(--itinerary-lilac); box-shadow: 0 0 0 1px #cbd9e8; }
 .activity-card:hover { transform: translateY(-2px); border-color: #c7d8ea; box-shadow: 0 12px 26px rgba(52, 76, 104, .11); }
 .activity-time span { color: var(--itinerary-blue); font-weight: 700; }
@@ -450,7 +450,7 @@
 
 .add-activity-btn { border-color: #b9cbe0; background: rgba(255, 255, 255, .5); color: var(--itinerary-blue); }
 .add-activity-btn:hover { background: linear-gradient(135deg, rgba(107, 140, 174, .08), rgba(154, 155, 210, .1)); }
-#place-search { border-color: #d7e2ee !important; background: #fff; color: var(--itinerary-ink); outline: none; transition: border-color .2s ease, box-shadow .2s ease; }
+#place-search { border-color: #d7e2ee !important; background: #fff; color: var(--itinerary-ink); outline: none; transition: border-color .2s ease; }
 #place-search:focus, #itinerary-destination:focus, #itinerary-name:focus, #itinerary-origin:focus, #itinerary-start:focus, #itinerary-end:focus, #itinerary-budget:focus, #itinerary-travelers:focus { border-color: var(--itinerary-blue) !important; box-shadow: 0 0 0 4px rgba(67, 191, 208, .14); outline: none; }
 #map { border-radius: 16px !important; background: linear-gradient(135deg, #edf3fa, #f8f7ff); box-shadow: inset 0 0 0 1px rgba(211, 222, 235, .8), 0 8px 18px rgba(52, 76, 104, .06); }
 

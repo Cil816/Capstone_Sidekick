@@ -10,11 +10,12 @@
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
+    "compression": "^1.8.2",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "mssql": "^11.0.1",
-    "nodemailer": "^9.0.5"
+    "nodemailer": "^10.2.1"
   },
   "optionalDependencies": {
     "msnodesqlv8": "^4.2.1"

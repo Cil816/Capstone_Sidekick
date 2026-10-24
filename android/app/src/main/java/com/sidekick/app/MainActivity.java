@@ -1,7 +1,6 @@
 package com.sidekick.app;
 
 import android.os.Bundle;
-import android.util.Log;
 import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.WebSettings;
@@ -14,28 +13,19 @@ import androidx.core.view.WindowInsetsCompat;
 import com.getcapacitor.BridgeActivity;
 
 public class MainActivity extends BridgeActivity {
-	private static final String TAG = "SidekickWebView";
-
 	@Override
 	public void onCreate(Bundle savedInstanceState) {
 		super.onCreate(savedInstanceState);
 
 		WebView webView = getBridge() != null ? getBridge().getWebView() : null;
-		if (webView == null) {
-			Log.w(TAG, "WebView is null - could not apply explicit WebView settings.");
-			return;
-		}
+		if (webView == null) return;
 
 		WebSettings settings = webView.getSettings();
 		settings.setJavaScriptEnabled(true);
 		settings.setDomStorageEnabled(true);
 		settings.setDatabaseEnabled(true);
-		settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
-
-		Log.d(TAG, "WebView configured: js=" + settings.getJavaScriptEnabled()
-				+ ", domStorage=" + settings.getDomStorageEnabled()
-				+ ", database=" + settings.getDatabaseEnabled()
-				+ ", mixedContent=" + settings.getMixedContentMode());
+		// The app only uses HTTPS: a secure page may never load insecure (http://) content.
+		settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
 
 		keepKeyboardAsOverlay(webView);
 	}
@@ -49,10 +39,7 @@ public class MainActivity extends BridgeActivity {
 	private void keepKeyboardAsOverlay(WebView webView) {
 		View container = webView.getParent() instanceof View ? (View) webView.getParent() : null;
 		View root = container != null && container.getParent() instanceof ViewGroup ? (View) container.getParent() : null;
-		if (root == null) {
-			Log.w(TAG, "Keyboard overlay not applied: the web view's layout was not found.");
-			return;
-		}
+		if (root == null) return; // the web view's layout was not found
 		ViewCompat.setOnApplyWindowInsetsListener(root, (view, insets) -> {
 			WindowInsetsCompat withoutKeyboard = new WindowInsetsCompat.Builder(insets)
 					.setInsets(WindowInsetsCompat.Type.ime(), Insets.NONE)

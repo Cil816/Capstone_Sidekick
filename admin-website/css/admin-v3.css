@@ -205,7 +205,7 @@ body::before {
 .ax-card-note { margin: 2px 0 0; font-size: .85rem; color: var(--ax-muted); }
 .ax-section { margin-bottom: 22px; }
 
-.admin-link { color: var(--ax-primary-dark); font-weight: 700; font-size: .9rem; text-decoration: none; }
+.admin-link { display: inline-block; padding: 4px 0; color: var(--ax-primary-dark); font-weight: 700; font-size: .9rem; text-decoration: none; }
 .admin-link:hover { text-decoration: none; }
 
 /* ---- Buttons ---------------------------------------------------------------- */
@@ -1048,3 +1048,33 @@ body[data-page="usage"] .admin-main > .admin-card + .admin-card {
 .ax-kpis.ax-kpis-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 @media (max-width: 1100px) { .ax-kpis.ax-kpis-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 640px) { .ax-kpis.ax-kpis-4 { grid-template-columns: 1fr; } }
+
+/* Popular places on phones: the rank column stays narrow and the place name takes the space. */
+@media (max-width: 720px) {
+  body[data-page="popular"] .ax-table col:first-child { width: 40px !important; }
+  body[data-page="popular"] .ax-table col:nth-child(2) { width: auto !important; }
+}
+/* Very small phones (320-400 px): narrower number columns, and a table that still does not
+   fit scrolls inside its own card instead of making the whole page scroll sideways. */
+@media (max-width: 400px) {
+  .ax-table col:not(:first-child):not(:last-child):not(.hide-sm) { width: 72px !important; }
+  .ax-table col:last-child:not(.hide-sm) { width: 80px !important; }
+  body[data-page="popular"] .ax-table col:not(:first-child):not(:nth-child(2)):not(.hide-sm) { width: 72px !important; }
+  .ax-table-card { overflow-x: auto; }
+  .ax-table td .admin-button-secondary { padding-left: 10px; padding-right: 10px; }
+}
+/* Buttons and status pills in tables keep their words whole at every width. */
+.ax-table td .admin-button-secondary, .ax-table td button, .ax-table .ax-pill { white-space: nowrap; }
+/* Wide tables on phones (Reports, Popular places, API usage) keep readable columns and
+   scroll sideways inside their card; the page itself never scrolls sideways. */
+@media (max-width: 600px) {
+  body[data-page="analytics"] .ax-table-card,
+  body[data-page="popular"] .ax-table-card,
+  body[data-page="usage"] .admin-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  body[data-page="analytics"] .ax-table { min-width: 560px; }
+  body[data-page="analytics"] .ax-table col:not(:first-child):not(.hide-sm) { width: 116px !important; }
+  body[data-page="popular"] .ax-table { min-width: 500px; }
+  body[data-page="popular"] .ax-table col:nth-child(3), body[data-page="popular"] .ax-table col:nth-child(4) { width: 104px !important; }
+  body[data-page="usage"] .ax-table { min-width: 620px; }
+  body[data-page="usage"] .ax-table th:first-child { width: 34%; }
+}

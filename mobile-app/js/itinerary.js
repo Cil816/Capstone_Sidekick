@@ -608,17 +608,17 @@ function renderTripBudget(budget) {
   // A range starting at "Free" means some places are free to enter and the higher
   // figure includes optional fees (tours, rentals, environmental fees).
   const rangeNote = hasActivityEstimate && Number(budget.totalLowPhp) < Number(budget.totalHighPhp)
-    ? '<p class="itinerary-budget-note">The lower figure is the least you’d pay (free places and basic entry only); the higher one includes optional fees such as tours and rentals.</p>'
+    ? '<p class="itinerary-budget-note">Lower figure: free places and basic entry only. Higher: includes optional tours and rentals.</p>'
     : '';
   const targetNote = Number.isFinite(_activeBudgetTargetPhp)
     ? `<p class="itinerary-budget-note">Your trip budget: PHP ${Number(_activeBudgetTargetPhp).toLocaleString()}${people > 1 ? ` for ${people} travelers` : ''}.</p>`
     : '';
   const activityTargetNote = Number.isFinite(_activeActivityBudgetTargetPhp)
-    ? `<p class="itinerary-budget-note">About PHP ${Number(_activeActivityBudgetTargetPhp).toLocaleString()} is set aside for activity entry fees${Number.isFinite(_activeActivityDailyBudgetTargetPhp) ? ` (about PHP ${Number(_activeActivityDailyBudgetTargetPhp).toLocaleString()} per day)` : ''}. The rest is for travel, rooms, food, local transport, and extra costs.</p>`
+    ? `<p class="itinerary-budget-note">About PHP ${Number(_activeActivityBudgetTargetPhp).toLocaleString()} is for entry fees${Number.isFinite(_activeActivityDailyBudgetTargetPhp) ? ` (about PHP ${Number(_activeActivityDailyBudgetTargetPhp).toLocaleString()} a day)` : ''}; the rest covers travel, rooms, food and extras.</p>`
     : '';
   const activityOverTargetNote = hasActivityEstimate && Number.isFinite(_activeActivityBudgetTargetPhp)
     && groupHigh > _activeActivityBudgetTargetPhp
-    ? '<p class="itinerary-budget-note">Activity entry fees are over the planned amount. Try lower-cost places or raise your budget.</p>'
+    ? '<p class="itinerary-budget-note">Entry fees are over the planned amount. Try cheaper places or raise your budget.</p>'
     : '';
   const sourceHtml = (budget.sources || []).map((source) => {
     const url = String(source.url || '');
@@ -627,12 +627,12 @@ function renderTripBudget(budget) {
   }).join('');
   const sourceCount = (budget.sources || []).filter((source) => /^https?:\/\//i.test(String(source.url || ''))).length;
   const searchedDate = budget.searchedAt ? new Date(budget.searchedAt).toLocaleDateString() : '';
-  const notes = [
-    `Prices found for ${Number(budget.pricedActivityCount || 0)} of ${Number(budget.totalActivityCount || 0)} activities.`,
-    budget.missingActivityPriceCount ? `${budget.missingActivityPriceCount} activities have no price, so they are not in the total.` : '',
-    'Prices may change.',
-    searchedDate ? `Last checked ${searchedDate}.` : '',
-  ].filter(Boolean).map((note) => `<p class="itinerary-budget-note">${window.SidekickCore.escapeHtml(note)}</p>`).join('');
+  // One line: how many stops have prices, and when they were checked.
+  const missing = Number(budget.missingActivityPriceCount || 0);
+  const notes = `<p class="itinerary-budget-note">${window.SidekickCore.escapeHtml([
+    `Prices found for ${Number(budget.pricedActivityCount || 0)} of ${Number(budget.totalActivityCount || 0)} activities${missing ? ` (${missing} without a price aren’t in the total)` : ''}.`,
+    `Prices may change${searchedDate ? `; last checked ${searchedDate}` : ''}.`,
+  ].join(' '))}</p>`;
   const suggestionHtml = typeof budget.searchSuggestionHtml === 'string' ? budget.searchSuggestionHtml : '';
   const sourcesToggle = sourceHtml
     ? `<button class="itinerary-sources-toggle" type="button" aria-expanded="false" aria-controls="itinerary-budget-sources">Show sources (${sourceCount})</button><div class="itinerary-budget-sources" id="itinerary-budget-sources" hidden>${sourceHtml}</div>`
@@ -1467,7 +1467,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const name = window.SidekickCore.tripDisplayName?.(open) || 'this trip';
       const ok = await window.SidekickUI.confirm(open?.meta?.isDraft
         ? 'This unsaved itinerary will be discarded.'
-        : 'Every day and activity in this trip, and its reminders, will be removed. Your other planned trips stay. This cannot be undone.', { title: `Delete “${name}”?`, confirmText: 'Delete', tone: 'danger' });
+        : 'All days, activities and reminders of this trip will be removed. Your other trips stay. This can’t be undone.', { title: `Delete “${name}”?`, confirmText: 'Delete', tone: 'danger' });
       if (!ok) return;
       removeAllBtn.disabled = true;
       try {

@@ -850,7 +850,7 @@ select:not([multiple]):not([size]) {
     text-align: left;
     cursor: pointer;
     -webkit-tap-highlight-color: transparent;
-    transition: border-color .15s ease, background-color .15s ease, box-shadow .15s ease;
+    transition: border-color .15s ease, background-color .15s ease;
 }
 
 .sk-style-time svg {

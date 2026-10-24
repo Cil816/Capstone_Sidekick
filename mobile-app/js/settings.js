@@ -124,6 +124,15 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  // Help: replays the app tour on Home (js/tour.js).
+  const appTourBtn = document.getElementById('app-tour-btn');
+  if (appTourBtn) {
+    appTourBtn.addEventListener('click', () => {
+      try { localStorage.setItem('sidekick.tour.pending', '1'); } catch (error) {}
+      window.location.href = 'dashboard.html';
+    });
+  }
+
   const resetPrefsBtn = document.getElementById('reset-prefs-btn');
   if (resetPrefsBtn) {
     resetPrefsBtn.addEventListener('click', async () => {

@@ -1,11 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <!-- Release builds: HTTPS only. -->
+    <!-- HTTPS only: the app talks to https://app.sidekickph.me. Debug builds also allow
+         the local test backend (src/debug/res/xml/network_security_config.xml). -->
     <base-config cleartextTrafficPermitted="false" />
-    <!-- Local development only: the backend on this computer or the emulator host. -->
-    <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="true">10.0.2.2</domain>
-        <domain includeSubdomains="true">localhost</domain>
-        <domain includeSubdomains="true">127.0.0.1</domain>
-    </domain-config>
 </network-security-config>

@@ -3,7 +3,8 @@
    Alerts, Profile and Settings). Behaviour lives in js/tab-motion.js.
 
    - A soft teal gradient that fills the whole screen down to the bottom,
-     with a few slowly drifting light glows behind the content.
+     with a few still light glows behind the content (drawn once: nothing
+     moves in the background, so low-end phones stay smooth).
    - Pages slide toward the tab you are moving to: forward (to the right in
      the bottom bar) moves left, back moves right.
    ========================================================================== */
@@ -21,11 +22,10 @@
         linear-gradient(180deg, #d6f1f4 0%, #e5f6f8 32%, #eef9f9 58%, #e2f3f6 82%, #d5eef3 100%);
 }
 
-/* Soft glowing circles that drift very slowly. */
+/* Soft glowing circles, still (they used to drift, which kept the phone redrawing). */
 .sk-tab-bg span {
     position: absolute;
     border-radius: 50%;
-    will-change: transform;
 }
 
 .sk-tab-bg span:nth-child(1) {
@@ -34,7 +34,7 @@
     width: 70vmax;
     height: 70vmax;
     background: radial-gradient(circle, rgba(104, 221, 217, .30) 0%, rgba(104, 221, 217, 0) 62%);
-    animation: skGlowA 26s ease-in-out infinite alternate;
+    transform: translate(7vw, 5vh);
 }
 
 .sk-tab-bg span:nth-child(2) {
@@ -43,7 +43,7 @@
     width: 75vmax;
     height: 75vmax;
     background: radial-gradient(circle, rgba(44, 145, 176, .20) 0%, rgba(44, 145, 176, 0) 62%);
-    animation: skGlowB 32s ease-in-out infinite alternate;
+    transform: translate(-6vw, -4vh);
 }
 
 .sk-tab-bg span:nth-child(3) {
@@ -52,10 +52,10 @@
     width: 46vmax;
     height: 46vmax;
     background: radial-gradient(circle, rgba(255, 255, 255, .55) 0%, rgba(255, 255, 255, 0) 62%);
-    animation: skGlowC 38s ease-in-out infinite alternate;
+    transform: translate(-9vw, 3vh);
 }
 
-/* Tiny "dust" sparkles, drawn once and drifting together. */
+/* Tiny "dust" sparkles, drawn once. */
 .sk-tab-bg span:nth-child(4) {
     inset: -10%;
     border-radius: 0;
@@ -67,13 +67,9 @@
         radial-gradient(circle at 56% 88%, rgba(255, 255, 255, .8) 0 1.5px, transparent 2.5px),
         radial-gradient(circle at 20% 92%, rgba(255, 255, 255, .7) 0 2px, transparent 3px);
     opacity: .8;
-    animation: skDust 40s linear infinite alternate;
+    transform: translate(-1.5vw, -2vh);
 }
 
-@keyframes skGlowA { to { transform: translate(14vw, 10vh) scale(1.08); } }
-@keyframes skGlowB { to { transform: translate(-12vw, -8vh) scale(1.1); } }
-@keyframes skGlowC { to { transform: translate(-18vw, 6vh) scale(.9); } }
-@keyframes skDust  { to { transform: translate(-3vw, -4vh); } }
 
 /* The home hero blends into the full-screen gradient instead of ending in a band. */
 body[data-tab] .dashboard-hero {

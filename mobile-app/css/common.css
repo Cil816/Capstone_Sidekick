@@ -80,7 +80,7 @@ img, svg, video, canvas {
     font-weight: 500;
     cursor: pointer;
     /* Only these change on press/hover ("all" would also animate layout changes). */
-    transition: transform 0.2s ease, background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
+    transition: transform 0.2s ease, background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, opacity 0.2s ease;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -239,7 +239,7 @@ img, svg, video, canvas {
     border-radius: 12px;
     font-size: 16px;
     outline: none;
-    transition: border-color 0.2s, box-shadow 0.2s, background-color 0.2s;
+    transition: border-color 0.2s, background-color 0.2s;
 }
 
 .form-group input:focus {
@@ -284,7 +284,6 @@ img, svg, video, canvas {
     background: #ffffff;
     box-shadow: 0 10px 30px rgba(15,23,42,0.08);
     z-index: 10000;
-    backdrop-filter: blur(6px);
     border-top: 0;
     display: flex;
     align-items: center;
@@ -615,7 +614,7 @@ input:focus, select:focus, textarea:focus {
 
 .bottom-nav.overlay {
     border: 1px solid rgba(226, 234, 243, .92);
-    background: rgba(255, 255, 255, .9);
+    background: rgba(255, 255, 255, .97);
     box-shadow: 0 14px 36px rgba(49, 76, 105, .12);
 }
 
@@ -631,7 +630,7 @@ input:focus, select:focus, textarea:focus {
 .place-card:hover, .destination-card:hover, .settings-card:hover { border-color: #9bdde2; }
 
 .search-bar input, .chat-input-container input { background: rgba(245, 248, 252, .95); border: 1px solid transparent; }
-.chat-input-container { background: rgba(255, 255, 255, .86); border-color: var(--sidekick-line); backdrop-filter: blur(12px); }
+.chat-input-container { background: rgba(255, 255, 255, .96); border-color: var(--sidekick-line); }
 
 .auth-error { border-color: #f1cbd1; box-shadow: 0 8px 18px rgba(177, 94, 109, .08); }
 
