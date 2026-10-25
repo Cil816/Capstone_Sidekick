@@ -312,10 +312,14 @@ async function continueIncompleteReply(reply, prefs, state, email) {
 
 // Shown when the AI can't answer. An honest "try again" beats a canned reply
 // that ignores what the user actually asked.
+// When the AI can't answer: it has run out (turned off, paused by the budget, its quota
+// used up, or too many messages) and "needs to sleep", or something else went wrong.
+const CHAT_AI_RESTING_REPLY = "Sorry but i need to sleep, please lets do this again after rest.";
+const CHAT_ERROR_REPLY = "Sorry for the inconvenience, please check again later.";
 function fallbackReply(userText, state, prefs, error) {
-  const message = String(error?.message || "");
-  if (/too many/i.test(message)) return message;
-  return "I couldn’t reach Sidekick AI just now. Please send your message again in a moment.";
+  const status = Number(error?.statusCode);
+  if (status === 503 || status === 429 || /too many|rate limit|need to sleep/i.test(String(error?.message || ""))) return CHAT_AI_RESTING_REPLY;
+  return CHAT_ERROR_REPLY;
 }
 
 function buildPrefsForGenerator(prefs, state) {
@@ -1182,7 +1186,7 @@ async function sendMessage() {
           replyPlaces = sanitizeChatPlaces(backendReply.places);
           if (!replyPlaces.length) replyPlaces = sanitizeChatPlaces([selectedDestination]);
         } catch (error) {
-          reply = "I couldn’t retrieve current Google review details for this place. Please try again in a moment.";
+          reply = fallbackReply(userText, companionState, prefs, error);
         }
       } else if (pendingDraft && isDraftRejection(userText)) {
         // A draft that is never saved isn't recorded anywhere.
@@ -1198,7 +1202,7 @@ async function sendMessage() {
             ? `I couldn’t save it: ${error.message} Ask me for the trip on other dates.`
             : `I couldn’t save the itinerary right now, so I kept the draft here. ${window.SidekickCore.friendlyError(error, "Please try again in a moment.")}`;
         }
-      } else if ((tripPlan = window.SidekickChatPlanner?.handle(session.email, userText, Boolean(merged.signals.wantsGenerate)))) {
+      } else if ((tripPlan = await window.SidekickChatPlanner?.handle(session.email, userText, Boolean(merged.signals.wantsGenerate)))) {
         // Planning a trip: the chat asks for the trip's details (js/chat-planner.js), then
         // opens the Itinerary tab, which builds it the same way as its own button.
         reply = tripPlan.reply;

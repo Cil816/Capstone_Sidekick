@@ -103,6 +103,21 @@
         if (weekday) result.start = nextWeekday(WEEKDAYS.indexOf(weekday[2]), Boolean(weekday[1]));
       }
     }
+    // A year: "next year", "this year", or written out ("Nov 7, 2027"). A month on its own
+    // ("March next year", "in December") starts on the 1st of that month.
+    var nextYear = /\bnext\s+year\b/.test(lower);
+    var thisYear = /\bthis\s+year\b/.test(lower);
+    var yearMatch = lower.match(/\b(20\d{2})\b/);
+    var year = yearMatch ? Number(yearMatch[1]) : nextYear ? today().getFullYear() + 1 : thisYear ? today().getFullYear() : null;
+    if (!result.start && (year || /\b(in|on|this|next|by)\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/.test(lower))) {
+      var monthOnly = lower.match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b/);
+      if (monthOnly) result.start = monthDay(MONTHS.indexOf(monthOnly[1]), 1) || null;
+    }
+    if (year && result.start) {
+      var setYear = function (date) { return date ? new Date(year, date.getMonth(), date.getDate()) : date; };
+      result.start = setYear(result.start);
+      result.end = setYear(result.end);
+    }
     if (result.start && result.end && result.end < result.start) result.end = null;
     return result.start || result.days ? result : null;
   }
@@ -146,7 +161,13 @@
     if (!name && asked && !other && raw.length <= 60 && !/\d/.test(raw) && !/^(yes|no|ok|okay|sure|skip|none|idk|not sure)$/i.test(raw)) name = raw;
     // "to visit Taal" -> "Taal"; "the Masasa Beach" -> "Masasa Beach".
     name = name.replace(/^(?:visit|go to|travel to|explore|see|the)\s+/i, '').replace(/^(?:the)\s+/i, '');
+    // A date written right after the place ("Anilao Dec 20") is not part of its name.
+    name = name.replace(/\s+(?:on|in|this|next|from)?\s*(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?$/i, '')
+      .replace(/\s+(?:this|next)\s+(?:year|month|week|weekend)$/i, '').trim();
     if (/^(me|us|my|our|a|an|the|go|travel|trip|myself|ourselves|everyone|you)\b/i.test(name)) return '';
+    // "a trip for tomorrow" / "this weekend": a date, not a place.
+    if (name && (parseDates(name) || /^(tomorrow|today|tonight|weekend|later|soon|anywhere|somewhere)$/i.test(name)
+      || /^(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?$/i.test(name))) return '';
     return name;
   }
 
@@ -172,10 +193,11 @@
   function peso(value) { return '₱' + Number(value).toLocaleString('en-US'); }
 
   // Fills the plan from the message; `asked` is the question the traveler is answering.
+  // Places are only candidates here (destinationInput, originInput); verify() checks them.
   function absorb(plan, text) {
     var asked = plan.asked || '';
     var destination = parseDestination(text, asked === 'destination');
-    if (destination && (asked === 'destination' || !plan.destination)) plan.destination = destination;
+    if (destination && (asked === 'destination' || !plan.destination)) plan.destinationInput = destination;
 
     var dates = parseDates(text);
     if (dates) {
@@ -191,22 +213,136 @@
     var budget = parseBudget(text, asked === 'budget');
     if (budget) plan.budget = budget;
     var origin = parseOrigin(text);
-    if (origin) { plan.origin = origin; plan.originAsked = true; }
+    if (origin) { plan.originInput = origin; plan.originAsked = true; }
     if (asked === 'origin' && !origin) {
       var answer = String(text).trim();
       plan.originAsked = true;
-      if (!/^(skip|no|none|nope|not sure|idk|wala|later|n\/a)$/i.test(answer) && answer.length <= 80) plan.origin = answer;
+      if (!/^(skip|no|none|nope|not sure|idk|wala|later|n\/a)$/i.test(answer) && answer.length <= 80) plan.originInput = answer;
     }
   }
 
+  // ---- Checking places with Google Maps ----------------------------------------------------
+  // The first suggestion for the text, null when there is none, or undefined when the search
+  // itself failed (then the text is kept and the traveler checks it in the summary).
+  async function lookup(input, scope) {
+    try {
+      var data = await core().apiRequest('/api/maps/place-suggestions', { method: 'POST', body: JSON.stringify({ input: input, scope: scope }) });
+      return (data && data.suggestions && data.suggestions[0]) || null;
+    } catch (error) { return undefined; }
+  }
+  // The suggestion is about the place typed: a meaningful word of the text appears in it.
+  function matches(input, hit) {
+    var target = String((hit.text || '') + ' ' + (hit.name || '')).toLowerCase();
+    var all = String(input).toLowerCase().replace(/[^a-zñ0-9 ]/g, ' ').split(/\s+/).filter(function (w) { return w.length >= 3; });
+    var words = all.filter(function (w) { return !/^(the|beach|resort|city|town|batangas|province|island|falls|mount|near|area|philippines)$/.test(w); });
+    // "Batangas City": only common words, so all of them must appear.
+    if (!words.length) return all.length > 0 && all.every(function (w) { return target.indexOf(w) >= 0; });
+    return words.some(function (w) { return target.indexOf(w) >= 0; });
+  }
+  // A shop or landmark as the starting point (not a town): every word typed must be a whole
+  // word of its name and there must be at least two, so "qwerty" or a half-typed word that
+  // happens to start a business name is not taken as an address.
+  function exactWords(input, hit) {
+    var name = ' ' + String((hit.name || '') + ' ' + (hit.text || '')).toLowerCase().replace(/[^a-zñ0-9]+/g, ' ') + ' ';
+    var words = String(input).toLowerCase().replace(/[^a-zñ0-9]+/g, ' ').trim().split(' ').filter(Boolean);
+    return words.length >= 2 && words.every(function (w) { return name.indexOf(' ' + w + ' ') >= 0; });
+  }
+  // Checks the destination and starting address the traveler typed. Returns a question to ask
+  // again when one is not found, or ''.
+  async function verify(plan) {
+    if (plan.destinationInput) {
+      var input = plan.destinationInput;
+      plan.destinationInput = '';
+      var hit = await lookup(input, 'destination');
+      if (hit === undefined) plan.destination = input;
+      else if (hit && matches(input, hit)) plan.destination = hit.name || input;
+      else {
+        plan.destination = '';
+        plan.asked = 'destination';
+        return 'I couldn’t find “' + input + '” in Batangas. Which town or tourist spot do you mean? For example: Nasugbu, Anilao, Laiya, or Taal.';
+      }
+    }
+    if (plan.originInput) {
+      var from = plan.originInput;
+      plan.originInput = '';
+      var place = await lookup(from, 'origin');
+      if (place === undefined) plan.origin = from;
+      else if (place && matches(from, place) && (place.kind !== 'place' || exactWords(from, place))) plan.origin = place.text || place.name || from;
+      else {
+        plan.origin = '';
+        plan.originAsked = false;
+        plan.asked = 'origin';
+        return 'I couldn’t find “' + from + '”. Please type a town, city, or full address (for example, Lipa City), or say **skip**.';
+      }
+    }
+    return '';
+  }
+
+  // ---- Confirming the details ----------------------------------------------------------------
+  function isYes(text) {
+    return /^(yes|y|yep|yeah|yup|oo|opo|sige|correct|confirm(ed)?|tama|ok(ay)?|go|go ahead|sure|right|that'?s right|looks good|build it|proceed)\b/i.test(String(text || '').trim());
+  }
+  function isQuestion(text) {
+    var t = String(text || '').trim().toLowerCase();
+    return /\?\s*$/.test(t) || /^(what|whats|what's|how|where|which|who|why|is|are|can|could|do|does|any|ano|saan|paano|magkano|meron|may)\b/.test(t);
+  }
+  function isNo(text) { return /^(no|nope|nah|hindi|wrong|mali|not quite|not right)\b/i.test(String(text || '').trim()); }
+  function summary(plan) {
+    var start = fromIso(plan.startDate);
+    var end = addDays(start, plan.days - 1);
+    var when = plan.days === 1 ? fmt(start) : fmt(start) + ' – ' + fmt(end);
+    return 'Here are your trip details:\n\n'
+      + '- **Destination:** ' + plan.destination + '\n'
+      + '- **Dates:** ' + when + ' (' + plan.days + ' day' + (plan.days === 1 ? '' : 's') + ')\n'
+      + '- **Travelers:** ' + plan.travelers + '\n'
+      + '- **Budget:** ' + peso(plan.budget) + ' total\n'
+      + '- **Starting from:** ' + (plan.origin || 'not set') + '\n\n'
+      + 'Is this correct? Reply **yes** to open the planner, or tell me what to change (for example, “budget 8000” or “change the dates”).';
+  }
+  // The traveler's reply to the summary: apply what they changed, or clear the details they
+  // named so they are asked again. Returns true when something changed.
+  function applyCorrection(plan, text) {
+    plan.asked = '';
+    var before = JSON.stringify(plan);
+    var lower = String(text || '').toLowerCase();
+    var budget = parseBudget(text, false);
+    if (budget) plan.budget = budget;
+    var travelers = parseTravelers(text, false);
+    if (travelers) plan.travelers = travelers;
+    var dates = parseDates(text);
+    if (dates) {
+      if (dates.start) plan.startDate = iso(dates.start);
+      if (dates.end) plan.days = Math.round((dates.end - dates.start) / 86400000) + 1;
+      else if (dates.days) plan.days = dates.days;
+    }
+    var destination = parseDestination(text, false);
+    if (destination) plan.destinationInput = destination;
+    var origin = parseOrigin(text);
+    if (origin) plan.originInput = origin;
+    if (!destination && /\b(destination|place|where|location|spot)\b/.test(lower)) plan.destination = '';
+    if (!dates && /\b(date|dates|day|days|when|schedule)\b/.test(lower)) { plan.startDate = ''; plan.days = null; }
+    if (!travelers && /\b(travell?ers?|people|pax|persons?|group|companions?)\b/.test(lower)) plan.travelers = null;
+    if (!budget && /\b(budget|money|cost|pesos?|php)\b|₱/.test(lower)) plan.budget = null;
+    if (!origin && /\b(start|starting|address|origin|from)\b/.test(lower)) { plan.origin = ''; plan.originAsked = false; }
+    return JSON.stringify(plan) !== before;
+  }
+
+  // What to say when an answer wasn't understood.
+  var REASK = {
+    dates: 'When is the trip? For example, “Dec 5 to 6” or “next Saturday for 2 days”.',
+    days: 'How many days will you stay? Please type a number, for example “2”.',
+    travelers: 'How many travelers, including you? Please type a number, for example “2” or “barkada of 4”.',
+    budget: 'What is your total budget? Please type an amount in pesos, for example “5000” or “20k”.',
+  };
+
   // The next question, or null when the plan is complete.
   function nextQuestion(plan) {
-    if (!plan.destination) return { key: 'destination', text: 'Sure! Where in Batangas would you like to go? (for example Nasugbu, Anilao or Laiya)' };
-    if (!plan.startDate) return { key: 'dates', text: 'When is the trip, and for how many days? (for example "this weekend", "Nov 7 to 9" or "tomorrow for 2 days")' };
+    if (!plan.destination) return { key: 'destination', text: 'Sure! Where in Batangas would you like to go?' };
+    if (!plan.startDate) return { key: 'dates', text: 'When is the trip, and for how many days?' };
     if (!plan.days) return { key: 'days', text: 'How many days will you stay?' };
     if (!plan.travelers) return { key: 'travelers', text: 'How many travelers, including you?' };
-    if (!plan.budget) return { key: 'budget', text: 'What is your total budget for the whole group? (for example ₱10,000)' };
-    if (!plan.originAsked) return { key: 'origin', text: 'Where will you start from, for travel times? (a town or address, or say "skip")' };
+    if (!plan.budget) return { key: 'budget', text: 'What is your total budget for the whole group?' };
+    if (!plan.originAsked) return { key: 'origin', text: 'What is the address that you will start from?' };
     return null;
   }
 
@@ -235,10 +371,10 @@
     return true;
   }
 
-  // Handles a chat message. Returns { reply, openPlanner } when the planner answers it,
+  // Handles a chat message. Resolves to { reply, openPlanner } when the planner answers it,
   // or null when the message is for the normal chat.
   // start: the chat already knows this message asks for a trip plan.
-  function handle(email, text, start) {
+  async function handle(email, text, start) {
     var plan = load(email);
     if (!plan && !start && !wantsTripPlan(text)) return null;
     if (plan && wantsStop(text)) {
@@ -246,24 +382,46 @@
       return { reply: 'Okay, I stopped planning that trip. Ask me any time.' };
     }
     plan = plan || { destination: '', startDate: '', days: null, travelers: null, budget: null, origin: '', originAsked: false, asked: '' };
-    absorb(plan, text);
+
+    // A real question in the middle of planning ("what are good restaurants in Lipa?") that
+    // answers nothing is for the assistant: let the normal chat reply and keep the details.
+    var probe = JSON.parse(JSON.stringify(plan));
+    if (plan.asked && isQuestion(text)) {
+      // At the summary, a question never changes the details ("is it rainy in December?").
+      if (plan.asked === 'confirm' || (absorb(probe, text), JSON.stringify(probe) === JSON.stringify(plan))) return null;
+    }
+
+    if (plan.asked === 'confirm') {
+      // Answering the summary.
+      if (isYes(text)) {
+        if (!handoff(email, plan)) return { reply: 'I couldn’t open the planner right now. Please use the Itinerary tab.' };
+        return { reply: 'Great! Opening the planner so you can choose your trip style and hotel…', openPlanner: true };
+      }
+      var changed = applyCorrection(plan, text);
+      if (!changed) {
+        plan.asked = 'confirm';
+        save(email, plan);
+        return { reply: (isNo(text) ? 'No problem. ' : '') + 'Which detail should I change: the destination, dates, travelers, budget, or starting point?' };
+      }
+    } else {
+      absorb(plan, text);
+    }
+
+    var notFound = await verify(plan);
+    if (notFound) { save(email, plan); return { reply: notFound }; }
     var issue = problem(plan);
     var question = nextQuestion(plan);
     if (issue || question) {
+      // The same question again: the answer wasn't understood, so say what is expected.
+      var again = !issue && question && question.key === plan.asked && REASK[question.key];
       plan.asked = question ? question.key : plan.asked;
       save(email, plan);
-      return { reply: issue || question.text };
+      return { reply: issue || (again ? 'I didn’t quite get that. ' + REASK[question.key] : question.text) };
     }
-    var start = fromIso(plan.startDate);
-    var end = addDays(start, plan.days - 1);
-    if (!handoff(email, plan)) return { reply: 'I couldn’t open the planner right now. Please use the Itinerary tab.' };
-    var when = plan.days === 1 ? fmt(start) : fmt(start) + ' – ' + fmt(end);
-    return {
-      reply: 'Got it: **' + plan.destination + '**, ' + when + ' (' + plan.days + ' day' + (plan.days === 1 ? '' : 's') + '), '
-        + plan.travelers + ' traveler' + (plan.travelers === 1 ? '' : 's') + ', ' + peso(plan.budget) + ' total'
-        + (plan.origin ? ', starting from ' + plan.origin : '') + '.\n\nOpening the planner so you can choose your trip style and hotel…',
-      openPlanner: true,
-    };
+    // Every detail is in: show them and let the traveler confirm before anything is built.
+    plan.asked = 'confirm';
+    save(email, plan);
+    return { reply: summary(plan) };
   }
 
   window.SidekickChatPlanner = { handle: handle, isActive: function (email) { return Boolean(load(email)); } };
