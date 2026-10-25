@@ -254,8 +254,8 @@
       var input = plan.destinationInput;
       plan.destinationInput = '';
       var hit = await lookup(input, 'destination');
-      if (hit === undefined) plan.destination = input;
-      else if (hit && matches(input, hit)) plan.destination = hit.name || input;
+      if (hit === undefined) { plan.destination = input; plan.destinationPlaceId = ''; }
+      else if (hit && matches(input, hit)) { plan.destination = hit.name || input; plan.destinationPlaceId = hit.placeId || ''; }
       else {
         plan.destination = '';
         plan.asked = 'destination';
@@ -359,6 +359,8 @@
     try {
       sessionStorage.setItem(HANDOFF_KEY, JSON.stringify({
         destination: plan.destination,
+        // The exact Google place the traveler confirmed, so the builder uses that one.
+        placeId: plan.destinationPlaceId || '',
         startDate: iso(start),
         endDate: iso(end),
         budgetAmountPhp: plan.budget,

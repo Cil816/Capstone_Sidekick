@@ -470,8 +470,23 @@ function renderActivity(activity) {
       ${Number.isFinite(durationMinutes) && durationMinutes > 0 ? `<div class="activity-note">Plan about ${durationText} here.</div>` : ''}
       ${activityCostText ? `<div class="activity-cost-estimate">${window.SidekickCore.escapeHtml(activityCostText)}</div>` : ''}
       ${activity.note ? `<div class="activity-note">${window.SidekickCore.escapeHtml(activity.note)}</div>` : ''}
+      ${placeMapsLink(activity)}
     </div>
   `;
+}
+
+// "View on Google Maps": the place's own page (all its photos, reviews, hours, and directions),
+// with no map or photo requests billed to Sidekick.
+function placeMapsLink(activity) {
+  const name = String(activity?.location || '').trim();
+  const coords = lookupPlaceByActivity(activity);
+  const query = name || (coords ? `${coords.lat},${coords.lng}` : '');
+  if (!query) return '';
+  const url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`
+    + (activity.placeId ? `&query_place_id=${encodeURIComponent(activity.placeId)}` : '');
+  return `<a class="activity-maps-link" href="${window.SidekickCore.escapeHtml(url)}" target="_blank" rel="noopener noreferrer" style="display:inline-flex;align-items:center;gap:6px;margin-top:8px;font-weight:600;color:var(--sk-primary, #1f7a8c);text-decoration:none">`
+    + '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>'
+    + 'View on Google Maps</a>';
 }
 
 // ---- Meal and rest breaks between stops ------------------------------------------
@@ -920,6 +935,43 @@ async function enrichItineraryWithLiveRoutes(itineraryData, email) {
   }
 }
 
+// "Trip route" at the bottom of the itinerary: opens every stop, in order, as one route in
+// Google Maps (directions and live traffic, no map loads billed to Sidekick). A Google Maps
+// link takes up to 10 stops, so a longer trip gets one route per day instead.
+const MAPS_ROUTE_MAX_STOPS = 10;
+function mapsRouteUrl(stops) {
+  const point = (stop) => `${Number(stop.lat).toFixed(6)},${Number(stop.lng).toFixed(6)}`;
+  const middle = stops.slice(1, -1).map(point).join('|');
+  return `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(point(stops[0]))}`
+    + `&destination=${encodeURIComponent(point(stops[stops.length - 1]))}`
+    + (middle ? `&waypoints=${encodeURIComponent(middle)}` : '') + '&travelmode=driving';
+}
+function renderTripRoute(itinerary) {
+  const days = (itinerary || []).map((day) => ({
+    dayNumber: day.dayNumber,
+    stops: (day.activities || []).map(lookupPlaceByActivity).filter(Boolean),
+  }));
+  const allStops = days.flatMap((day) => day.stops);
+  if (allStops.length < 2) return '';
+  const link = (url, label) => `<a class="btn btn-outline" href="${window.SidekickCore.escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${window.SidekickCore.escapeHtml(label)}</a>`;
+  const buttons = allStops.length <= MAPS_ROUTE_MAX_STOPS
+    ? [link(mapsRouteUrl(allStops), 'Open full trip route')]
+    : days.filter((day) => day.stops.length >= 2)
+      .map((day) => link(mapsRouteUrl(day.stops.slice(0, MAPS_ROUTE_MAX_STOPS)), `Day ${day.dayNumber} route`));
+  if (!buttons.length) return '';
+  return `
+    <div class="day-section trip-route-section">
+      <div class="day-header">
+        <div class="day-info">
+          <h2>Trip route</h2>
+          <p>See ${allStops.length <= MAPS_ROUTE_MAX_STOPS ? 'all your stops' : 'each day’s stops'} in order on Google Maps, with directions and live traffic.</p>
+        </div>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:10px;padding:4px 16px 16px">${buttons.join('')}</div>
+    </div>
+  `;
+}
+
 function renderItinerary(itinerary, isDevelopmentMock = false) {
   const container = document.getElementById("itinerary-content");
   if (!container) return;
@@ -974,6 +1026,9 @@ function renderItinerary(itinerary, isDevelopmentMock = false) {
 
     container.insertAdjacentHTML("beforeend", dayHtml);
   }
+
+  const routeHtml = renderTripRoute(itinerary);
+  if (routeHtml) container.insertAdjacentHTML("beforeend", routeHtml);
 
   // Animate after layout is updated.
   [...container.querySelectorAll(".day-section")].forEach((el, idx) => {

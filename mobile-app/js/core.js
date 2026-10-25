@@ -3058,3 +3058,91 @@ if (document.readyState === "loading") {
 // NOTE: do not automatically create or sync itineraries on page load.
 // Itineraries should only be created when the user explicitly builds them.
 // Scheduling of existing reminders still occurs elsewhere on DOMContentLoaded.
+
+// ---- Chat replies that finish after leaving the Sidekick tab ------------------------------
+// chat.js saves the request it is waiting for (sidekick.chat.pending). The server keeps
+// working on it when the tab is left, so the other screens ask for the result, add it to the
+// chat history, and tell the traveler; the Sidekick tab picks it up itself through wait().
+(function () {
+  const KEY = 'sidekick.chat.pending';
+  const MAX_AGE_MS = 5 * 60 * 1000;
+  const LocalNotifications = window.Capacitor?.Plugins?.LocalNotifications || null;
+
+  function get() {
+    try {
+      const pending = JSON.parse(localStorage.getItem(KEY) || 'null');
+      return pending && pending.requestId && Date.now() - Number(pending.at) < MAX_AGE_MS ? pending : null;
+    } catch (e) { return null; }
+  }
+  function set(pending) {
+    try { if (pending) localStorage.setItem(KEY, JSON.stringify(pending)); else localStorage.removeItem(KEY); } catch (e) {}
+  }
+  // Resolves to the reply ({ status: 'done', reply, places, actions, ... }), { status: 'lost' }
+  // when the server no longer has it, or null when keepWaiting() says to stop.
+  async function wait(pending, keepWaiting = () => true) {
+    while (Date.now() - Number(pending.at) < MAX_AGE_MS) {
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+      if (!keepWaiting()) return null;
+      let data;
+      try {
+        data = await window.SidekickCore.apiRequest('/api/chat/result', { method: 'POST', body: JSON.stringify({ requestId: pending.requestId }) });
+      } catch (e) { continue; }
+      if (data?.status === 'done') return data;
+      if (data?.status !== 'pending') return { status: 'lost' };
+    }
+    return { status: 'lost' };
+  }
+
+  function banner(text) {
+    document.querySelector('.sk-chat-ready')?.remove();
+    const el = document.createElement('button');
+    el.type = 'button';
+    el.className = 'sk-toast sk-chat-ready';
+    el.style.cursor = 'pointer';
+    el.textContent = text;
+    el.addEventListener('click', () => { window.location.href = 'chat.html'; });
+    document.body.appendChild(el);
+    setTimeout(() => el.remove(), 8000);
+  }
+  async function notify(reply) {
+    banner('Sidekick replied. Tap to open the chat.');
+    if (!LocalNotifications || typeof LocalNotifications.schedule !== 'function') return;
+    try {
+      const permission = await LocalNotifications.checkPermissions();
+      if (permission?.display !== 'granted') return;
+      const preview = String(reply || '').replace(/[*_#`>]/g, '').replace(/\s+/g, ' ').trim();
+      await LocalNotifications.schedule({
+        notifications: [{
+          id: 900000 + Math.floor(Math.random() * 90000),
+          title: 'Sidekick replied',
+          body: preview.length > 120 ? `${preview.slice(0, 117)}…` : preview,
+          schedule: { at: new Date(Date.now() + 500) },
+          extra: { chatReply: true },
+        }],
+      });
+    } catch (e) {}
+  }
+
+  // Any screen except the Sidekick tab: finish a reply that is still being written.
+  async function resumeInBackground() {
+    if (/chat\.html$/i.test(window.location.pathname)) return;
+    const pending = get();
+    const session = window.SidekickCore?.getAuthSession?.();
+    if (!pending || !session?.email || pending.email !== session.email) return;
+    const data = await wait(pending, () => get()?.requestId === pending.requestId);
+    if (!data || get()?.requestId !== pending.requestId) return;
+    set(null);
+    const reply = data.status === 'done' && String(data.reply || data.error || '').trim()
+      ? String(data.reply || data.error).trim()
+      : 'Sorry for the inconvenience, please check again later.';
+    const map = window.SidekickCore.getChatByEmail();
+    const places = Array.isArray(data.places) ? data.places : [];
+    map[session.email] = (map[session.email] || []).concat([{ role: 'ai', content: reply, ts: Date.now(), ...(places.length ? { places } : {}) }]);
+    window.SidekickCore.setChatByEmail(map);
+    notify(reply);
+  }
+
+  if (window.SidekickCore) window.SidekickCore.chatPending = { get, set, wait };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => { void resumeInBackground(); });
+  else void resumeInBackground();
+})();

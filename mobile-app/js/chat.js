@@ -278,6 +278,11 @@ async function askSidekickBackend(history, prefs, state, userText, kind = "messa
     },
   };
 
+  // The main reply can finish in the background if the traveler leaves this tab.
+  if (kind === "message" && currentRequestId) {
+    payload.requestId = currentRequestId;
+    window.SidekickCore.chatPending?.set({ email: payload.email, requestId: currentRequestId, at: Date.now() });
+  }
   const data = await window.SidekickCore.apiRequest("/api/chat", {
     method: "POST",
     body: JSON.stringify(payload),
@@ -1097,6 +1102,43 @@ document.addEventListener("keydown", (event) => {
 let isSending = false;
 // The reply being written: its requests stop when the traveler taps Stop.
 let activeReply = null;
+// The server keeps writing a reply when the traveler leaves this tab (currentRequestId);
+// another screen or the next visit here picks it up (SidekickCore.chatPending in core.js).
+let currentRequestId = "";
+let pageLeaving = false;
+window.addEventListener("pagehide", () => { pageLeaving = true; });
+function clearOwnPending() {
+  const pending = window.SidekickCore.chatPending?.get();
+  if (pending && pending.requestId === currentRequestId) window.SidekickCore.chatPending.set(null);
+}
+
+// Back on this tab while a reply is still being written: wait for it here.
+async function resumeReply(email, waiting) {
+  const thisReply = new AbortController();
+  activeReply = thisReply;
+  isSending = true;
+  currentRequestId = waiting.requestId;
+  replyStartedAt = Date.now();
+  setSendButtonMode(true);
+  showTypingIndicator();
+  scrollToBottom();
+  const data = await window.SidekickCore.chatPending.wait(waiting, () => activeReply === thisReply && !thisReply.signal.aborted);
+  if (!data || thisReply.signal.aborted || pageLeaving) return;
+  clearOwnPending();
+  removeTypingIndicator();
+  let reply = data.status === "done" ? String(data.reply || data.error || "").trim() : "";
+  if (!reply) reply = "Sorry for the inconvenience, please check again later.";
+  const places = data.status === "done" ? sanitizeChatPlaces(data.places) : [];
+  if (data.status === "done" && Array.isArray(data.actions)) {
+    const actionSummary = applyAgentActions(email, data.actions);
+    if (actionSummary.length) reply = `${reply}\n\n${actionSummary.join("\n")}`;
+  }
+  appendMessageToDom("ai", reply, Date.now(), true, places);
+  scrollToBottom();
+  activeReply = null;
+  isSending = false;
+  setSendButtonMode(false);
+}
 
 const SEND_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>';
 const STOP_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2.5" fill="currentColor"></rect></svg>';
@@ -1115,6 +1157,11 @@ function setSendButtonMode(stop) {
 function stopReply() {
   if (!activeReply || activeReply.signal.aborted) return;
   activeReply.abort();
+  // The server keeps a reply going when the request closes, so tell it to stop.
+  if (currentRequestId) {
+    window.SidekickCore.apiRequest("/api/chat/cancel", { method: "POST", body: JSON.stringify({ requestId: currentRequestId }) }).catch(() => {});
+    clearOwnPending();
+  }
   activeReply = null;
   isSending = false;
   removeTypingIndicator();
@@ -1158,6 +1205,7 @@ async function sendMessage() {
   isSending = true;
   const thisReply = new AbortController();
   activeReply = thisReply;
+  currentRequestId = `c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
   replyStartedAt = Date.now();
   setSendButtonMode(true);
 
@@ -1221,15 +1269,19 @@ async function sendMessage() {
       }
     }
 
+    // Leaving the tab: the server finishes the reply and another screen shows it.
+    if (pageLeaving) return;
     // Stopped: the "You stopped this reply." note is already shown.
     if (thisReply.signal.aborted) return;
+    clearOwnPending();
     removeTypingIndicator();
     appendMessageToDom("ai", reply, Date.now(), true, replyPlaces);
     scrollToBottom();
     // The trip's details are complete: give a moment to read the summary, then open the planner.
     if (tripPlan?.openPlanner) window.setTimeout(() => { window.location.href = "itinerary.html"; }, 1800);
   } catch (e) {
-    if (thisReply.signal.aborted) return;
+    if (pageLeaving || thisReply.signal.aborted) return;
+    clearOwnPending();
     removeTypingIndicator();
     appendMessageToDom("ai", "I hit an issue while planning. Please try again.", Date.now(), false);
     scrollToBottom();
@@ -1275,6 +1327,10 @@ document.addEventListener("DOMContentLoaded", () => {
     const input = getInputEl();
     if (input) input.value = pendingMessage;
     window.setTimeout(() => sendMessage(), 0);
+  } else {
+    // A reply still being written from before the traveler left this tab.
+    const waiting = window.SidekickCore.chatPending?.get();
+    if (waiting && waiting.email === session.email) void resumeReply(session.email, waiting);
   }
 });
 
