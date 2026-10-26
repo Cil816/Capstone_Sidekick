@@ -588,6 +588,8 @@
 .budget-picker-warn { color: #b45309 !important; }
 .budget-picker-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; margin-top: 12px; }
 .budget-picker-actions:empty { display: none; }
+.budget-picker-actions.is-pair { flex-wrap: nowrap; }
+.budget-picker-actions.is-pair .btn { flex: 1 1 0; }
 .budget-picker-actions .btn:disabled { opacity: .5; cursor: not-allowed; }
 .day-add-row { display: flex; flex-wrap: wrap; gap: 6px; }
 

@@ -53,7 +53,7 @@
         ...(result.passwordless ? { passwordless: true } : {}),
       });
       core().recordAccountForEmail(email, result.user.user_id, result.newAccount ? { newAccount: true } : undefined);
-      const destination = core().getPreferences() ? "dashboard.html" : "onboarding.html";
+      const destination = (await core().restorePreferencesFromAccount()) ? "dashboard.html" : "onboarding.html";
       window.location.href = destination;
     } catch (err) {
       exchanging = false;

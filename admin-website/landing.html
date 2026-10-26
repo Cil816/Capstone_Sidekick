@@ -112,6 +112,10 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
           Download for Android
         </a>
+        <a class="lp-manual-link" href="assets/Sidekick_User_Manual.pdf" target="_blank" rel="noopener" data-manual-open>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 4h6a4 4 0 0 1 4 4v13a3 3 0 0 0-3-3H2z"/><path d="M22 4h-6a4 4 0 0 0-4 4v13a3 3 0 0 1 3-3h7z"/></svg>
+          Read the user manual
+        </a>
       </section>
 
       <section id="faq" class="lp-section lp-soft" aria-labelledby="lp-faq-title">
@@ -128,6 +132,22 @@
           <details>
             <summary>Why does my phone warn me when I install it?</summary>
             <p>Sidekick is not on the Play Store yet, so Android asks you to allow installing apps from your browser. You only need to allow it once; see <a href="#install">Installing on Android</a>.</p>
+          </details>
+          <details>
+            <summary>I didn’t get the 6-digit code. What should I do?</summary>
+            <p>Check your spam folder and that your email is typed correctly, then tap <b>Didn’t receive the code?</b> to get a new one.</p>
+          </details>
+          <details>
+            <summary>Why don’t routes start from my location?</summary>
+            <p>Tap <b>Use my current location</b> and allow location access when Android asks. You can also type a starting address.</p>
+          </details>
+          <details>
+            <summary>Why am I not getting reminders?</summary>
+            <p>In Settings, make sure <b>Enable reminders</b> is on and tap <b>Send a test notification</b>. Also allow notifications for Sidekick in your phone’s settings. Reminders start only after you save your itinerary.</p>
+          </details>
+          <details>
+            <summary>What if my itinerary isn’t loading?</summary>
+            <p>Check your internet connection, keep the app open while it builds, and try again.</p>
           </details>
           <details>
             <summary>Does it cover places outside Batangas?</summary>
@@ -147,7 +167,7 @@
           </details>
           <details>
             <summary>Do I need an internet connection?</summary>
-            <p>Yes. Planning trips, chatting with the assistant, and loading maps and places all need the internet.</p>
+            <p>Yes, for planning trips, chatting with the assistant, and loading maps and places. Saved itineraries and reminders still open without the internet.</p>
           </details>
           <details>
             <summary>Can I sign in with Google?</summary>
@@ -170,6 +190,7 @@
         <a href="/legal/privacy">Privacy Policy</a>
         <a href="/legal/terms">Terms</a>
         <a href="/legal/cookies">Cookie &amp; Storage Notice</a>
+        <a href="assets/Sidekick_User_Manual.pdf" target="_blank" rel="noopener" data-manual-open>User Manual</a>
         <a href="mailto:s2023101800@firstasia.edu.ph" data-contact-open>Contact</a>
         <a class="lp-admin-link" href="admin-login.html">Admin</a>
       </nav>
@@ -200,6 +221,17 @@
         </div>
         <p class="lp-dialog-note">We use your email only to reply to you. See our <a href="/legal/privacy">Privacy Policy</a>.</p>
       </form>
+    </dialog>
+    <dialog id="lp-manual" class="lp-dialog lp-manual-dialog" aria-labelledby="lp-manual-title">
+      <div class="lp-dialog-head">
+        <h2 id="lp-manual-title">User Manual</h2>
+        <button type="button" class="lp-dialog-close" data-manual-close aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+      </div>
+      <iframe id="lp-manual-frame" class="lp-manual-frame" title="Sidekick User Manual"></iframe>
+      <div class="lp-dialog-actions">
+        <a class="lp-btn-secondary" href="assets/Sidekick_User_Manual.pdf" target="_blank" rel="noopener">Open in a new tab</a>
+        <a class="lp-btn-primary" href="assets/Sidekick_User_Manual.pdf" download="Sidekick_User_Manual.pdf">Download PDF</a>
+      </div>
     </dialog>
     <script src="js/landing.js"></script>
   </body>

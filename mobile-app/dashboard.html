@@ -37,7 +37,7 @@
                         <circle cx="11" cy="11" r="8"></circle>
                         <path d="m21 21-4.35-4.35"></path>
                     </svg>
-                    <input type="text" id="destination-search" placeholder="Search places in Batangas..." aria-label="Search destinations" autocomplete="off" aria-autocomplete="list" aria-controls="destination-search-suggestions" aria-expanded="false">
+                    <input type="text" id="destination-search" placeholder="Search places" aria-label="Search destinations" autocomplete="off" aria-autocomplete="list" aria-controls="destination-search-suggestions" aria-expanded="false">
                 </div>
                 <div id="destination-search-suggestions" class="destination-search-suggestions" role="listbox" aria-label="Destination suggestions" hidden></div>
                 <p id="destination-search-status" class="destination-search-status" aria-live="polite"></p>
@@ -76,7 +76,7 @@
                     <div class="destination-route-controls">
                         <label for="destination-origin">Starting location</label>
                         <div class="destination-origin-search">
-                            <input id="destination-origin" type="text" placeholder="Search starting location" autocomplete="off" aria-autocomplete="list" aria-controls="destination-origin-results" aria-describedby="destination-origin-status" />
+                            <input id="destination-origin" type="text" autocomplete="off" aria-autocomplete="list" aria-controls="destination-origin-results" aria-describedby="destination-origin-status" />
                         </div>
                         <button id="destination-use-location" class="destination-use-location" type="button">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3"></path><circle cx="12" cy="12" r="7"></circle></svg>
@@ -111,7 +111,7 @@
                         </div>
                         <div class="destination-plan-field">
                             <label for="destination-plan-budget">Total budget (PHP)</label>
-                            <input id="destination-plan-budget" type="number" min="1" step="1" inputmode="numeric" placeholder="Enter your budget" required />
+                            <input id="destination-plan-budget" type="number" min="1" step="1" inputmode="numeric" required />
                         </div>
                         <div class="destination-plan-field">
                             <label for="destination-plan-travelers">Travelers</label>

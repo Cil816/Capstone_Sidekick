@@ -28,6 +28,12 @@
     } catch (error) { /* not in the phone app */ }
   }
   apply(current());
+  // No saved choice yet: keep following the phone's setting if it changes while open.
+  try {
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function () {
+      if (saved() !== 'dark' && saved() !== 'light') apply(current());
+    });
+  } catch (error) { /* older WebView */ }
   // Page name (dashboard, profile, ...) so css/dark.css can match each page's own styles.
   if (!root.getAttribute('data-page')) {
     var file = (location.pathname.split('/').pop() || 'index').replace(/\.html$/, '');

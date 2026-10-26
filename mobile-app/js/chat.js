@@ -288,8 +288,24 @@ async function askSidekickBackend(history, prefs, state, userText, kind = "messa
     body: JSON.stringify(payload),
     signal: activeReply?.signal,
   });
+  if (data?.misuseWarning) showMisuseWarning(payload.email);
 
   return data;
+}
+
+// The message was flagged as abusive (insults, threats, profanity). The first time is a
+// warning; after that the popup says the account can be suspended.
+function showMisuseWarning(email) {
+  const key = `sidekick.misuseWarnings.${String(email || "").toLowerCase()}`;
+  let count = 0;
+  try { count = Number(localStorage.getItem(key)) || 0; localStorage.setItem(key, String(count + 1)); } catch (error) { /* still warn */ }
+  const first = count === 0;
+  void window.SidekickUI?.alert(
+    first
+      ? "Abusive language, insults and threats aren't tolerated on Sidekick. This message was flagged and our team can review it. Please keep the chat respectful."
+      : "This is another flagged message. Repeated abuse can get your account suspended. Please keep the chat respectful.",
+    { title: first ? "Please keep it respectful" : "Final warning", tone: "danger", icon: "info", confirmText: "I understand" },
+  );
 }
 
 async function continueIncompleteReply(reply, prefs, state, email) {
@@ -500,7 +516,7 @@ async function generateItineraryFromCompanion(email, prefs, state) {
 }
 
 function formatTime(ts) {
-  return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return new Date(ts).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 }
 
 function getMessagesEl() {
@@ -964,7 +980,7 @@ function archiveCurrentChat(email) {
 function archiveDateText(ts) {
   const date = new Date(Number(ts));
   return Number.isFinite(date.getTime())
-    ? date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) + " · " + date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
+    ? date.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }) + " · " + date.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })
     : "";
 }
 
@@ -1318,6 +1334,8 @@ document.addEventListener("DOMContentLoaded", () => {
     scrollSaveTimer = setTimeout(saveChatScrollPosition, 150);
   }, { passive: true });
   window.addEventListener("pagehide", saveChatScrollPosition);
+  // Typing: once the keyboard has opened, keep the latest message in view above the text box.
+  getInputEl()?.addEventListener("focus", () => { window.setTimeout(scrollToBottom, 350); });
   let pendingMessage = "";
   try {
     pendingMessage = String(sessionStorage.getItem(PENDING_CHAT_MESSAGE_KEY) || "").trim();

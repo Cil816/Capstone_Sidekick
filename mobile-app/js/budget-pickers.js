@@ -97,9 +97,10 @@
     $("budget-picker-body").innerHTML = html;
   }
 
-  function setActions(buttons) {
+  function setActions(buttons, { pair = false } = {}) {
     const wrap = $("budget-picker-actions");
     wrap.replaceChildren();
+    wrap.classList.toggle("is-pair", pair);
     buttons.forEach(({ label, kind = "outline", onClick, id }) => {
       const button = document.createElement("button");
       button.type = "button";
@@ -325,9 +326,9 @@
       onClose = () => finish({ status: "cancel" });
       setBody(`<p class="budget-picker-text">Pick a hotel near <strong>${esc(destination)}</strong> before building? Only hotels within your budget are shown.</p>`);
       setActions([
-        { label: "No, build without a hotel", onClick: () => { onClose = null; close(); finish({ status: "skip" }); } },
-        { label: "Yes, show hotels", kind: "primary", onClick: () => { void loadHotels(); } },
-      ]);
+        { label: "No", onClick: () => { onClose = null; close(); finish({ status: "skip" }); } },
+        { label: "Yes", kind: "primary", onClick: () => { void loadHotels(); } },
+      ], { pair: true });
 
       let selected = null;
       async function loadHotels() {

@@ -1,3 +1,28 @@
+// Landing page: the User Manual pop-up. It shows the PDF inside the page where the browser
+// can (computers); phones, which can't show a PDF inside a page, open it directly instead.
+(function () {
+  'use strict';
+  var dialog = document.getElementById('lp-manual');
+  var frame = document.getElementById('lp-manual-frame');
+  if (!dialog || !frame || typeof dialog.showModal !== 'function') return;
+  var canShowPdf = navigator.pdfViewerEnabled === true && !window.matchMedia('(max-width: 700px)').matches;
+  document.querySelectorAll('[data-manual-open]').forEach(function (link) {
+    link.addEventListener('click', function (event) {
+      if (!canShowPdf) return; // the link opens the PDF in a new tab
+      event.preventDefault();
+      // Loaded only when first opened: the file is several megabytes.
+      if (!frame.getAttribute('src')) frame.setAttribute('src', link.getAttribute('href'));
+      dialog.showModal();
+    });
+  });
+  dialog.querySelectorAll('[data-manual-close]').forEach(function (button) {
+    button.addEventListener('click', function () { dialog.close(); });
+  });
+  dialog.addEventListener('click', function (event) {
+    if (event.target === dialog) dialog.close();
+  });
+})();
+
 // Landing page: the Contact pop-up. The footer's Contact link opens it (without
 // JavaScript the link still opens the visitor's email app), and the form sends the
 // message through POST /api/contact.

@@ -28,6 +28,13 @@
 
   apply(current());
 
+  // No saved choice yet: keep following the computer's setting if it changes while open.
+  try {
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function () {
+      if (saved() !== 'dark' && saved() !== 'light') apply(current());
+    });
+  } catch (error) { /* older browser */ }
+
   document.addEventListener('DOMContentLoaded', function () {
     apply(current());
     document.addEventListener('click', function (event) {

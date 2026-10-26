@@ -466,3 +466,16 @@ html[data-theme="dark"] .chat-menu-list button.is-danger, html[data-theme="dark"
 .perf-lite .chat-header {
     backdrop-filter: none;
 }
+
+/* ---- Keyboard open (phones) -----------------------------------------------------------
+   The bottom tabs are hidden (common.css), so the text box and the send/stop button sit
+   just above the keyboard. --keyboard-offset is only set in phone browsers, where the
+   keyboard covers the page instead of shrinking it. */
+@media (max-width: 599px) {
+    html.keyboard-open .chat-input-container {
+        bottom: calc(10px + var(--keyboard-offset, 0px));
+    }
+    html.keyboard-open .chat-messages {
+        padding-bottom: calc(76px + var(--keyboard-offset, 0px));
+    }
+}

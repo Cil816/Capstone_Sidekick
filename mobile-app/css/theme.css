@@ -995,3 +995,21 @@ select:not([multiple]):not([size]) {
 .sk-style-time:disabled svg {
     color: #8aa0b3;
 }
+
+/* Long-form date display over native date inputs (see core.js). */
+.sk-date-wrap { position: relative; display: block; width: 100%; }
+/* !important: page and dark-theme input colours would otherwise show the phone's own
+   numeric text under the long date. */
+.sk-date-wrap > input { width: 100%; color: transparent !important; -webkit-text-fill-color: transparent !important; caret-color: transparent; }
+.sk-date-wrap > input::-webkit-datetime-edit,
+.sk-date-wrap > input::-webkit-datetime-edit-fields-wrapper,
+.sk-date-wrap > input::-webkit-datetime-edit-text,
+.sk-date-wrap > input::-webkit-datetime-edit-month-field,
+.sk-date-wrap > input::-webkit-datetime-edit-day-field,
+.sk-date-wrap > input::-webkit-datetime-edit-year-field,
+.sk-date-wrap > input::-webkit-datetime-edit-hour-field,
+.sk-date-wrap > input::-webkit-datetime-edit-minute-field,
+.sk-date-wrap > input::-webkit-datetime-edit-ampm-field { color: transparent !important; -webkit-text-fill-color: transparent !important; background: transparent !important; }
+.sk-date-text { position: absolute; left: 10px; right: 40px; top: 50%; transform: translateY(-50%); pointer-events: none; color: var(--text, #0f172a); font: inherit; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sk-date-wrap.is-empty .sk-date-text { opacity: .55; }
+html[data-theme="dark"] .sk-date-text { color: #e5e7eb; }

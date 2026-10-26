@@ -2,6 +2,24 @@
 let _selectedPlace = null;
 // Budget-check key of a trip that Home already checked (see the Build handler).
 let preCheckedBudgetKey = '';
+// Places the traveler asked about in the chat (for example "Galleria Taal"), included in the next build.
+let _chatMustSee = [];
+// A trip handed over from Home or the chat (sessionStorage), waiting for the traveler to answer
+// "Build your trip?".
+const PENDING_BUILD_KEY = 'sidekick.itinerary.pendingBuild';
+let _pendingBuildWaiting = false;
+// The weekly build limit was reached (the number is not shown to travelers).
+function showBuildLimit(message) {
+  return window.SidekickUI.alert(String(message || '').trim() || 'You’ve reached the Itinerary Builder limit for now. You can still view, edit and save your trips. Please try again later.', {
+    title: 'Itinerary Builder limit reached', icon: 'info', confirmText: 'OK',
+  });
+}
+
+function clearPendingBuild() {
+  if (!_pendingBuildWaiting) return;
+  _pendingBuildWaiting = false;
+  try { sessionStorage.removeItem(PENDING_BUILD_KEY); } catch (error) {}
+}
 let _destinationMarker = null;
 let _itineraryMap = null;
 let _itineraryMapMarkers = [];
@@ -426,7 +444,7 @@ function svgPin() {
 }
 
 function renderActivity(activity) {
-  const timeText = activity?.dueAt ? new Date(Number(activity.dueAt)).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : window.SidekickCore.escapeHtml(activity.timeLabel || '');
+  const timeText = activity?.dueAt ? new Date(Number(activity.dueAt)).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) : window.SidekickCore.escapeHtml(activity.timeLabel || '');
   const distance = typeof activity?.travelDistanceKm === 'number' ? `${activity.travelDistanceKm.toFixed(1)} km from the last stop` : '';
   const mins = typeof activity?.travelMinutes === 'number' ? `about ${Math.round(activity.travelMinutes)} min travel` : '';
   const routeSummary = [distance, mins, activity.routeNoneKey
@@ -641,7 +659,7 @@ function renderTripBudget(budget) {
     return `<a href="${window.SidekickCore.escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${window.SidekickCore.escapeHtml(source.title || 'Price source')}</a>`;
   }).join('');
   const sourceCount = (budget.sources || []).filter((source) => /^https?:\/\//i.test(String(source.url || ''))).length;
-  const searchedDate = budget.searchedAt ? new Date(budget.searchedAt).toLocaleDateString() : '';
+  const searchedDate = budget.searchedAt ? new Date(budget.searchedAt).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }) : '';
   // One line: how many stops have prices, and when they were checked.
   const missing = Number(budget.missingActivityPriceCount || 0);
   const notes = `<p class="itinerary-budget-note">${window.SidekickCore.escapeHtml([
@@ -1076,8 +1094,8 @@ function updateHeaderDate(prefs, itineraryData) {
   const startDate = normalizedDates?.start || new Date();
   const endDate = normalizedDates?.end || startDate;
   const dayCount = normalizedDates?.durationDays || 1;
-  const format = { month: "short", day: "numeric", year: "numeric" };
-  const range = `${startDate.toLocaleDateString([], format)} - ${endDate.toLocaleDateString([], format)}`;
+  const format = { month: "long", day: "numeric", year: "numeric" };
+  const range = `${startDate.toLocaleDateString("en-US", format)} - ${endDate.toLocaleDateString("en-US", format)}`;
   const extra = dayCount === 1 ? "Day" : "Days";
   dateEl.textContent = `${range} • ${dayCount} ${extra}`;
 }
@@ -1112,8 +1130,8 @@ function attachAddActivityHandler(itineraryData, prefs, email, startDate) {
       confirmText: "Add activity",
       fields: [
         { name: "day", label: "Day", type: "select", value: "1", options: Array.from({ length: dayCount }, (_, i) => [String(i + 1), `Day ${i + 1}`]) },
-        { name: "title", label: "What will you do?", placeholder: "e.g. Sunset at the view deck", maxLength: 120 },
-        { name: "location", label: "Where is it?", placeholder: "e.g. Kibungan View Deck", value: picked?.name || "", maxLength: 160 },
+        { name: "title", label: "What will you do?", placeholder: "e.g. Sunset viewing", maxLength: 120 },
+        { name: "location", label: "Where is it?", placeholder: "e.g. View deck", value: picked?.name || "", maxLength: 160 },
         { name: "time", label: "Time (optional)", type: "time", hint: "Leave empty to use the next open time slot." },
         ...(picked ? [{ name: "attach", label: `Pin it to "${picked.name || "the selected place"}" on the map?`, type: "select", value: "yes", options: [["yes", "Yes, use that place"], ["no", "No"]] }] : []),
       ],
@@ -1606,7 +1624,8 @@ document.addEventListener("DOMContentLoaded", () => {
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
     if (tripDates.start < todayStart) {
-      const shown = tripDates.start.toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' });
+      const shown = tripDates.start.toLocaleDateString("en-US", { month: "long", day: 'numeric', year: 'numeric' });
+      clearPendingBuild();
       await window.SidekickUI.alert(`${shown} has already passed. Choose today or a later date to start your trip.`, { title: 'Start date has passed', confirmText: 'Change date' });
       if (startInput) startInput.min = formatDateInput(todayStart);
       startInput?.focus();
@@ -1632,6 +1651,7 @@ document.addEventListener("DOMContentLoaded", () => {
     // Dates already taken by a planned trip can't be used for another one.
     const clash = window.SidekickCore.findOverlappingTrip?.(email, formatDateInput(startVal), formatDateInput(endVal));
     if (clash) {
+      clearPendingBuild();
       await window.SidekickUI.alert(window.SidekickCore.tripOverlapMessage(clash), { title: 'Those dates are taken', confirmText: 'Change dates' });
       startInput?.focus();
       return;
@@ -1642,14 +1662,14 @@ document.addEventListener("DOMContentLoaded", () => {
       const replace = await window.SidekickUI.confirm(`You haven’t saved “${window.SidekickCore.tripDisplayName(unsaved)}” yet. Building a new itinerary will replace it.`, {
         title: 'Replace your unsaved itinerary?', confirmText: 'Build new one', cancelText: 'Keep it',
       });
-      if (!replace) return;
+      if (!replace) { clearPendingBuild(); return; }
     }
     const originText = String(originInput?.value || '').trim().slice(0, 180);
     const travelers = window.SidekickCore.normalizeTravelers?.(travelersInput?.value) || 1;
     const groupText = travelers > 1 ? ` for ${travelers} travelers` : '';
     let budgetLabel = `PHP ${rawBudget.toLocaleString()} total${groupText}`;
     const tempPrefs = { ...prefs, preferredPlaces: [destinationName], budget: budgetLabel, budgetAmountPhp: rawBudget, travelers, transportation: 'DRIVE' };
-    const shortDate = (date) => date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+    const shortDate = (date) => date.toLocaleDateString("en-US", { weekday: 'short', month: "long", day: 'numeric', year: 'numeric' });
     const confirmed = await window.SidekickUI.confirm('', {
       title: `Build your ${durationDays}-day trip?`,
       confirmText: 'Build itinerary',
@@ -1663,7 +1683,19 @@ document.addEventListener("DOMContentLoaded", () => {
         ...(originText ? [['Starting from', originText]] : []),
       ],
     });
+    // The traveler answered: a trip handed over from Home or the chat is no longer waiting.
+    clearPendingBuild();
     if (!confirmed) return;
+
+    // Builds are limited per week. Asked before the trip style and hotel steps; if this
+    // check can't be made, the build goes on (the server checks again).
+    try {
+      const limit = await window.SidekickCore.apiRequest('/api/itinerary/build-limit');
+      if (limit?.limited) {
+        await showBuildLimit(limit.message);
+        return;
+      }
+    } catch (error) { /* checked again when generating */ }
 
     // Check the budget against the cheapest restaurants and hotels found before
     // generating anything. Skipped when Home already checked this exact trip.
@@ -1773,7 +1805,7 @@ document.addEventListener("DOMContentLoaded", () => {
           ...(buildProgress ? { progressId: buildProgress.id } : {}),
           message: `Plan a ${durationDays}-day trip to ${destinationName}${groupText}. Total budget: PHP ${rawBudget}. Keep the full trip within this budget when possible. Start date: ${formatDateInput(startVal)}. End date: ${formatDateInput(endVal)}.`,
           selectedDestination: { name: destinationName, placeId: destinationInput?.dataset.placeId || '' },
-          profile: { ...tempPrefs, startDate: formatDateInput(startVal), endDate: formatDateInput(endVal), durationDays, ...(chosenStay ? { stay: chosenStay } : {}), ...(tripStyle ? { tripStyle } : {}), ...(Number.isFinite(firstDayStart) ? { firstDayStartMinute: firstDayStart } : {}), clientToday: formatDateInput(new Date()) },
+          profile: { ...tempPrefs, startDate: formatDateInput(startVal), endDate: formatDateInput(endVal), durationDays, ...(chosenStay ? { stay: chosenStay } : {}), ...(tripStyle ? { tripStyle } : {}), ...(Number.isFinite(firstDayStart) ? { firstDayStartMinute: firstDayStart } : {}), ...(_chatMustSee.length ? { mustSee: _chatMustSee } : {}), clientToday: formatDateInput(new Date()) },
           origin: originText ? { name: originText, address: originText } : null,
         }),
       });
@@ -1821,7 +1853,8 @@ document.addEventListener("DOMContentLoaded", () => {
     } catch (error) {
       await buildProgress?.finish(false);
       window.SidekickUI?.loading.hide(true);
-      window.SidekickUI.alert(window.SidekickCore.friendlyError(error, 'Your itinerary couldn’t be built right now. Please try again.'), { title: 'Itinerary not built' });
+      if (error?.code === 'build_limit') showBuildLimit(error.message);
+      else window.SidekickUI.alert(window.SidekickCore.friendlyError(error, 'Your itinerary couldn’t be built right now. Please try again.'), { title: 'Itinerary not built' });
     } finally {
       window.SidekickUI?.loading.hide();
       buildBtn.disabled = false;
@@ -1836,12 +1869,15 @@ document.addEventListener("DOMContentLoaded", () => {
   // builder with it and run the same Build Itinerary flow as tapping the button.
   let pendingBuild = null;
   try {
-    pendingBuild = JSON.parse(sessionStorage.getItem('sidekick.itinerary.pendingBuild') || 'null');
-    sessionStorage.removeItem('sidekick.itinerary.pendingBuild');
+    // Kept until the traveler answers the "Build your trip?" question (Build itinerary or
+    // Not yet), so leaving this tab and coming back asks again.
+    pendingBuild = JSON.parse(sessionStorage.getItem(PENDING_BUILD_KEY) || 'null');
   } catch (error) {}
-  if (pendingBuild && pendingBuild.destination && Date.now() - Number(pendingBuild.createdAt || 0) < 2 * 60 * 1000 && buildBtn) {
+  if (pendingBuild && pendingBuild.destination && Date.now() - Number(pendingBuild.createdAt || 0) < 2 * 60 * 60 * 1000 && buildBtn) {
+    _pendingBuildWaiting = true;
     // Home already checked this trip's budget; don't check (or pay for) it again.
     if (pendingBuild.budgetCheckedKey) preCheckedBudgetKey = pendingBuild.budgetCheckedKey;
+    _chatMustSee = Array.isArray(pendingBuild.mustSee) ? pendingBuild.mustSee.map(String).filter(Boolean).slice(0, 5) : [];
     if (destinationInput) {
       destinationInput.value = pendingBuild.destination;
       destinationInput.dataset.placeId = pendingBuild.placeId || '';

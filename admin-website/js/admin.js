@@ -269,7 +269,7 @@
     if (!value) return '—';
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return value;
-    return date.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+    return date.toLocaleString('en-US', { month: 'long', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
   }
 
   function formatDateOnly(value) {
@@ -278,7 +278,7 @@
     const date = new Date(`${dateText}T12:00:00`);
     return Number.isNaN(date.getTime())
       ? dateText
-      : date.toLocaleDateString([], { dateStyle: 'medium' });
+      : date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
   }
 
   function renderTableBody(targetId, rows, columns) {
@@ -319,7 +319,7 @@
   function formatChartDate(dateKey, withYear = false) {
     const date = new Date(`${dateKey}T00:00:00Z`);
     if (Number.isNaN(date.getTime())) return dateKey;
-    return date.toLocaleDateString([], {
+    return date.toLocaleDateString('en-US', {
       month: 'short', day: 'numeric', timeZone: 'UTC', ...(withYear ? { year: 'numeric' } : {}),
     });
   }
@@ -628,7 +628,7 @@
     const hours = Math.round(minutes / 60);
     if (hours < 24) return `${hours} h ago`;
     const days = Math.round(hours / 24);
-    return days < 7 ? `${days} d ago` : date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+    return days < 7 ? `${days} d ago` : date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
   }
 
   // Merges the activity lists into one feed item list, newest first.
@@ -881,7 +881,7 @@
       setStatus(getReadableError(failure.reason), 'error');
     } else {
       const updated = document.getElementById('dashboard-updated');
-      if (updated) updated.textContent = `Updated ${new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+      if (updated) updated.textContent = `Updated ${new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`;
     }
   }
 
@@ -980,7 +980,7 @@
           <td>${personCell(row.name, row.email)}</td>
           <td class="hide-sm">${escapeHtml(formatDateOnly(row.createdAt))}</td>
           <td class="hide-sm"><span title="${escapeHtml(row.lastActiveAt ? formatDate(row.lastActiveAt) : '')}">${escapeHtml(lastActive)}</span>${inactiveNote}</td>
-          <td>${row.isOnline ? '<span class="ax-pill ok live">Online</span>' : row.isActive ? '<span class="ax-pill">Active</span>' : '<span class="ax-pill off">Disabled</span>'}</td>
+          <td>${row.isOnline ? '<span class="ax-pill ok live">Online</span>' : row.isActive ? '<span class="ax-pill">Active</span>' : '<span class="ax-pill off">Suspended</span>'}${row.flagCount ? ` <span class="ax-pill warn" title="Misuse flags">${escapeHtml(`${formatNumber(row.flagCount)} ${row.flagCount === 1 ? 'flag' : 'flags'}`)}</span>` : ''}</td>
           <td class="act"><button class="admin-button-secondary ax-btn-sm" type="button" data-user-detail="${Number(row.userId)}">View</button></td>
         </tr>`;
       }).join('') : `<tr><td colspan="5" class="empty-state">${search ? 'No users match that search.' : 'No users yet.'}</td></tr>`;
@@ -1013,6 +1013,28 @@
       </div>`;
   }
 
+  // Misuse flags (insults, profanity or spam sent to Sidekick) and the suspend switch.
+  function flagSection(user) {
+    const flags = user.flags;
+    const kindText = (kind) => (kind === 'spam' ? 'Spam' : 'Abuse');
+    return `
+      <section class="admin-detail-section">
+        <h3>Misuse flags</h3>
+        ${flags && flags.total ? `
+          <p class="stat-detail">${escapeHtml(`${formatNumber(flags.abuse)} abuse · ${formatNumber(flags.spam)} spam · last ${formatDate(flags.lastAt)}`)}</p>
+          <ul class="ax-flag-list">
+            ${(flags.recent || []).map((item) => `
+              <li><span class="ax-pill warn">${escapeHtml(kindText(item.kind))}</span> <strong>${escapeHtml(item.reason || '')}</strong> <small>${escapeHtml(formatDate(item.at))}</small>
+                ${item.excerpt ? `<q>${escapeHtml(item.excerpt)}</q>` : ''}</li>`).join('')}
+          </ul>` : '<p class="stat-detail">No misuse flags. Sidekick flags insults, profanity and spam sent in chat.</p>'}
+        <div class="ax-flag-actions">
+          <button class="${user.isActive ? 'admin-button-danger' : 'admin-button-secondary'}" type="button" data-suspend-user="${Number(user.userId)}" data-active="${user.isActive ? '1' : '0'}">${user.isActive ? 'Suspend account' : 'Restore account'}</button>
+          ${flags && flags.total ? `<button class="admin-button-secondary" type="button" data-clear-flags="${Number(user.userId)}">Clear flags</button>` : ''}
+        </div>
+        <p class="stat-detail">A suspended user is signed out and can't sign in. Their data is kept.</p>
+      </section>`;
+  }
+
   function renderUserDetails(user) {
     const target = document.getElementById('user-detail-content');
     if (!target) return;
@@ -1022,7 +1044,7 @@
       ['Joined', formatDate(user.createdAt)],
       ['Last app activity', formatDate(user.lastActiveAt)],
       ['Profile updated', formatDate(user.updatedAt)],
-      ['Account status', user.isActive ? 'Active' : 'Disabled'],
+      ['Account status', user.isActive ? 'Active' : 'Suspended'],
       ['Saved travel plans', user.tripCount],
     ];
     const list = (label, values) => `
@@ -1049,6 +1071,7 @@
             ${pickTable('Hotels picked', user.picks.hotels, ['time', 'times'])}
           </div>
         </section>` : ''}
+      ${flagSection(user)}
       <section class="admin-detail-section">
         <h3>Permanent account deletion</h3>
         <p class="stat-detail">${user.lastActiveTrackingAvailable
@@ -1083,6 +1106,31 @@
 
   // Themed confirmation (the browser's grey prompt looked out of place).
   // Resolves with the typed text, or null when cancelled.
+  // Themed yes/no confirmation in place of the browser's confirm(). Resolves true or false.
+  function askConfirm({ title, message, confirmText = 'OK', cancelText = 'Cancel', danger = false }) {
+    return new Promise((resolve) => {
+      const root = document.createElement('div');
+      root.className = 'ax-dialog';
+      root.innerHTML = `
+        <div class="ax-dialog-backdrop" data-dialog-cancel></div>
+        <form class="ax-dialog-panel" role="alertdialog" aria-modal="true" aria-labelledby="ax-dialog-title" novalidate>
+          <h2 id="ax-dialog-title">${escapeHtml(title)}</h2>
+          <p>${escapeHtml(message)}</p>
+          <div class="ax-dialog-actions">
+            <button type="button" class="admin-button-secondary" data-dialog-cancel>${escapeHtml(cancelText)}</button>
+            <button type="submit" class="${danger ? 'admin-button-danger' : 'admin-button'}">${escapeHtml(confirmText)}</button>
+          </div>
+        </form>`;
+      const finish = (value) => { document.removeEventListener('keydown', onKey, true); root.remove(); resolve(value); };
+      const onKey = (event) => { if (event.key === 'Escape') { event.preventDefault(); finish(false); } };
+      root.addEventListener('click', (event) => { if (event.target.closest('[data-dialog-cancel]')) finish(false); });
+      root.querySelector('form').addEventListener('submit', (event) => { event.preventDefault(); finish(true); });
+      document.addEventListener('keydown', onKey, true);
+      document.body.appendChild(root);
+      root.querySelector('button[type="submit"]').focus();
+    });
+  }
+
   function askTypedConfirmation({ title, message, label, expected, confirmText }) {
     return new Promise((resolve) => {
       const root = document.createElement('div');
@@ -1311,6 +1359,43 @@
       });
     });
     void loadAdminProfile();
+  }
+
+  async function setUserSuspended(userId, suspend) {
+    if (suspend && !await askConfirm({
+      title: 'Suspend this account?',
+      message: 'The user is signed out and can\u2019t sign in until you restore it. Their data is kept.',
+      confirmText: 'Suspend',
+      danger: true,
+    })) return;
+    showLoading(suspend ? 'Suspending the account…' : 'Restoring the account…');
+    try {
+      const result = await request(`/api/admin/users/${encodeURIComponent(userId)}/status`, {
+        method: 'POST',
+        body: JSON.stringify({ active: !suspend }),
+      });
+      await Promise.all([loadUserDetails(userId), loadUserTable(userTableState.page)]);
+      setStatus(result?.message || 'Account updated.', 'success');
+    } catch (error) {
+      setStatus(getReadableError(error), 'error');
+    } finally {
+      hideLoading();
+    }
+  }
+
+  async function clearUserFlags(userId) {
+    if (!await askConfirm({
+      title: 'Clear misuse flags?',
+      message: 'This removes this user\u2019s flags and examples. Use it for false alarms.',
+      confirmText: 'Clear flags',
+    })) return;
+    try {
+      await request(`/api/admin/users/${encodeURIComponent(userId)}/flags`, { method: 'DELETE' });
+      await Promise.all([loadUserDetails(userId), loadUserTable(userTableState.page)]);
+      setStatus('Flags cleared.', 'success');
+    } catch (error) {
+      setStatus(getReadableError(error), 'error');
+    }
   }
 
   async function deleteUserPermanently(userId, userEmail) {
@@ -1898,7 +1983,7 @@
         { title: 'Maintenance mode', ok: !p?.maintenanceMode, warn: Boolean(p?.maintenanceMode), value: p?.maintenanceMode ? 'On' : 'Off',
           note: p?.maintenanceMode ? 'The app is paused for users. Turn it off in Settings to reopen it.' : 'The app is open to users.' },
         { title: 'Server', ok: true, value: p?.mode === 'production' ? 'Production' : 'Development',
-          note: `Running for ${uptimeText(p?.uptimeSeconds)}. Checked ${new Date(p?.healthCheckTime || Date.now()).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}.`, warn: p?.mode !== 'production' },
+          note: `Running for ${uptimeText(p?.uptimeSeconds)}. Checked ${new Date(p?.healthCheckTime || Date.now()).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}.`, warn: p?.mode !== 'production' },
       ];
       target.innerHTML = items.map((item) => `
         <article class="admin-card ax-status ${item.warn ? 'warn' : item.ok ? 'ok' : 'bad'}">
@@ -2058,7 +2143,12 @@
     };
     document.getElementById('setting-maintenance')?.addEventListener('change', async (event) => {
       const on = event.target.checked;
-      if (on && !window.confirm('Pause the app for all users now? They will see your maintenance message until you turn this off.')) {
+      if (on && !await askConfirm({
+        title: 'Pause the app for everyone?',
+        message: 'All users will see your maintenance message until you turn this off.',
+        confirmText: 'Pause the app',
+        danger: true,
+      })) {
         event.target.checked = false;
         return;
       }
@@ -2313,6 +2403,10 @@
       if (button && !button.disabled) {
         void deleteUserPermanently(button.dataset.deleteUser, button.dataset.userEmail);
       }
+      const suspend = event.target.closest?.('[data-suspend-user]');
+      if (suspend && !suspend.disabled) void setUserSuspended(suspend.dataset.suspendUser, suspend.dataset.active === '1');
+      const clear = event.target.closest?.('[data-clear-flags]');
+      if (clear && !clear.disabled) void clearUserFlags(clear.dataset.clearFlags);
     });
     document.getElementById('user-detail-close')?.addEventListener('click', () => {
       closeDrawer(document.getElementById('user-detail-panel'));

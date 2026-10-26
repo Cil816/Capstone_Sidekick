@@ -41,7 +41,7 @@
           <h2 id="app-rating-review-heading" tabindex="-1">Thanks for rating us!</h2>
           <p>Want to tell us what you think?</p>
           <label for="app-rating-review">Your review (optional)</label>
-          <textarea id="app-rating-review" maxlength="2000" rows="4" placeholder="Write a few words…"></textarea>
+          <textarea id="app-rating-review" maxlength="2000" rows="4"></textarea>
           <div class="app-rating-review-actions">
             <button id="app-review-not-now" class="btn btn-outline" type="button">Not now</button>
             <button id="app-review-submit" class="btn btn-primary" type="button" disabled>Submit review</button>

@@ -138,6 +138,38 @@ function syncPreferencesToServer(email, prefs) {
   return request;
 }
 
+// After signing in on a phone that has no saved answers (a new install, another phone),
+// the travel preferences saved to the account are brought back, so onboarding isn't
+// asked again. Resolves to the preferences, or null when the account has none (or they
+// can't be loaded right now), in which case onboarding runs as before.
+async function restorePreferencesFromAccount() {
+  const existing = getPreferences();
+  if (existing) return existing;
+  const session = getAuthSession();
+  if (!session?.email || !session.apiToken) return null;
+  try {
+    const saved = await apiRequest(`/api/preferences/${encodeURIComponent(session.email)}`);
+    const list = (value) => (Array.isArray(value) ? value.map((item) => String(item || "").trim()).filter(Boolean) : []);
+    const prefs = {
+      travelTypes: list(saved?.travelTypes),
+      interests: list(saved?.interests),
+      preferredPlaces: list(saved?.preferredPlaces),
+    };
+    // Onboarding always saves travel styles and interests; without them it runs again.
+    if (!prefs.travelTypes.length || !prefs.interests.length) return null;
+    const all = getPreferencesByEmail();
+    all[session.email] = prefs;
+    localStorage.setItem(SIDEKICK_KEYS.preferencesByEmail, JSON.stringify(all));
+    // Already on the account: no need to send them back.
+    const synced = safeJsonParse(localStorage.getItem(PREFS_SYNCED_KEY), {});
+    synced[session.email] = JSON.stringify(prefs);
+    localStorage.setItem(PREFS_SYNCED_KEY, JSON.stringify(synced));
+    return prefs;
+  } catch (error) {
+    return null;
+  }
+}
+
 function resetPreferencesForEmail(email) {
   const all = getPreferencesByEmail();
   delete all[email];
@@ -328,6 +360,7 @@ const API_CACHE_RULES = [
   { prefix: "/api/maps/place-details", ttl: 24 * API_CACHE_HOUR_MS },
   { prefix: "/api/maps/places", ttl: 24 * API_CACHE_HOUR_MS },
   { prefix: "/api/maps/route", ttl: 12 * API_CACHE_HOUR_MS },
+  { prefix: "/api/maps/place-name", ttl: 24 * API_CACHE_HOUR_MS },
   { prefix: "/api/hotels/budget-options", ttl: 6 * API_CACHE_HOUR_MS },
   { prefix: "/api/trip/budget-check", ttl: 6 * API_CACHE_HOUR_MS },
   { prefix: "/api/places/popular", ttl: 0.5 * API_CACHE_HOUR_MS },
@@ -447,6 +480,7 @@ async function apiRequestFromServer(path, options = {}) {
     error.statusCode = response.status;
     // A verification code was already sent recently (no new one is sent).
     if (payload.alreadySent === true) error.alreadySent = true;
+    if (typeof payload.code === "string") error.code = payload.code;
     if (response.status === 401 && sessionToken && !window.location.pathname.endsWith("/login.html")) {
       invalidateAppSession(sessionToken);
     }
@@ -813,7 +847,7 @@ function tripDisplayName(data) {
 function shortDateRangeText(range) {
   const show = (text) => {
     const [y, m, d] = String(text || "").split("-").map(Number);
-    return y ? new Date(y, m - 1, d).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "";
+    return y ? new Date(y, m - 1, d).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }) : "";
   };
   if (!range?.start) return "";
   return range.end && range.end !== range.start ? `${show(range.start)} – ${show(range.end)}` : show(range.start);
@@ -1092,7 +1126,7 @@ function repeatTripProblem(email, data) {
       .filter((dueAt) => Number.isFinite(dueAt) && localDateValue(new Date(dueAt)) === today));
     const first = new Date(firstStop);
     if (Number.isFinite(firstStop) && first.getHours() * 60 + first.getMinutes() < earliest) {
-      const shown = first.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+      const shown = first.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
       return { title: "Too late to start today", message: `Day 1 of this trip starts at ${shown}, which is too soon or has already passed. Start it tomorrow or later.` };
     }
   }
@@ -1230,8 +1264,8 @@ function clearRemindersForEmail(email) {
 function formatDateRange(startDate, dayCount) {
   const end = new Date(startDate);
   end.setDate(end.getDate() + (dayCount - 1));
-  const fmt = { month: "short", day: "numeric", year: "numeric" };
-  return `${startDate.toLocaleDateString([], fmt)} - ${end.toLocaleDateString([], fmt)}`;
+  const fmt = { month: "long", day: "numeric", year: "numeric" };
+  return `${startDate.toLocaleDateString("en-US", fmt)} - ${end.toLocaleDateString("en-US", fmt)}`;
 }
 
 function pickWeighted(items, weightFn, rng = Math.random) {
@@ -1549,7 +1583,7 @@ function inferTimeLabelFromTimestamp(timestamp) {
 }
 
 function formatItineraryDayLabel(date) {
-  return date.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+  return date.toLocaleDateString("en-US", { weekday: "short", month: "long", day: "numeric", year: "numeric" });
 }
 
 function startOfLocalDay(timestamp) {
@@ -1752,7 +1786,7 @@ function generateItinerary(prefs, { startDate = new Date() } = {}) {
   for (let dayIndex = 0; dayIndex < dayCount; dayIndex++) {
     const date = new Date(startDate);
     date.setDate(date.getDate() + dayIndex);
-    const dateLabel = date.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+    const dateLabel = date.toLocaleDateString("en-US", { weekday: "short", month: "long", day: "numeric", year: "numeric" });
 
     const dayTags = baseInterests.slice(dayIndex, dayIndex + 4).concat(baseInterests.slice(0, 2));
     const uniqueTags = Array.from(new Set(dayTags)).slice(0, 5);
@@ -1912,6 +1946,7 @@ window.SidekickCore = {
   normalizeEmail,
   isStrongEnoughPassword,
   getPreferences,
+  restorePreferencesFromAccount,
   setPreferencesForEmail,
   syncPreferencesToServer,
   resetPreferencesForEmail,
@@ -3080,17 +3115,37 @@ if (document.readyState === "loading") {
   // Resolves to the reply ({ status: 'done', reply, places, actions, ... }), { status: 'lost' }
   // when the server no longer has it, or null when keepWaiting() says to stop.
   async function wait(pending, keepWaiting = () => true) {
+    let first = true;
     while (Date.now() - Number(pending.at) < MAX_AGE_MS) {
-      await new Promise((resolve) => setTimeout(resolve, 2500));
+      if (!first) await new Promise((resolve) => setTimeout(resolve, 600));
+      first = false;
       if (!keepWaiting()) return null;
       let data;
       try {
         data = await window.SidekickCore.apiRequest('/api/chat/result', { method: 'POST', body: JSON.stringify({ requestId: pending.requestId }) });
-      } catch (e) { continue; }
+      } catch (e) {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        continue;
+      }
       if (data?.status === 'done') return data;
       if (data?.status !== 'pending') return { status: 'lost' };
     }
     return { status: 'lost' };
+  }
+
+  const UNREAD_KEY = 'sidekick.chat.unread';
+  function unread(email) {
+    try {
+      const saved = JSON.parse(localStorage.getItem(UNREAD_KEY) || 'null');
+      return saved && saved.email === email ? Number(saved.count) || 0 : 0;
+    } catch (e) { return 0; }
+  }
+  function setUnread(email, count) {
+    try {
+      if (count > 0) localStorage.setItem(UNREAD_KEY, JSON.stringify({ email, count }));
+      else localStorage.removeItem(UNREAD_KEY);
+    } catch (e) {}
+    document.dispatchEvent(new CustomEvent('sidekick:chat-unread'));
   }
 
   function banner(text) {
@@ -3139,10 +3194,121 @@ if (document.readyState === "loading") {
     const places = Array.isArray(data.places) ? data.places : [];
     map[session.email] = (map[session.email] || []).concat([{ role: 'ai', content: reply, ts: Date.now(), ...(places.length ? { places } : {}) }]);
     window.SidekickCore.setChatByEmail(map);
+    setUnread(session.email, unread(session.email) + 1);
     notify(reply);
   }
 
-  if (window.SidekickCore) window.SidekickCore.chatPending = { get, set, wait };
+  if (window.SidekickCore) {
+    window.SidekickCore.chatPending = { get, set, wait };
+    window.SidekickCore.chatUnread = {
+      count: () => { const email = window.SidekickCore.getAuthSession?.()?.email; return email ? unread(email) : 0; },
+    };
+  }
+  // Opening the Sidekick tab reads them.
+  if (/chat\.html$/i.test(window.location.pathname)) {
+    try { localStorage.removeItem(UNREAD_KEY); } catch (e) {}
+  }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => { void resumeInBackground(); });
   else void resumeInBackground();
+})();
+
+// ---- Keyboard open ----------------------------------------------------------------------
+// In the app the screen shrinks to the space above the keyboard (Keyboard plugin,
+// adjustResize), so bars pinned to the bottom, like the chat's text box, sit right on the
+// keyboard. While it is open the page gets .keyboard-open (the bottom tabs hide to make room).
+// In a phone browser, where the keyboard covers the page instead, --keyboard-offset is how
+// much of the page it covers, so those bars can be lifted above it.
+(function () {
+  const root = document.documentElement;
+  const setOpen = (open, offset = 0) => {
+    root.classList.toggle('keyboard-open', Boolean(open));
+    root.style.setProperty('--keyboard-offset', `${Math.max(0, Math.round(offset))}px`);
+  };
+  const Keyboard = window.Capacitor?.isNativePlatform?.() ? window.Capacitor?.Plugins?.Keyboard : null;
+  if (Keyboard && typeof Keyboard.addListener === 'function') {
+    // On newer Android (apps drawn edge to edge) some phones don't shrink the screen for
+    // the keyboard, so the text box would sit under it. The page's height with the
+    // keyboard closed is kept; if opening the keyboard didn't shrink the page, the bars
+    // pinned to the bottom are lifted by the keyboard's height (given in CSS pixels).
+    let closedHeight = window.innerHeight;
+    window.addEventListener('resize', () => {
+      if (!root.classList.contains('keyboard-open')) closedHeight = window.innerHeight;
+    });
+    const liftIfNotResized = (info) => {
+      const keyboardHeight = Number(info?.keyboardHeight) || 0;
+      window.setTimeout(() => {
+        if (!root.classList.contains('keyboard-open')) return;
+        const shrunk = closedHeight - window.innerHeight;
+        setOpen(true, keyboardHeight > 0 && shrunk < keyboardHeight / 2 ? keyboardHeight : 0);
+      }, 150);
+    };
+    Keyboard.addListener('keyboardWillShow', () => setOpen(true));
+    Keyboard.addListener('keyboardDidShow', (info) => { setOpen(true); liftIfNotResized(info); });
+    Keyboard.addListener('keyboardWillHide', () => setOpen(false));
+    Keyboard.addListener('keyboardDidHide', () => setOpen(false));
+    return;
+  }
+  const viewport = window.visualViewport;
+  if (!viewport) return;
+  const update = () => {
+    const covered = window.innerHeight - viewport.height - viewport.offsetTop;
+    setOpen(covered > 120, covered > 120 ? covered : 0);
+  };
+  viewport.addEventListener('resize', update);
+  viewport.addEventListener('scroll', update);
+})();
+
+// Date fields show "October 31, 2026" and time fields "3:05 PM" instead of the phone's
+// numeric / 24-hour format. The native
+// input stays underneath (tapping still opens the date picker); only its text is hidden.
+(function () {
+  const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
+  function longDate(value) {
+    const t = /^(\d{2}):(\d{2})/.exec(value || "");
+    if (t && !/^\d{4}-/.test(value)) {
+      const h = Number(t[1]);
+      return `${h % 12 || 12}:${t[2]} ${h < 12 ? "AM" : "PM"}`;
+    }
+    const m = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}))?/.exec(value || "");
+    if (!m) return "";
+    const date = `${MONTHS[Number(m[2]) - 1]} ${Number(m[3])}, ${m[1]}`;
+    if (m[4] === undefined) return date;
+    const hour = Number(m[4]);
+    return `${date}, ${hour % 12 || 12}:${m[5]} ${hour < 12 ? "AM" : "PM"}`;
+  }
+  function enhance(input) {
+    if (input.dataset.skLongDate) return;
+    input.dataset.skLongDate = "1";
+    const wrap = document.createElement("span");
+    wrap.className = "sk-date-wrap";
+    const label = document.createElement("span");
+    label.className = "sk-date-text";
+    label.setAttribute("aria-hidden", "true");
+    input.parentNode.insertBefore(wrap, input);
+    wrap.append(input, label);
+    const sync = () => {
+      const text = longDate(valueSetter.get.call(input));
+      label.textContent = text || (input.type === "time" ? "Select a time" : "Select a date");
+      wrap.classList.toggle("is-empty", !text);
+    };
+    // Scripts set .value directly (no events), so catch those writes too.
+    Object.defineProperty(input, "value", {
+      configurable: true,
+      get() { return valueSetter.get.call(this); },
+      set(v) { valueSetter.set.call(this, v); sync(); },
+    });
+    input.addEventListener("input", sync);
+    input.addEventListener("change", sync);
+    sync();
+  }
+  const FIELDS = 'input[type="date"], input[type="datetime-local"], input[type="time"]';
+  function run() {
+    document.querySelectorAll(FIELDS).forEach(enhance);
+    // Popups (add/edit activity) build their time fields later.
+    new MutationObserver(() => document.querySelectorAll(FIELDS).forEach(enhance))
+      .observe(document.body, { childList: true, subtree: true });
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", run, { once: true });
+  else run();
 })();

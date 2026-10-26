@@ -87,7 +87,7 @@ async function handleLogin(event) {
     // its old onboarding answers on this device are cleared so onboarding runs again.
     window.SidekickCore.recordAccountForEmail(email, user?.user_id);
 
-    const prefs = window.SidekickCore.getPreferences();
+    const prefs = await window.SidekickCore.restorePreferencesFromAccount();
     logLoginDebug("Login success, redirecting", {
       email,
       destination: prefs ? "dashboard.html" : "onboarding.html",

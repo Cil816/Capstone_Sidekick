@@ -12,7 +12,7 @@
 
   function dayText(text, withWeekday = true) {
     const date = localDate(text);
-    return date ? date.toLocaleDateString(undefined, { ...(withWeekday ? { weekday: "short" } : {}), month: "short", day: "numeric" }) : "";
+    return date ? date.toLocaleDateString("en-US", { ...(withWeekday ? { weekday: "short" } : {}), month: "long", day: "numeric", year: "numeric" }) : "";
   }
 
   function rangeText(start, end) {
@@ -45,7 +45,7 @@
 
   function renderTrip(trip) {
     const count = trip.days.reduce((sum, day) => sum + day.activities.length, 0);
-    const kept = trip.keptUntil ? new Date(trip.keptUntil).toLocaleDateString(undefined, { month: "long", day: "numeric" }) : "";
+    const kept = trip.keptUntil ? new Date(trip.keptUntil).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }) : "";
     const details = [trip.destination, trip.budget ? `Budget: ${trip.budget}` : "", kept ? `Kept until ${kept}` : ""].filter(Boolean).join(" · ");
     const days = trip.days.map((day) => `
       <div class="past-trip-day">
@@ -254,7 +254,7 @@
         message: `When do you want to go? “${tripName(trip)}” (${dayCount} day${dayCount === 1 ? "" : "s"}) keeps its activities and times. You can edit it before saving.`,
         fields: [
           { name: "start", label: "New start date", type: "date", value: start, min: core.localDateValue() },
-          { name: "budget", label: "Total budget (PHP)", type: "number", value: budgetText, min: 1, placeholder: "Enter your budget", hint: oldBudget ? `Last time: ₱${oldBudget.toLocaleString()}` : "" },
+          { name: "budget", label: "Total budget (PHP)", type: "number", value: budgetText, min: 1, hint: oldBudget ? `Last time: ₱${oldBudget.toLocaleString()}` : "" },
         ],
         confirmText: "Plan this trip",
         validate: ({ start: value, budget: amount }) => {

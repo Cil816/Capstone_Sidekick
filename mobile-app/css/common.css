@@ -727,3 +727,7 @@ a, a:hover { text-decoration: none; }
    edge (and of the status bar on edge-to-edge phones). */
 body[data-tab="alerts"] .alerts-screen,
 body[data-tab="profile"] .screen { padding-top: calc(20px + env(safe-area-inset-top, 0px)); }
+
+/* While the keyboard is open (js/core.js adds .keyboard-open), the bottom tabs hide so the
+   text being typed and any bar pinned to the bottom stay visible above the keyboard. */
+html.keyboard-open .bottom-nav { display: none !important; }

@@ -95,6 +95,27 @@ document.addEventListener('DOMContentLoaded', function () {
     }
   } catch (e) {}
 
+  // Red count on the Sidekick tab: replies that arrived while on another screen.
+  try {
+    const chatLink = nav.querySelector('a[href$="chat.html"]');
+    if (chatLink && !chatLink.querySelector('.chat-unread-badge')) {
+      const badge = document.createElement('span');
+      badge.className = 'reminders-badge chat-unread-badge';
+      badge.style.display = 'none';
+      badge.setAttribute('aria-label', 'Unread Sidekick replies');
+      chatLink.appendChild(badge);
+      const updateChatBadge = () => {
+        const count = window.SidekickCore?.chatUnread?.count?.() || 0;
+        badge.style.display = count > 0 ? 'inline-block' : 'none';
+        badge.textContent = count > 9 ? '9+' : String(count || '');
+      };
+      document.addEventListener('sidekick:chat-unread', updateChatBadge);
+      window.addEventListener('focus', updateChatBadge);
+      window.addEventListener('storage', updateChatBadge);
+      setTimeout(updateChatBadge, 300);
+    }
+  } catch (e) {}
+
   let lastY = window.scrollY || 0;
   let ticking = false;
 

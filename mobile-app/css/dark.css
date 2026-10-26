@@ -239,6 +239,24 @@ html[data-theme="dark"]:where([data-page="alerts"]) .reminder-remove-all {
 html[data-theme="dark"]:where([data-page="alerts"]) .reminder-remove-all:hover {
   background: hsl(352, 38%, 13%);
 }
+html[data-theme="dark"]:where([data-page="alerts"]) .sk-reminder-tab {
+  border: 1px solid hsl(211, 30%, 24%);
+  background: hsl(208, 32%, 11%);
+  color: hsl(208, 19%, 72%);
+}
+html[data-theme="dark"]:where([data-page="alerts"]) .sk-reminder-tab span {
+  background: hsl(190, 38%, 13%);
+  color: hsl(194, 32%, 79%);
+}
+html[data-theme="dark"]:where([data-page="alerts"]) .sk-reminder-tab.active {
+  background: #2c91b0;
+  border-color: #2c91b0;
+  color: #fff;
+}
+html[data-theme="dark"]:where([data-page="alerts"]) .sk-reminder-tab.active span {
+  background: hsla(208, 32%, 11%, 0.25);
+  color: #fff;
+}
 html[data-theme="dark"]:where([data-page="alerts"]) .sk-reminders-heading {
   color: hsl(212, 32%, 84%);
 }
@@ -2398,6 +2416,23 @@ html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-pa
 }
 html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-style-time:disabled svg {
   color: #8aa0b3;
+}
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-date-wrap > input::-webkit-datetime-edit,
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-date-wrap > input::-webkit-datetime-edit-fields-wrapper,
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-date-wrap > input::-webkit-datetime-edit-text,
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-date-wrap > input::-webkit-datetime-edit-month-field,
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-date-wrap > input::-webkit-datetime-edit-day-field,
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-date-wrap > input::-webkit-datetime-edit-year-field,
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-date-wrap > input::-webkit-datetime-edit-hour-field,
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-date-wrap > input::-webkit-datetime-edit-minute-field,
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-date-wrap > input::-webkit-datetime-edit-ampm-field {
+  background: transparent !important;
+}
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-date-text {
+  color: var(--text, hsl(222, 32%, 88%));
+}
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"])[data-theme="dark"] .sk-date-text {
+  color: #e5e7eb;
 }
 
 /* ---- from tab-motion.css (alerts, chat, dashboard, itinerary, past-trips, profile, settings) ---- */

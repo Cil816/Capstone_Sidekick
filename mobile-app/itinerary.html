@@ -35,15 +35,15 @@
                     <div class="itinerary-builder-fields">
                         <div class="itinerary-field itinerary-field-destination">
                             <label for="itinerary-destination">Destination</label>
-                            <input id="itinerary-destination" type="text" maxlength="180" placeholder="Search places in Batangas" required role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="itinerary-destination-suggestions" />
+                            <input id="itinerary-destination" type="text" maxlength="180" placeholder="Search places" required role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="itinerary-destination-suggestions" />
                             <div id="itinerary-destination-suggestions" class="destination-suggestions" role="listbox" hidden></div>
                             <div class="destination-suggestions-attribution" hidden><img src="https://maps.gstatic.com/mapfiles/api-3/images/google4.png" alt="Google" /></div>
                         </div>
-                        <div class="itinerary-field"><label for="itinerary-name">Trip name</label><input id="itinerary-name" type="text" maxlength="100" placeholder="Named after your destination" autocomplete="off" /></div>
-                        <div class="itinerary-field"><label for="itinerary-origin">Starting location (optional)</label><input id="itinerary-origin" type="text" maxlength="180" placeholder="City or address for travel estimate" autocomplete="street-address" /></div>
+                        <div class="itinerary-field"><label for="itinerary-name">Trip name</label><input id="itinerary-name" type="text" maxlength="100" placeholder="Optional" autocomplete="off" /></div>
+                        <div class="itinerary-field"><label for="itinerary-origin">Starting location (optional)</label><input id="itinerary-origin" type="text" maxlength="180" placeholder="City or address" autocomplete="street-address" /></div>
                         <div class="itinerary-field"><label for="itinerary-start">Start date</label><input id="itinerary-start" type="date" required /></div>
                         <div class="itinerary-field"><label for="itinerary-end">End date</label><input id="itinerary-end" type="date" required /></div>
-                        <div class="itinerary-field"><label for="itinerary-budget">Total budget (PHP)</label><input id="itinerary-budget" type="number" min="1" step="1" inputmode="numeric" placeholder="Enter your budget" aria-label="Total trip budget in Philippine pesos" /></div>
+                        <div class="itinerary-field"><label for="itinerary-budget">Total budget (PHP)</label><input id="itinerary-budget" type="number" min="1" step="1" inputmode="numeric" aria-label="Total trip budget in Philippine pesos" /></div>
                         <div class="itinerary-field"><label for="itinerary-travelers">Travelers</label><select id="itinerary-travelers" aria-describedby="itinerary-travelers-hint"><option value="1" selected>1 (just me)</option><option value="2">2 people</option><option value="3">3 people</option><option value="4">4 people</option><option value="5">5 people</option><option value="6">6 people</option><option value="7">7 people</option><option value="8">8 people</option><option value="9">9 people</option><option value="10">10 people</option></select><small id="itinerary-travelers-hint" class="itinerary-field-hint">Your budget is for the whole group: rooms, meals and entrance fees for everyone.</small></div>
                         <button id="build-itinerary" class="btn btn-primary">Build Itinerary</button>
                     </div>

@@ -55,6 +55,7 @@
 
 .alerts-row .alerts-field:not(.alerts-field-grow) { flex: 0 0 132px; }
 .alerts-field-grow { flex: 1 1 auto; }
+.alerts-row-when .alerts-field-grow { flex: 1 1 0; min-width: 0; }
 
 .alerts-hint {
     margin: 10px 2px 14px;
@@ -94,6 +95,13 @@
 .reminder-remove-all:hover { background: #fdeef0; }
 
 .reminders { display: flex; flex-direction: column; gap: 10px; margin-top: 4px; }
+
+/* Upcoming | Expired switch */
+.sk-reminder-tabs { display: flex; gap: 8px; margin-top: 8px; }
+.sk-reminder-tab { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 9px 12px; border: 1px solid #d7e2ee; border-radius: 999px; background: #fff; color: #668096; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; }
+.sk-reminder-tab span { min-width: 20px; padding: 0 7px; border-radius: 999px; background: #eef8fa; color: #1f6f88; font-size: 11px; }
+.sk-reminder-tab.active { background: #2c91b0; border-color: #2c91b0; color: #fff; }
+.sk-reminder-tab.active span { background: rgba(255, 255, 255, .25); color: #fff; }
 
 .sk-reminders-heading {
     display: flex;
@@ -237,8 +245,13 @@
 .alerts-settings-icon svg { width: 20px; height: 20px; }
 .alerts-settings-chevron { width: 18px; height: 18px; margin-left: auto; color: #8aa3b8; flex: none; }
 
+/* Most phones: Date and Time each get the full width, so "September 30, 2026" fits. */
+@media (max-width: 430px) {
+    .alerts-row-when { flex-direction: column; align-items: stretch; }
+}
+
 @media (max-width: 380px) {
-    .alerts-row { flex-direction: column; align-items: stretch; }
+    .alerts-row:not(.alerts-row-when) { flex-direction: column; align-items: stretch; }
     .alerts-row .alerts-field:not(.alerts-field-grow) { flex: 1 1 auto; }
 }
 

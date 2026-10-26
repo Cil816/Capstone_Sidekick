@@ -326,7 +326,7 @@ function renderDestinationStep(content) {
         <h1>Where do you want to go?</h1>
         <p>Search any destination in Batangas. Choose up to ${MAX_DESTINATIONS} (optional).</p>
         <div class="dest-search-wrap">
-            <input type="text" id="dest-search" class="dest-search-input" placeholder="Search places in Batangas…" autocomplete="off" aria-label="Search destinations" />
+            <input type="text" id="dest-search" class="dest-search-input" placeholder="Search places" autocomplete="off" aria-label="Search destinations" />
             <div class="dest-suggestions" id="dest-suggestions" hidden></div>
         </div>
         <div class="dest-status" id="dest-status" role="status" aria-live="polite"></div>

@@ -14,7 +14,7 @@
 </head>
 <body data-tab="alerts">
   <div class="app-container">
-    <div class="screen alerts-screen">
+    <div class="screen alerts-screen">
       <div class="content alerts">
         <h1 class="screen-title">Alerts &amp; Reminders</h1>
         <p class="screen-subtitle">Never miss a booking, a boarding time, or a stop on your trip.</p>
@@ -25,14 +25,20 @@
           <h2 id="alerts-new-title" class="alerts-card-title">New reminder</h2>
           <label class="alerts-field">
             <span>What should we remind you about?</span>
-            <input id="title" placeholder="e.g. Bus to Batangas City, resort check-in" aria-label="Reminder title" maxlength="120" />
+            <input id="title" placeholder="e.g. Bus to Lipa" aria-label="Reminder title" maxlength="120" />
           </label>
+          <div class="alerts-row alerts-row-when">
+            <label class="alerts-field alerts-field-grow">
+              <span>Date</span>
+              <input id="date" type="date" aria-label="Reminder date" />
+            </label>
+            <label class="alerts-field alerts-field-grow">
+              <span>Time</span>
+              <input id="time" type="time" aria-label="Reminder time" />
+            </label>
+          </div>
           <div class="alerts-row">
             <label class="alerts-field alerts-field-grow">
-              <span>Date and time</span>
-              <input id="datetime" type="datetime-local" aria-label="Reminder date and time" />
-            </label>
-            <label class="alerts-field">
               <span>Type</span>
               <select id="type" aria-label="Reminder type"><option>Schedule</option><option>Booking</option><option>Advisory</option></select>
             </label>
@@ -106,7 +112,7 @@
   <script src="js/ui.js"></script>
   <script src="js/alerts.js"></script>
   <script src="js/nav.js"></script>
-  <script src="js/tab-motion.js"></script>
+  <script src="js/tab-motion.js"></script>
   <script src="js/pull-refresh.js"></script>
 </body>
 </html>

@@ -21,7 +21,15 @@ document.addEventListener('DOMContentLoaded', () => {
   const email = session.email;
   const esc = (value) => core.escapeHtml(String(value ?? ''));
   const titleEl = document.getElementById('title');
-  const dtEl = document.getElementById('datetime');
+  const dateEl = document.getElementById('date');
+  const timeEl = document.getElementById('time');
+  const setEarliestDay = () => { dateEl.min = toDatetimeLocalValue(Date.now()).slice(0, 10); };
+  setEarliestDay();
+  dateEl.addEventListener('focus', setEarliestDay); // the screen may stay open past midnight
+  // "2026-10-31" + "15:05" -> a time; the date and time are picked in separate boxes.
+  const joinWhen = (day, time) => (day && time ? new Date(`${day}T${time}`).getTime() : NaN);
+  const dayPart = (ms) => toDatetimeLocalValue(ms).slice(0, 10);
+  const timePart = (ms) => toDatetimeLocalValue(ms).slice(11, 16);
   const typeEl = document.getElementById('type');
   const addBtn = document.getElementById('add');
   const syncBtn = document.getElementById('sync-itinerary');
@@ -50,8 +58,8 @@ document.addEventListener('DOMContentLoaded', () => {
   function formatWhen(timestamp) {
     const date = new Date(Number(timestamp));
     if (!Number.isFinite(date.getTime())) return '';
-    const day = date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
-    const time = date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+    const day = date.toLocaleDateString("en-US", { weekday: 'short', month: "long", day: 'numeric', year: "numeric" });
+    const time = date.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
     return `${day} · ${time}`;
   }
 
@@ -67,10 +75,38 @@ document.addEventListener('DOMContentLoaded', () => {
   // "Sat, Oct 24".
   function dayLabel(key) {
     const [y, m, d] = key.split('-').map(Number);
-    return new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+    return new Date(y, m - 1, d).toLocaleDateString("en-US", { weekday: 'short', month: "long", day: 'numeric', year: "numeric" });
   }
 
   // Which date drop-downs are open (kept while the app is open). null: none chosen yet.
+  // Which list is showing: "upcoming" or "expired" (reminders that already popped or passed).
+  const VIEW_KEY = 'sidekick.alerts.view';
+  let view = 'upcoming';
+  try { if (sessionStorage.getItem(VIEW_KEY) === 'expired') view = 'expired'; } catch (error) {}
+  function setView(next) {
+    view = next;
+    try { sessionStorage.setItem(VIEW_KEY, next); } catch (error) {}
+    render();
+  }
+
+  function viewTabs(upcomingCount, expiredCount) {
+    const tabs = document.createElement('div');
+    tabs.className = 'sk-reminder-tabs';
+    tabs.setAttribute('role', 'tablist');
+    tabs.setAttribute('aria-label', 'Reminders');
+    [['upcoming', 'Upcoming', upcomingCount], ['expired', 'Expired', expiredCount]].forEach(([key, label, count]) => {
+      const tab = document.createElement('button');
+      tab.type = 'button';
+      tab.className = `sk-reminder-tab${view === key ? ' active' : ''}`;
+      tab.setAttribute('role', 'tab');
+      tab.setAttribute('aria-selected', String(view === key));
+      tab.innerHTML = `${esc(label)} <span>${count}</span>`;
+      tab.addEventListener('click', () => { if (view !== key) setView(key); });
+      tabs.appendChild(tab);
+    });
+    return tabs;
+  }
+
   function readOpenDays() {
     try {
       const saved = JSON.parse(sessionStorage.getItem(OPEN_DAYS_KEY) || 'null');
@@ -86,8 +122,12 @@ document.addEventListener('DOMContentLoaded', () => {
   const sameName = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
 
   // A reminder already using this name (its own extra alerts don't count when editing).
+  // Only reminders still coming up block a name; an expired one can be reused.
   function reminderNamed(title, ignoreIds = new Set()) {
-    return (core.getRemindersFor(email) || []).find((reminder) => !ignoreIds.has(reminder.id) && sameName(reminder.title, title)) || null;
+    const now = Date.now();
+    return (core.getRemindersFor(email) || []).find((reminder) => !ignoreIds.has(reminder.id)
+      && Number(reminder.parentDueAt || reminder.dueAt || 0) > now
+      && sameName(reminder.title, title)) || null;
   }
 
   function duplicateNameMessage(existing) {
@@ -159,7 +199,17 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    if (upcoming.length) {
+    listEl.appendChild(viewTabs(upcoming.length, past.length));
+    shownUpcomingIds = upcoming.map((r) => r.id).join('|');
+
+    if (view === 'upcoming' && !upcoming.length) {
+      listEl.insertAdjacentHTML('beforeend', '<div class="sk-reminders-empty"><strong>Nothing coming up</strong>Reminders that already popped are under Expired.</div>');
+    }
+    if (view === 'expired' && !past.length) {
+      listEl.insertAdjacentHTML('beforeend', '<div class="sk-reminders-empty"><strong>No expired reminders</strong>Reminders move here after they pop up.</div>');
+    }
+
+    if (view === 'upcoming' && upcoming.length) {
       // Grouped by date, earliest first; the first date starts open.
       const byDay = new Map();
       upcoming.forEach((r) => {
@@ -173,15 +223,28 @@ document.addEventListener('DOMContentLoaded', () => {
       days.forEach((key) => listEl.appendChild(dayGroup(key, byDay.get(key), openDays.has(key))));
     }
 
-    if (past.length) {
-      listEl.appendChild(heading('Past', past.length));
-      past.forEach((r) => listEl.appendChild(renderReminderRow(r, true)));
+    if (view === 'expired' && past.length) {
+      // Latest first: the one that just popped is on top.
+      listEl.appendChild(heading('Expired', past.length));
+      past.slice().reverse().forEach((r) => listEl.appendChild(renderReminderRow(r, true)));
     }
 
     // "Turn off all" / "Remove all" on the same line as the first heading.
     const firstHeading = listEl.querySelector('.sk-reminders-heading');
     if (bulkActionsEl && firstHeading) firstHeading.appendChild(bulkActionsEl);
   }
+
+  // A reminder that pops while this screen is open moves to Expired without a reload.
+  let shownUpcomingIds = '';
+  window.setInterval(() => {
+    if (document.hidden) return;
+    const now = Date.now();
+    const ids = (core.getRemindersFor(email) || []).slice()
+      .sort((a, b) => (Number(a.dueAt || 0) - Number(b.dueAt || 0)))
+      .filter((r) => !r.firedAt && Number(r.dueAt || 0) >= now)
+      .map((r) => r.id).join('|');
+    if (ids !== shownUpcomingIds) render();
+  }, 30000);
 
   function renderReminderRow(r, isPast) {
     const el = document.createElement('article');
@@ -213,7 +276,9 @@ document.addEventListener('DOMContentLoaded', () => {
       btn.addEventListener('click', onClick);
       actions.appendChild(btn);
     };
-    button('Edit', () => (isItineraryReminder(r) ? editItineraryReminder(r) : editCustomReminder(r)));
+    // Reminders from an itinerary follow its activities: their times change on the
+    // Itinerary tab, so only reminders the traveler added can be edited here.
+    if (!isItineraryReminder(r)) button('Edit', () => editCustomReminder(r));
     button(r.suppressed ? 'Turn on' : 'Turn off', () => {
       try {
         core.setReminderSuppressed(email, r.id, !r.suppressed);
@@ -238,13 +303,12 @@ document.addEventListener('DOMContentLoaded', () => {
   addBtn.addEventListener('click', (e) => {
     e.preventDefault();
     const title = String(titleEl.value || '').trim();
-    const dt = dtEl.value;
     const type = typeEl.value;
-    if (!title || !dt) {
+    if (!title || !dateEl.value || !timeEl.value) {
       ui.alert(!title ? 'Give your reminder a short title, like "Bus to Batangas City".' : 'Choose the date and time for this reminder.', { title: 'Almost there' });
       return;
     }
-    const dueAt = new Date(dt).getTime();
+    const dueAt = joinWhen(dateEl.value, timeEl.value);
     if (!Number.isFinite(dueAt)) {
       ui.alert('Choose a valid date and time.', { title: 'Check the date' });
       return;
@@ -261,7 +325,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     addCustomReminder(title, type, dueAt);
     titleEl.value = '';
-    dtEl.value = '';
+    dateEl.value = '';
+    timeEl.value = '';
     render();
     ui.toast('Reminder added');
   });
@@ -277,79 +342,27 @@ document.addEventListener('DOMContentLoaded', () => {
       title: 'Edit reminder',
       fields: [
         { name: 'title', label: 'What should we remind you about?', type: 'text', value: reminder.title || '', maxLength: 120 },
-        { name: 'when', label: 'Date and time', type: 'datetime-local', value: toDatetimeLocalValue(eventAt), min: toDatetimeLocalValue(Date.now()) },
+        { name: 'day', label: 'Date', type: 'date', value: dayPart(eventAt), min: dayPart(Date.now()) },
+        { name: 'time', label: 'Time', type: 'time', value: timePart(eventAt) },
         { name: 'type', label: 'Type', type: 'select', value: CUSTOM_TYPES.includes(reminder.type) ? reminder.type : 'Schedule', options: CUSTOM_TYPES.map((type) => [type, type]) },
       ],
       confirmText: 'Save',
-      validate: ({ title, when }) => {
+      validate: ({ title, day, time }) => {
         if (!title) return 'Give your reminder a short title.';
-        const dueAt = new Date(when).getTime();
-        if (!when || !Number.isFinite(dueAt)) return 'Choose a valid date and time.';
+        const dueAt = joinWhen(day, time);
+        if (!Number.isFinite(dueAt)) return 'Choose a valid date and time.';
         if (dueAt <= Date.now()) return 'That time has already passed. Choose a later date and time.';
         const existing = reminderNamed(title, groupIds);
         return existing ? duplicateNameMessage(existing) : '';
       },
     });
     if (!values) return;
-    const dueAt = new Date(values.when).getTime();
+    const dueAt = joinWhen(values.day, values.time);
     const suppressed = group.length > 0 && group.every((item) => item.suppressed);
     group.forEach((item) => core.removeReminderFor(email, item.id));
     addCustomReminder(values.title.trim(), values.type, dueAt, suppressed);
     render();
     ui.toast('Reminder updated');
-  }
-
-  // The trip (open itinerary or planned trip) an activity belongs to.
-  function tripOfActivity(activityId, title, eventAt) {
-    const open = core.getItineraryByEmail()[email];
-    const trips = [open, ...(core.getPlannedTrips?.(email) || [])].filter(Boolean);
-    return trips.find((trip) => (trip.itinerary || []).some((day) => (day.activities || []).some((activity) => (
-      activityId ? activity.id === activityId : Number(activity.dueAt) === Number(eventAt) && activity.title === title
-    )))) || null;
-  }
-
-  // An itinerary reminder: moves its activity (all of that stop's alerts follow). The
-  // new time must be ahead and inside that trip's dates.
-  async function editItineraryReminder(reminder) {
-    const eventAt = Number(reminder.parentDueAt || reminder.dueAt);
-    const name = reminder.parentTitle || reminder.title || 'this activity';
-    const trip = tripOfActivity(reminder.itineraryActivityId, name, eventAt);
-    if (!trip) {
-      ui.alert('This activity is no longer in your itinerary. Sync from your itinerary to refresh your reminders.', { title: 'Activity not found' });
-      return;
-    }
-    const range = core.tripDateRange(trip);
-    const rangeText = core.shortDateRangeText(range);
-    const values = await ui.form({
-      title: 'Edit activity time',
-      message: `“${name}” is part of ${core.tripDisplayName(trip)} (${rangeText}). Changing its time also moves it on your itinerary, and its alerts follow.`,
-      fields: [
-        { name: 'when', label: 'Activity date and time', type: 'datetime-local', value: toDatetimeLocalValue(eventAt), min: toDatetimeLocalValue(Math.max(Date.now(), new Date(`${range.start}T00:00`).getTime())), max: `${range.end}T23:59` },
-      ],
-      confirmText: 'Save',
-      validate: ({ when }) => {
-        const dueAt = new Date(when).getTime();
-        if (!when || !Number.isFinite(dueAt)) return 'Choose a valid date and time.';
-        if (dueAt <= Date.now()) return 'That time has already passed. Choose a later date and time.';
-        const day = dayKey(dueAt);
-        if (day < range.start || day > range.end) return `Choose a time during this trip (${rangeText}). To move the whole trip, use Change dates on the Itinerary tab.`;
-        return '';
-      },
-    });
-    if (!values) return;
-    const updated = core.updateItineraryActivitySchedule?.(email, {
-      activityId: reminder.itineraryActivityId,
-      parentDueAt: eventAt,
-      parentTitle: name,
-      newDueAt: new Date(values.when).getTime(),
-    });
-    if (!updated) {
-      ui.alert('That activity’s time couldn’t be changed. Please try again.', { title: 'Not saved' });
-      return;
-    }
-    try { core.syncRemindersFromItinerary?.(email); core.scheduleAllFor?.(email); } catch (e) {}
-    render();
-    ui.toast('Activity time updated');
   }
 
   // ---- sync / bulk ------------------------------------------------------------------

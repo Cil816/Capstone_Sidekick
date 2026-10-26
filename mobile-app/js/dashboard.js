@@ -832,6 +832,16 @@ async function showDestinationDetails(place, prefs, session) {
       if (routeButton) routeButton.disabled = false;
       if (originStatus) originStatus.textContent = "✓ Using your current location";
       try { localStorage.setItem(USE_CURRENT_LOCATION_KEY, "1"); } catch (error) {}
+      // Show where that is ("Poblacion, Lipa City, Batangas") instead of "My current location".
+      void window.SidekickCore.apiRequest("/api/maps/place-name", { method: "POST", body: JSON.stringify({ lat, lng }) })
+        .then((data) => {
+          const name = String(data?.name || "").trim();
+          if (!name || _selectedOriginPlace !== origin || !originInput?.dataset.currentLocation) return;
+          origin.name = name;
+          originInput.value = name;
+          if (originStatus) originStatus.textContent = "✓ Using your current location";
+        })
+        .catch(() => {});
       await mapReady;
       if (mapEl.dataset.placeKey !== locationKey || _selectedOriginPlace !== origin) return;
       showOriginOnMap(origin);
@@ -962,7 +972,7 @@ async function generateFocusedItinerary(place, prefs, session) {
   }
   const todayValue = dateValue(new Date());
   if (dateValue(start) < todayValue) {
-    const shown = start.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
+    const shown = start.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
     await window.SidekickUI.alert(`${shown} has already passed. Choose today or a later date to start your trip.`, { title: "Start date has passed", confirmText: "Change date" });
     if (startInput) startInput.min = todayValue;
     startInput?.focus();

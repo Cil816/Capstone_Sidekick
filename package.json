@@ -21,6 +21,7 @@
     "@capacitor/android": "^8.3.0",
     "@capacitor/app": "^8.1.2",
     "@capacitor/core": "^8.3.0",
+    "@capacitor/keyboard": "^8.0.6",
     "@capacitor/local-notifications": "^8.0.2",
     "@capacitor/preferences": "^8.0.1"
   },

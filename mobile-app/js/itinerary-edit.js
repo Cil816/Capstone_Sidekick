@@ -129,7 +129,7 @@
   }
 
   function shortDay(ts) {
-    return new Date(Number(ts)).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+    return new Date(Number(ts)).toLocaleDateString("en-US", { weekday: "short", month: "long", day: "numeric", year: "numeric" });
   }
 
   // Why an activity can't be planned at this time ("" when it can): not in the past
@@ -331,7 +331,7 @@
     input.autocomplete = "off";
     input.setAttribute("role", "combobox");
     input.setAttribute("aria-autocomplete", "list");
-    input.placeholder = field.placeholder || "Search a place, e.g. Laiya Beach";
+    input.placeholder = field.placeholder || "Search a place";
     input._place = field.place || null;
     const sessionToken = newSessionToken();
     let timer = 0;
@@ -555,7 +555,7 @@
     const found = findSamePlace(candidate, skip);
     if (!found) return true;
     const when = activityDueAt(found.activity, found.dayIndex);
-    const time = Number.isFinite(when) ? new Date(when).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "";
+    const time = Number.isFinite(when) ? new Date(when).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) : "";
     const day = Number.isFinite(when) ? shortDay(when) : "";
     const name = String(found.activity.title || found.activity.location || "This place");
     const message = `“${name}” is already in your trip on Day ${found.dayIndex + 1}${day ? ` (${day})` : ""}${time ? ` at ${time}` : ""}. Do you want to add it again?`;
@@ -630,7 +630,7 @@
       title: "Edit activity",
       fields: [
         { name: "title", label: "Activity", type: "text", required: true, maxLength: 200, value: activity.title || "" },
-        { name: "date", label: "Date", type: "date", required: true, value: dateValue(originalDueAt), max: tripDateLimits().max },
+        { name: "date", label: "Date", type: "date", required: true, value: dateValue(originalDueAt), min: [tripDateLimits().min, dateValue(originalDueAt)].sort()[0], max: tripDateLimits().max },
         { name: "time", label: "Time", type: "time", required: true, value: timeValue(originalDueAt) },
         {
           name: "location", label: "Where is it?", type: "place", required: true, maxLength: 500, value: originalLocation,

@@ -179,16 +179,27 @@
   // ---- Conversation ----------------------------------------------------------------------
   function wantsTripPlan(text) {
     var lower = String(text || '').toLowerCase();
+    // About a trip the traveler already has ("day 1 in my itinerary"): for the assistant.
+    if (/\b(my|the|our|this|current|saved)\s+(itinerary|trip|plan)\b|\bday\s*\d+\b/.test(lower)) return false;
     return /\b(plan|build|make|create|generate|prepare)\b[^.?!]{0,40}\b(trip|itinerary|itineraries|vacation|getaway|outing|travel plan|tour)\b/.test(lower)
       || /\bitinerary (for|to|in)\b/.test(lower)
       || /\b(plan|schedule) (my|our|a|an) (day|weekend)\b/.test(lower);
+  }
+  // A direct request to open the planner screen ("open the planner", "take me to the itinerary
+  // builder"). Strict on purpose: questions about it ("how do I open the planner?"), "don't",
+  // and messages that only mention the planner stay with the normal chat.
+  function wantsOpenPlanner(text) {
+    var lower = String(text || '').toLowerCase().replace(/[.!?\s]+$/, '').replace(/\s+/g, ' ').trim();
+    if (!lower || lower.length > 80) return false;
+    if (/\b(don'?t|do not|never|not|how|why|what|where|when|which|who|later|is|does)\b/.test(lower)) return false;
+    return /^(?:(?:hey|hi|ok|okay|yo),? )?(?:sidekick,? )?(?:(?:please|pls|can you|could you|would you|will you|can u|i want to|i wanna|i'd like to|let me|let's|lets) )*(?:open|show|launch|go to|bring me to|take me to|bring up|pull up)(?: me)? (?:the |my |your )?(?:trip |itinerary )?(?:planner|itinerary builder|trip builder|builder|itinerary tab|itinerary page|planner tab|planner page)(?: (?:for me|please|pls|now|again|tab|page|screen|sidekick))*$/.test(lower);
   }
   function wantsStop(text) {
     return /^(cancel|stop|never ?mind|nevermind|forget it|no thanks|not now|quit)\b/i.test(String(text || '').trim());
   }
 
   function fmt(date) {
-    return date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+    return date.toLocaleDateString("en-US", { weekday: 'short', month: "long", day: 'numeric', year: "numeric" });
   }
   function peso(value) { return '₱' + Number(value).toLocaleString('en-US'); }
 
@@ -282,6 +293,27 @@
   function isYes(text) {
     return /^(yes|y|yep|yeah|yup|oo|opo|sige|correct|confirm(ed)?|tama|ok(ay)?|go|go ahead|sure|right|that'?s right|looks good|build it|proceed)\b/i.test(String(text || '').trim());
   }
+  // The assistant's last reply, when it suggested planning a trip ("say "plan a trip to Taal"…"):
+  // { destination, mustSee: the places it named in bold, such as "Galleria Taal" }, or null.
+  function lastTripOffer(email) {
+    var messages = [];
+    try { messages = (core()?.getChatByEmail?.() || {})[email] || []; } catch (error) { return null; }
+    for (var i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role !== 'ai') continue;
+      var content = String(messages[i].content || '');
+      var m = content.match(/plan a trip to\s+["“]?([A-Za-zÑñ][A-Za-zÑñ .'-]{1,40}?)["”]?(?=[\s"”.,!?]|$)/i);
+      if (!m) return null;
+      var destination = m[1].trim();
+      var named = [];
+      content.replace(/\*\*([^*]{2,60})\*\*/g, function (all, name) {
+        name = name.trim();
+        if (name.toLowerCase() !== destination.toLowerCase() && named.indexOf(name) < 0 && named.length < 3) named.push(name);
+        return all;
+      });
+      return { destination: destination, mustSee: named };
+    }
+    return null;
+  }
   function isQuestion(text) {
     var t = String(text || '').trim().toLowerCase();
     return /\?\s*$/.test(t) || /^(what|whats|what's|how|where|which|who|why|is|are|can|could|do|does|any|ano|saan|paano|magkano|meron|may)\b/.test(t);
@@ -296,9 +328,37 @@
       + '- **Dates:** ' + when + ' (' + plan.days + ' day' + (plan.days === 1 ? '' : 's') + ')\n'
       + '- **Travelers:** ' + plan.travelers + '\n'
       + '- **Budget:** ' + peso(plan.budget) + ' total\n'
-      + '- **Starting from:** ' + (plan.origin || 'not set') + '\n\n'
+      + '- **Starting from:** ' + (plan.origin || 'not set') + '\n'
+      + (plan.mustSee && plan.mustSee.length ? '- **Must-see:** ' + plan.mustSee.join(', ') + '\n' : '') + '\n'
       + 'Is this correct? Reply **yes** to open the planner, or tell me what to change (for example, “budget 8000” or “change the dates”).';
   }
+  // A date in the past ("yesterday", "last Saturday", "Saturday last week", "2 days ago").
+  function saysPastDate(text) {
+    return /\b(yesterday|kahapon|ago|last\s+(week|weekend|month|year|night|mon|tue|wed|thu|fri|sat|sun)[a-z]*|(mon|tue|wed|thu|fri|sat|sun)[a-z]*\s+last\s+(week|month))\b/i.test(String(text || ''));
+  }
+  // The same budget check as the Itinerary tab: is the budget enough for meals and rooms for
+  // this group and these dates? Resolves to a message to show (the budget is asked again), or ''.
+  async function budgetProblem(plan) {
+    var start = fromIso(plan.startDate);
+    if (!start || !plan.days || !plan.budget) return '';
+    var data;
+    try {
+      data = await core().apiRequest('/api/trip/budget-check', { method: 'POST', body: JSON.stringify({
+        destination: plan.destination, startDate: iso(start), endDate: iso(addDays(start, plan.days - 1)),
+        budgetAmountPhp: plan.budget, travelers: plan.travelers || 1,
+      }) });
+    } catch (error) { return ''; } // can't check now: the Itinerary tab checks it again
+    if (!data || !data.checked || data.realistic) return '';
+    var who = (plan.travelers || 1) + ' traveler' + ((plan.travelers || 1) === 1 ? '' : 's');
+    var length = plan.days + ' day' + (plan.days === 1 ? '' : 's');
+    if (data.outOfScope) return String(data.message || 'That trip is outside what Sidekick can plan.') + ' What budget would you like to use?';
+    if (data.tooHigh) return peso(plan.budget) + ' is far more than a ' + length + ' trip for ' + who + ' would use. What is your actual total budget?';
+    var minimum = Number(data.minimumPhp);
+    return peso(plan.budget) + ' is not enough for ' + who + ' for ' + length + ': meals' + (plan.days > 1 ? ' and rooms' : '')
+      + ' alone come to at least about ' + (Number.isFinite(minimum) ? peso(Math.ceil(minimum / 100) * 100) : 'more than that')
+      + '. What total budget would you like to use? (You can also say “change the dates” or a smaller group.)';
+  }
+
   // The traveler's reply to the summary: apply what they changed, or clear the details they
   // named so they are asked again. Returns true when something changed.
   function applyCorrection(plan, text) {
@@ -361,6 +421,7 @@
         destination: plan.destination,
         // The exact Google place the traveler confirmed, so the builder uses that one.
         placeId: plan.destinationPlaceId || '',
+        mustSee: Array.isArray(plan.mustSee) ? plan.mustSee : [],
         startDate: iso(start),
         endDate: iso(end),
         budgetAmountPhp: plan.budget,
@@ -378,12 +439,18 @@
   // start: the chat already knows this message asks for a trip plan.
   async function handle(email, text, start) {
     var plan = load(email);
+    // "Yes, let's do it" right after the assistant suggested planning a trip: start planning
+    // that trip, keeping the places it was talking about as must-sees.
+    if (wantsOpenPlanner(text)) return { reply: 'Sure! Opening the Itinerary planner for you…', openPlanner: true };
+    var offer = !plan && isYes(text) ? lastTripOffer(email) : null;
+    if (offer) { text = 'plan a trip to ' + offer.destination; start = true; }
     if (!plan && !start && !wantsTripPlan(text)) return null;
-    if (plan && wantsStop(text)) {
+    // "No" to a planning question (not to the summary, where it means "change something").
+    if (plan && (wantsStop(text) || (plan.asked && plan.asked !== 'confirm' && isNo(text)))) {
       save(email, null);
       return { reply: 'Okay, I stopped planning that trip. Ask me any time.' };
     }
-    plan = plan || { destination: '', startDate: '', days: null, travelers: null, budget: null, origin: '', originAsked: false, asked: '' };
+    plan = plan || { destination: '', startDate: '', days: null, travelers: null, budget: null, origin: '', originAsked: false, asked: '', mustSee: offer ? offer.mustSee : [] };
 
     // A real question in the middle of planning ("what are good restaurants in Lipa?") that
     // answers nothing is for the assistant: let the normal chat reply and keep the details.
@@ -405,12 +472,31 @@
         save(email, plan);
         return { reply: (isNo(text) ? 'No problem. ' : '') + 'Which detail should I change: the destination, dates, travelers, budget, or starting point?' };
       }
+    } else if (saysPastDate(text) && (plan.asked === 'dates' || plan.asked === 'days' || !plan.startDate)) {
+      // "Yesterday", "Saturday last week": not a date that can be planned.
+      plan.startDate = '';
+      plan.asked = 'dates';
+      save(email, plan);
+      return { reply: 'That date has already passed. When is the trip? For example, “this Saturday” or “Dec 5 to 6”.' };
     } else {
       absorb(plan, text);
     }
 
     var notFound = await verify(plan);
     if (notFound) { save(email, plan); return { reply: notFound }; }
+    // As soon as the destination, dates, group and budget are known (or change), check the
+    // budget the same way as the Itinerary tab, before asking anything else.
+    var budgetKey = [plan.destination, plan.startDate, plan.days, plan.travelers, plan.budget].join('|');
+    if (plan.destination && plan.startDate && plan.days && plan.travelers && plan.budget && plan.budgetCheckedFor !== budgetKey) {
+      var tooLow = await budgetProblem(plan);
+      if (tooLow) {
+        plan.budget = null;
+        plan.asked = 'budget';
+        save(email, plan);
+        return { reply: tooLow };
+      }
+      plan.budgetCheckedFor = budgetKey;
+    }
     var issue = problem(plan);
     var question = nextQuestion(plan);
     if (issue || question) {
