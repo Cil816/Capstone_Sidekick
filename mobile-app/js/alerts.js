@@ -201,6 +201,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     listEl.appendChild(viewTabs(upcoming.length, past.length));
     shownUpcomingIds = upcoming.map((r) => r.id).join('|');
+    // The open tab's heading ("Upcoming 0", "Expired 17") always comes right under the tabs,
+    // even when the tab is empty, so "Turn off all" / "Remove all" stay in the same place.
+    listEl.appendChild(view === 'expired' ? heading('Expired', past.length) : heading('Upcoming', upcoming.length));
 
     if (view === 'upcoming' && !upcoming.length) {
       listEl.insertAdjacentHTML('beforeend', '<div class="sk-reminders-empty"><strong>Nothing coming up</strong>Reminders that already popped are under Expired.</div>');
@@ -219,13 +222,11 @@ document.addEventListener('DOMContentLoaded', () => {
       });
       const days = Array.from(byDay.keys());
       const openDays = readOpenDays() || new Set([days[0]]);
-      listEl.appendChild(heading('Upcoming', upcoming.length));
       days.forEach((key) => listEl.appendChild(dayGroup(key, byDay.get(key), openDays.has(key))));
     }
 
     if (view === 'expired' && past.length) {
       // Latest first: the one that just popped is on top.
-      listEl.appendChild(heading('Expired', past.length));
       past.slice().reverse().forEach((r) => listEl.appendChild(renderReminderRow(r, true)));
     }
 

@@ -1,6 +1,8 @@
 (function () {
   const ADMIN_TOKEN_KEY = 'admin.sessionToken';
   const LEGACY_ADMIN_TOKEN_KEY = 'sidekick.adminToken';
+  // The sign-in page this tab used (the private link), to return to after signing out.
+  const ADMIN_LOGIN_URL_KEY = 'admin.loginUrl';
 
   function getApiBaseUrl() {
     const config = window.SIDEKICK_ADMIN_CONFIG || {};
@@ -16,17 +18,29 @@
     throw new Error('Configure SIDEKICK_ADMIN_CONFIG.apiBaseUrl with the HTTPS backend URL for production.');
   }
 
-  // The sign-in page is recognised by its form, so it works at /admin/admin-login.html
-  // (local) and at the site root with clean addresses (production).
+  // The sign-in page is recognised by its form, so it works at the private sign-in link
+  // as well as when the files are opened directly.
   function isLoginPage() {
     return Boolean(document.getElementById('admin-login-form'))
       || window.location.pathname.endsWith('admin-login.html');
   }
 
+  function loginPageUrl() {
+    let saved = null;
+    try { saved = sessionStorage.getItem(ADMIN_LOGIN_URL_KEY); } catch (error) { saved = null; }
+    return saved && saved.startsWith('/') && !saved.startsWith('//') ? saved : 'admin-login.html';
+  }
+
+  // True when the Sidekick server itself served this page (the private sign-in link and
+  // the /s/<key>/ pages), not when the files are opened from another local web server.
+  function isServedBySidekick() {
+    try { return new URL(getApiBaseUrl(), window.location.href).origin === window.location.origin; } catch (error) { return false; }
+  }
+
   function ensureAdminSession() {
     const token = sessionStorage.getItem(ADMIN_TOKEN_KEY);
     if (!token && !isLoginPage()) {
-      window.location.href = 'admin-login.html';
+      window.location.href = loginPageUrl();
       return false;
     }
     return Boolean(token);
@@ -165,7 +179,7 @@
   // data), so it can still open and show the pop-up above without internet.
   if ('serviceWorker' in navigator && window.isSecureContext) {
     window.addEventListener('load', () => {
-      navigator.serviceWorker.register('sw.js').catch(() => { /* optional: works without it */ });
+      navigator.serviceWorker.register(isServedBySidekick() ? '/s/sw.js' : 'sw.js').catch(() => { /* optional: works without it */ });
     });
   }
 
@@ -237,7 +251,7 @@
       if (response.status === 401) {
         sessionStorage.removeItem(ADMIN_TOKEN_KEY);
         if (!isLoginPage()) {
-          window.location.replace('admin-login.html');
+          window.location.replace(loginPageUrl());
         }
       }
       throw new Error(message);
@@ -261,7 +275,7 @@
       sessionStorage.removeItem(ADMIN_TOKEN_KEY);
       localStorage.removeItem(LEGACY_ADMIN_TOKEN_KEY);
       sessionStorage.removeItem(LEGACY_ADMIN_TOKEN_KEY);
-      window.location.href = 'admin-login.html';
+      window.location.href = loginPageUrl();
     }
   }
 
@@ -572,12 +586,34 @@
   }
 
   // Simple ranked list with bars (used for interests, styles, budgets).
-  function rankList(items, { denominator, unit, emptyText, limit = 5 }) {
-    const list = (items || []).slice(0, limit);
+  // Whole-number percentages of the counts that add up to exactly 100 (each share rounded
+  // down, then the leftover points go to the largest remainders).
+  function percentagesOf100(counts) {
+    const total = counts.reduce((sum, count) => sum + count, 0);
+    if (!total) return counts.map(() => 0);
+    const raw = counts.map((count) => (count / total) * 100);
+    const shares = raw.map(Math.floor);
+    let left = 100 - shares.reduce((sum, share) => sum + share, 0);
+    raw.map((value, index) => ({ index, rest: value - shares[index] }))
+      .sort((a, b) => b.rest - a.rest || a.index - b.index)
+      .forEach(({ index }) => { if (left > 0) { shares[index] += 1; left -= 1; } });
+    return shares;
+  }
+
+  // shareOfPicks: each row's share of all picks (users can pick several, so shares of
+  // users would add up to more than 100%); choices past the limit are one "Other" row.
+  function rankList(items, { denominator, unit, emptyText, limit = 5, shareOfPicks = false }) {
+    const all = items || [];
+    let list = all.slice(0, limit);
     if (!list.length) return `<div class="ax-empty">${escapeHtml(emptyText)}</div>`;
+    const rest = all.slice(limit);
+    if (shareOfPicks && rest.length) {
+      list = [...list, { name: `Other (${rest.length} more)`, count: rest.reduce((sum, item) => sum + item.count, 0) }];
+    }
+    const shares = shareOfPicks ? percentagesOf100(list.map((item) => item.count)) : null;
     const max = Math.max(1, ...list.map((item) => item.count));
-    return `<ol class="ax-rank">${list.map((item) => {
-      const share = denominator ? Math.round((item.count / denominator) * 100) : null;
+    return `<ol class="ax-rank">${list.map((item, index) => {
+      const share = shares ? shares[index] : denominator ? Math.round((item.count / denominator) * 100) : null;
       return `<li>
         <div class="ax-rank-row"><span class="ax-rank-name" title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</span><span class="ax-rank-count">${share !== null ? `${escapeHtml(share)}%` : `${escapeHtml(formatNumber(item.count))} ${escapeHtml(item.count === 1 ? unit[0] : unit[1])}`}</span></div>
         <div class="ax-rank-bar" aria-hidden="true"><span style="width:${Math.max(4, Math.round((item.count / max) * 100))}%"></span></div>
@@ -592,20 +628,20 @@
     const userUnit = ['user', 'users'];
     const dashboardTarget = document.getElementById('user-base-summary');
     if (dashboardTarget) {
-      dashboardTarget.innerHTML = rankList(profileSummary?.interests, { denominator: usersWithPreferences, unit: userUnit, emptyText: 'No interests saved yet.' });
+      dashboardTarget.innerHTML = rankList(profileSummary?.interests, { unit: userUnit, emptyText: 'No interests saved yet.', shareOfPicks: true });
     }
     const coverage = document.getElementById('user-base-coverage');
     if (coverage) {
       coverage.textContent = Number.isFinite(totalUsers)
-        ? `Based on the ${formatNumber(usersWithPreferences)} of ${formatNumber(totalUsers)} users who saved preferences at onboarding.`
-        : `Based on the ${formatNumber(usersWithPreferences)} users who saved preferences at onboarding.`;
+        ? `Based on the ${formatNumber(usersWithPreferences)} of ${formatNumber(totalUsers)} users who saved preferences at onboarding. Users can pick several, so each list shows its share of all picks.`
+        : `Based on the ${formatNumber(usersWithPreferences)} users who saved preferences at onboarding. Users can pick several, so each list shows its share of all picks.`;
     }
     const reportTarget = document.getElementById('report-audience');
     if (reportTarget) {
       const block = (title, note, body) => `<article class="admin-card"><div class="ax-card-head"><div><h3 class="ax-card-title">${escapeHtml(title)}</h3><p class="ax-card-note">${escapeHtml(note)}</p></div></div>${body}</article>`;
       reportTarget.innerHTML = [
-        block('Travel interests', 'Share of users', rankList(profileSummary?.interests, { denominator: usersWithPreferences, unit: userUnit, emptyText: 'No interests saved yet.', limit: 8 })),
-        block('Travel styles', 'Share of users', rankList(profileSummary?.travelStyles, { denominator: usersWithPreferences, unit: userUnit, emptyText: 'No travel styles saved yet.', limit: 8 })),
+        block('Travel interests', 'Share of all picks', rankList(profileSummary?.interests, { unit: userUnit, emptyText: 'No interests saved yet.', limit: 8, shareOfPicks: true })),
+        block('Travel styles', 'Share of all picks', rankList(profileSummary?.travelStyles, { unit: userUnit, emptyText: 'No travel styles saved yet.', limit: 8, shareOfPicks: true })),
         block('Trip budgets', 'On saved itineraries', rankList(profileSummary?.savedItineraryBudgets, { denominator: null, unit: ['itinerary', 'itineraries'], emptyText: 'No budgets recorded yet.', limit: 8 })),
       ].join('');
     }
@@ -2339,6 +2375,7 @@
 
     const loginForm = document.getElementById('admin-login-form');
     if (loginForm) {
+      try { sessionStorage.setItem(ADMIN_LOGIN_URL_KEY, window.location.pathname); } catch (error) { /* optional */ }
       loginForm.addEventListener('submit', async (event) => {
         event.preventDefault();
         const username = document.getElementById('admin-username')?.value || '';
@@ -2357,7 +2394,10 @@
           if (!payload.ok) throw new Error(data?.error || 'Admin login failed.');
           sessionStorage.setItem(ADMIN_TOKEN_KEY, data.token);
           showLoading(); // stays up while the dashboard opens
-          window.location.href = 'admin.html';
+          // The admin pages live under this session's own encrypted address.
+          const pagesBase = typeof data.pagesBase === 'string' && /^\/s\/[A-Za-z0-9_-]{91}\/$/.test(data.pagesBase) && isServedBySidekick()
+            ? data.pagesBase : '';
+          window.location.href = pagesBase ? `${pagesBase}dashboard` : 'admin.html';
         } catch (error) {
           hideLoading(true);
           setStatus(getLoginErrorMessage(error), 'error');

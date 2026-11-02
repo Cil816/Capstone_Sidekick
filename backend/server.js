@@ -6,6 +6,7 @@ import sql from 'mssql';
 import bcrypt from 'bcryptjs';
 import crypto from 'node:crypto';
 import dns from 'node:dns';
+import net from 'node:net';
 import nodemailer from 'nodemailer';
 import path from 'node:path';
 import { readFile } from 'node:fs/promises';
@@ -106,6 +107,58 @@ if (forceHttps) {
   });
 }
 
+// The admin website has no public address. Administrators open the sign-in page at a
+// private link: ADMIN_ENTRY_PATH from backend/.env, or (when that isn't set) one
+// derived from the admin secret, printed in the server log at startup. After signing
+// in, every admin page lives under /s/<key>/, where <key> is the admin's session
+// encrypted (AES-256-GCM) with a server key: it can't be guessed or forged, and it
+// stops opening pages as soon as that session signs out or expires.
+const ADMIN_LINK_SECRET = String(process.env.ADMIN_LINK_SECRET || '').trim()
+  || String(process.env.ADMIN_PASSWORD || '').trim()
+  || crypto.randomBytes(32).toString('hex');
+const ADMIN_ENTRY_PATH = (() => {
+  const configured = String(process.env.ADMIN_ENTRY_PATH || '').trim().replace(/^\/+|\/+$/g, '');
+  if (/^[A-Za-z0-9_-]{16,100}$/.test(configured)) return `/${configured}`;
+  if (configured) console.warn('[admin] ADMIN_ENTRY_PATH must be 16-100 letters, digits, - or _; using the generated link instead.');
+  return `/${crypto.createHmac('sha256', ADMIN_LINK_SECRET).update('sidekick-admin-entry').digest('hex').slice(0, 32)}`;
+})();
+const ADMIN_PAGES_PREFIX = '/s/';
+const ADMIN_PAGE_KEY_PATTERN = /^[A-Za-z0-9_-]{91}$/;
+const adminPageCipherKey = crypto.createHmac('sha256', ADMIN_LINK_SECRET).update('sidekick-admin-page-key').digest();
+
+// The session's token hash and expiry, encrypted: 12-byte IV + 40 bytes + 16-byte tag.
+function makeAdminPageKey(token, expiresAt) {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', adminPageCipherKey, iv);
+  const plain = Buffer.alloc(40);
+  Buffer.from(hashSessionToken(token), 'hex').copy(plain, 0);
+  plain.writeBigUInt64BE(BigInt(Math.max(0, Math.floor(Number(expiresAt) || 0))), 32);
+  const encrypted = Buffer.concat([cipher.update(plain), cipher.final()]);
+  return Buffer.concat([iv, encrypted, cipher.getAuthTag()]).toString('base64url');
+}
+
+// Returns { tokenHash, expiresAt } for a genuine, unexpired key; otherwise null.
+function readAdminPageKey(key) {
+  if (!ADMIN_PAGE_KEY_PATTERN.test(String(key || ''))) return null;
+  const raw = Buffer.from(key, 'base64url');
+  if (raw.length !== 68) return null;
+  let plain;
+  try {
+    const decipher = crypto.createDecipheriv('aes-256-gcm', adminPageCipherKey, raw.subarray(0, 12));
+    decipher.setAuthTag(raw.subarray(52));
+    plain = Buffer.concat([decipher.update(raw.subarray(12, 52)), decipher.final()]);
+  } catch (error) {
+    return null;
+  }
+  const expiresAt = Number(plain.readBigUInt64BE(32));
+  if (!(expiresAt > Date.now())) return null;
+  return { tokenHash: plain.subarray(0, 32).toString('hex'), expiresAt };
+}
+
+const adminPagesBase = (token, expiresAt) => `${ADMIN_PAGES_PREFIX}${makeAdminPageKey(token, expiresAt)}/`;
+const isPrivateAdminPath = (pathname) => pathname === ADMIN_ENTRY_PATH
+  || pathname.startsWith(`${ADMIN_ENTRY_PATH}/`) || pathname.startsWith(ADMIN_PAGES_PREFIX);
+
 // Security headers. The admin website gets a strict Content-Security-Policy (it
 // loads only its own scripts); API responses are never cached or framed.
 const ADMIN_CONTENT_SECURITY_POLICY = [
@@ -131,12 +184,18 @@ app.use((req, res, next) => {
   res.set('Permissions-Policy', 'camera=(), microphone=(), payment=(), usb=(), interest-cohort=()');
   if (forceHttps) res.set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
   // In production every page on the site is the admin website (served at /).
-  if (req.path === '/admin' || req.path.startsWith('/admin/') || (isProduction && !req.path.startsWith('/api/'))) {
+  if (req.path === '/admin' || req.path.startsWith('/admin/') || isPrivateAdminPath(req.path)
+    || (isProduction && !req.path.startsWith('/api/'))) {
     res.set('Content-Security-Policy', ADMIN_CONTENT_SECURITY_POLICY);
     res.set('X-Frame-Options', 'DENY');
     // Admin pages and files may only be loaded by the admin website itself. (Not set on
     // /api/: the phone app loads place photos from it.)
     res.set('Cross-Origin-Resource-Policy', 'same-origin');
+  }
+  if (isPrivateAdminPath(req.path)) {
+    // The private links never leave the page (not even to Google Fonts) or reach search engines.
+    res.set('Referrer-Policy', 'no-referrer');
+    res.set('X-Robots-Tag', 'noindex, nofollow');
   }
   if (req.path.startsWith('/api/')) {
     // Routes such as /api/maps/photo may replace this with their own caching.
@@ -184,85 +243,140 @@ app.use('/api', (req, res, next) => {
 // and talks to /api only. Locally the app's pages stay available for browser testing.
 if (!isProduction) app.use(express.static(mobileAppDir, { index: false }));
 // The admin website is static files; serving them here means no separate web server
-// is needed. /admin redirects to /admin/, whose index page opens the admin sign-in.
+// is needed. Its pages are only reachable through the private links described above.
 const adminWebsiteDir = path.join(projectRoot, 'admin-website');
-if (isProduction) {
-  // Production: the site root is the landing page (download the app), the admin
-  // sign-in is /admin, and the other admin pages keep clean addresses
-  // (app.sidekickph.me/users instead of /admin/admin-users.html). Old .html and
-  // /admin/... addresses redirect to the clean ones, and only the pages below plus
-  // the css, js and assets folders are public.
-  const ADMIN_PAGES = {
-    '/': 'landing.html',
-    '/admin': 'admin-login.html',
-    '/dashboard': 'admin.html',
-    '/users': 'admin-users.html',
-    '/travel-plans': 'admin-itineraries.html',
-    '/reports': 'admin-analytics.html',
-    '/reviews': 'admin-reviews.html',
-    '/popular-places': 'admin-popular.html',
-    '/activity': 'admin-activity.html',
-    '/system': 'admin-integrations.html',
-    '/api-usage': 'admin-usage.html',
-    '/settings': 'admin-controls.html',
-  };
-  const ADMIN_PAGE_ROUTES = Object.fromEntries(Object.entries(ADMIN_PAGES).map(([route, file]) => [file, route]));
-  ADMIN_PAGE_ROUTES['index.html'] = '/admin';
-  // "Connections" and "App setup" were merged into one System status page.
-  ADMIN_PAGE_ROUTES['admin-settings.html'] = '/system';
-  const RENAMED_ROUTES = { '/connections': '/system', '/setup': '/system' };
-  const queryOf = (req) => {
-    const index = req.originalUrl.indexOf('?');
-    return index === -1 ? '' : req.originalUrl.slice(index);
-  };
+const queryOf = (req) => {
+  const index = req.originalUrl.indexOf('?');
+  return index === -1 ? '' : req.originalUrl.slice(index);
+};
+// Admin pages under /s/<key>/ keep clean names (…/users instead of admin-users.html).
+const ADMIN_PAGE_FILES = {
+  dashboard: 'admin.html',
+  users: 'admin-users.html',
+  'travel-plans': 'admin-itineraries.html',
+  reports: 'admin-analytics.html',
+  reviews: 'admin-reviews.html',
+  'popular-places': 'admin-popular.html',
+  activity: 'admin-activity.html',
+  system: 'admin-integrations.html',
+  'api-usage': 'admin-usage.html',
+  settings: 'admin-controls.html',
+};
+const ADMIN_PAGE_NAMES = Object.fromEntries(Object.entries(ADMIN_PAGE_FILES).map(([name, file]) => [file, name]));
+// "Connections" and "App setup" were merged into one System status page.
+ADMIN_PAGE_NAMES['admin-settings.html'] = 'system';
+const ADMIN_SITE_FILE = /^\/(css|js|assets)\/([\w-]+(?:\/[\w-]+)*\.[a-z0-9]+)$/i;
+// Links inside the pages become relative clean names, so they stay under the same key.
+const toSessionLinks = (html) => html.replace(/href="([a-z-]+\.html)(#[^"]*)?"/g,
+  (match, file, hash = '') => (ADMIN_PAGE_NAMES[file] ? `href="${ADMIN_PAGE_NAMES[file]}${hash}"` : match));
 
-  app.use((req, res, next) => {
-    if (req.method !== 'GET' && req.method !== 'HEAD') return next();
-    // Old addresses: /admin/... and /<page>.html -> the clean address. /admin itself
-    // is the sign-in page, and /admin/ goes there too.
-    // Only known pages and the css/js/assets files are redirect targets; anything else
-    // goes to the sign-in page, so "/admin//other-site.com" can't send visitors elsewhere.
-    if (req.path.startsWith('/admin/')) {
-      const file = req.path.slice('/admin/'.length);
-      const isSiteFile = /^(css|js|assets)\/[\w-]+(\/[\w-]+)*\.[a-z0-9]+$/i.test(file);
-      return res.redirect(302, (ADMIN_PAGE_ROUTES[file] || (isSiteFile ? `/${file}` : '/admin')) + queryOf(req));
-    }
-    const file = req.path.replace(/^\/+/, '');
-    if (ADMIN_PAGE_ROUTES[file]) return res.redirect(302, ADMIN_PAGE_ROUTES[file] + queryOf(req));
-    // "/users/" -> "/users", so the page's relative css/js links still resolve.
-    const trimmed = req.path.replace(/\/+$/, '');
-    if (RENAMED_ROUTES[trimmed || req.path]) return res.redirect(302, RENAMED_ROUTES[trimmed || req.path] + queryOf(req));
-    if (trimmed && trimmed !== req.path && ADMIN_PAGES[trimmed]) return res.redirect(302, trimmed + queryOf(req));
-    return next();
-  });
+// Shown for a wrong, expired or signed-out key. Nothing on it hints at the sign-in
+// link; in the admin's own browser tab, session-check.js reopens the page with a fresh
+// key (or goes back to the sign-in page the admin used).
+function sendAdminPageGone(res) {
+  res.set('Cache-Control', 'no-store');
+  return res.status(404).type('html').send('<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">'
+    + '<meta name="viewport" content="width=device-width, initial-scale=1"><title>Page not found · Sidekick</title>'
+    + `<script src="${ADMIN_PAGES_PREFIX}session-check.js"></script></head>`
+    + '<body><h1>Page not found</h1><p><a href="/">Go to Sidekick</a></p></body></html>');
+}
 
-  // Links inside the pages point at the clean addresses, so clicking around never
-  // shows ".html" (the files themselves keep their names for local development).
-  const toCleanLinks = (html) => html.replace(/href="([a-z-]+\.html)(#[^"]*)?"/g,
-    (match, file, hash = '') => (ADMIN_PAGE_ROUTES[file] ? `href="${ADMIN_PAGE_ROUTES[file]}${hash}"` : match));
-  Object.entries(ADMIN_PAGES).forEach(([route, file]) => {
-    app.get(route, async (req, res, next) => {
-      try {
-        const html = await readFile(path.join(adminWebsiteDir, file), 'utf8');
-        res.set('Cache-Control', 'no-cache');
-        return res.type('html').send(toCleanLinks(html));
-      } catch (error) {
-        return next(error);
-      }
+// The private sign-in page: <ADMIN_ENTRY_PATH>/ (with the slash, so its relative
+// css/js links resolve to the files below and not to the phone app's).
+app.get(ADMIN_ENTRY_PATH, async (req, res, next) => {
+  if (!req.originalUrl.split('?')[0].endsWith('/')) return res.redirect(302, `${ADMIN_ENTRY_PATH}/${queryOf(req)}`);
+  try {
+    const html = await readFile(path.join(adminWebsiteDir, 'admin-login.html'), 'utf8');
+    res.set('Cache-Control', 'no-store');
+    return res.type('html').send(html);
+  } catch (error) {
+    return next(error);
+  }
+});
+['css', 'js', 'assets'].forEach((folder) => {
+  app.use(`${ADMIN_ENTRY_PATH}/${folder}`, express.static(path.join(adminWebsiteDir, folder), { index: false }));
+});
+
+// Files for the /s/ pages that don't need a key.
+app.get(`${ADMIN_PAGES_PREFIX}session-check.js`, (req, res) => {
+  res.set('Cache-Control', 'no-cache');
+  res.sendFile(path.join(adminWebsiteDir, 'js', 'session-check.js'));
+});
+// Service worker for the admin website's offline copy (admin-website/sw.js), covering
+// every /s/ page, always re-checked.
+app.get(`${ADMIN_PAGES_PREFIX}sw.js`, (req, res) => {
+  res.set('Cache-Control', 'no-cache');
+  res.type('application/javascript');
+  res.sendFile(path.join(adminWebsiteDir, 'sw.js'));
+});
+
+app.use(`${ADMIN_PAGES_PREFIX}:key`, async (req, res, next) => {
+  if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+  const { key } = req.params;
+  const page = readAdminPageKey(key);
+  if (!page) return sendAdminPageGone(res);
+  // The website's own style sheets, scripts and images (the same files are public on
+  // the landing page): a genuine, unexpired key is enough.
+  const siteFile = req.path.match(ADMIN_SITE_FILE);
+  if (siteFile) {
+    res.set('Cache-Control', 'no-cache');
+    return res.sendFile(`${siteFile[1]}/${siteFile[2]}`, { root: adminWebsiteDir }, (error) => {
+      if (error && !res.headersSent) next();
     });
+  }
+  const name = req.path.replace(/^\/+|\/+$/g, '');
+  const base = `${ADMIN_PAGES_PREFIX}${key}/`;
+  if (!name) return res.redirect(302, `${base}dashboard${queryOf(req)}`);
+  if (ADMIN_PAGE_NAMES[name]) return res.redirect(302, `${base}${ADMIN_PAGE_NAMES[name]}${queryOf(req)}`);
+  if (!ADMIN_PAGE_FILES[name]) return sendAdminPageGone(res);
+  if (req.path !== `/${name}`) return res.redirect(302, `${base}${name}${queryOf(req)}`);
+  // Pages need the session itself to be active (not signed out).
+  let session;
+  try {
+    session = await findAdminSessionByHash(page.tokenHash);
+  } catch (error) {
+    console.error('Admin page session check failed:', error.message);
+    res.set('Retry-After', '10');
+    return res.status(503).type('text').send('Sidekick could not check your admin sign-in right now. Please reload in a moment.');
+  }
+  if (!session) return sendAdminPageGone(res);
+  try {
+    const html = await readFile(path.join(adminWebsiteDir, ADMIN_PAGE_FILES[name]), 'utf8');
+    res.set('Cache-Control', 'no-store');
+    return res.type('html').send(toSessionLinks(html));
+  } catch (error) {
+    return next(error);
+  }
+});
+
+if (isProduction) {
+  // Production: the site root is the landing page (download the app). Its css, js and
+  // assets folders are public; the admin pages are not.
+  app.get('/', async (req, res, next) => {
+    try {
+      const html = await readFile(path.join(adminWebsiteDir, 'landing.html'), 'utf8');
+      res.set('Cache-Control', 'no-cache');
+      return res.type('html').send(html);
+    } catch (error) {
+      return next(error);
+    }
   });
   ['css', 'js', 'assets'].forEach((folder) => {
     app.use(`/${folder}`, express.static(path.join(adminWebsiteDir, folder), { index: false }));
   });
-  // Service worker for the admin website's offline copy (admin-website/sw.js). It is
-  // served from the site root so it covers every admin page, and always re-checked.
+  // The service worker browsers registered before the private links: still served so
+  // those copies keep updating (it never stores account data).
   app.get('/sw.js', (req, res) => {
     res.set('Cache-Control', 'no-cache');
     res.type('application/javascript');
     res.sendFile(path.join(adminWebsiteDir, 'sw.js'));
   });
 } else {
-  app.use('/admin', express.static(adminWebsiteDir));
+  // Locally the landing page stays at /admin/landing.html for testing. The admin pages
+  // themselves are only at the private links, as in production.
+  const adminStatic = express.static(adminWebsiteDir, { index: false });
+  const LOCAL_PUBLIC_FILE = /^\/(landing\.html|(css|js|assets)\/[\w-]+(\/[\w-]+)*\.[a-z0-9]+)$/i;
+  app.use('/admin', (req, res, next) => (LOCAL_PUBLIC_FILE.test(req.path) ? adminStatic(req, res, next) : next()));
 }
 
 // The app's legal pages, also readable on the website (the landing page links to
@@ -1005,6 +1119,27 @@ async function findAdminSession(token) {
   return row ? { username: row.username, role: row.role, expiresAt: new Date(row.expires_at).getTime() } : null;
 }
 
+// The same check from a token's hash (the admin page keys carry only the hash).
+async function findAdminSessionByHash(tokenHash) {
+  if (!SESSION_TOKEN_PATTERN.test(tokenHash)) return null;
+  for (const [token, local] of adminSessions) {
+    if (hashSessionToken(token) !== tokenHash) continue;
+    if (local.expiresAt > Date.now()) return local;
+    adminSessions.delete(token);
+    return null;
+  }
+  if (!await hasSessionTables()) return null;
+  const result = await new sql.Request()
+    .input('tokenHash', sql.Char(64), tokenHash)
+    .query(`
+      SELECT username, role, expires_at
+      FROM dbo.admin_api_sessions
+      WHERE token_hash = @tokenHash AND expires_at > SYSUTCDATETIME()
+    `);
+  const row = result.recordset[0];
+  return row ? { username: row.username, role: row.role, expiresAt: new Date(row.expires_at).getTime() } : null;
+}
+
 async function deleteAdminSession(token) {
   adminSessions.delete(token);
   if (SESSION_TOKEN_PATTERN.test(token) && await hasSessionTables()) {
@@ -1089,7 +1224,16 @@ function haversineKm(a, b) {
 // names a neighbouring province is out; anything else falls back to the box.
 const BATANGAS_BOUNDS = { low: { latitude: 13.45, longitude: 120.45 }, high: { latitude: 14.30, longitude: 121.55 } };
 const NEIGHBOURING_PROVINCES = /\b(cavite|laguna|quezon province|quezon,|mindoro|marinduque|romblon|metro manila|manila|rizal|bulacan|pampanga|bataan)\b/i;
-const OUT_OF_SCOPE_MESSAGE = 'Sidekick plans trips in the province of Batangas only. Choose a place in Batangas, like Nasugbu, Anilao, Taal, Lipa or Laiya.';
+// Travel styles and interests that were merged: "Cultural" and "Historical Sites" are
+// now "Pilgrimage" (churches, shrines and heritage sites), and "Museums" is its own
+// interest. Older saved answers read as the new names; the new names are added to
+// dbo.travel_styles / dbo.interests the first time someone saves them.
+const RENAMED_PREFERENCES = { Cultural: 'Pilgrimage', 'Historical Sites': 'Pilgrimage', Mountains: 'Hiking' };
+const NEW_PREFERENCE_NAMES = { travelStyles: ['Pilgrimage'], interests: ['Pilgrimage', 'Museums'] };
+function currentPreferenceNames(names) {
+  return Array.from(new Set((names || []).map((name) => RENAMED_PREFERENCES[name] || name)));
+}
+const OUT_OF_SCOPE_MESSAGE ='Sidekick plans trips in the province of Batangas only. Choose a place in Batangas, like Nasugbu, Anilao, Taal, Lipa or Laiya.';
 
 function insideBatangasBox(lat, lng) {
   const la = Number(lat);
@@ -1260,6 +1404,15 @@ function parseLocation(value) {
 // Every search is limited to Batangas (see BATANGAS_BOUNDS): text searches only look
 // inside the province's box, and results outside the province are dropped. Pass
 // { anyRegion: true } only to find out where a place is (destination check).
+// Time limits for each request to Google, so a stalled answer never leaves the traveler
+// waiting on the progress screen: the route or place is then treated as unavailable (the
+// schedule uses a labelled estimate) or the build reports that it couldn't finish.
+const GOOGLE_PLACES_TIMEOUT_MS = 15 * 1000;
+const GOOGLE_ROUTES_TIMEOUT_MS = 10 * 1000;
+// Search-grounded Gemini answers can take a minute or more; this only stops a stalled one.
+const GEMINI_TIMEOUT_MS = 180 * 1000;
+const isTimeoutError = (error) => error?.name === 'TimeoutError' || error?.name === 'AbortError';
+
 async function callGooglePlacesApi(path, requestPayload) {
   const { anyRegion = false, ...payload } = requestPayload || {};
   if (!anyRegion && path === 'places:searchText') {
@@ -1286,6 +1439,7 @@ async function callGooglePlacesApiRaw(path, payload) {
   const request = (async () => {
     const response = await fetch('https://places.googleapis.com/v1/' + path, {
       method: 'POST',
+      signal: AbortSignal.timeout(GOOGLE_PLACES_TIMEOUT_MS),
       headers: {
         'Content-Type': 'application/json',
         'X-Goog-Api-Key': apiKey,
@@ -1324,6 +1478,7 @@ async function callGoogleRoutesApi(payload) {
     try {
       const response = await fetch('https://routes.googleapis.com/directions/v2:computeRoutes', {
         method: 'POST',
+        signal: AbortSignal.timeout(GOOGLE_ROUTES_TIMEOUT_MS),
         headers: {
           'Content-Type': 'application/json',
           'X-Goog-Api-Key': apiKey,
@@ -1421,8 +1576,8 @@ async function getUserProfileContext(email) {
   ]);
 
   return {
-    travelTypes: (travelTypes.recordset || []).map((row) => row.name),
-    interests: (interests.recordset || []).map((row) => row.name),
+    travelTypes: currentPreferenceNames((travelTypes.recordset || []).map((row) => row.name)),
+    interests: currentPreferenceNames((interests.recordset || []).map((row) => row.name)),
     preferredPlaces: (preferredPlaces.recordset || []).map((row) => row.name),
     recentTrips: (recentTrips.recordset || []).map((row) => ({
       trip_title: row.trip_title,
@@ -1576,6 +1731,9 @@ async function callGeminiApi({ message, contextText, systemInstruction, response
     method: 'POST',
     headers: { 'Content-Type': 'application/json' , 'x-goog-api-key': apiKey},
     body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
+  }).catch((error) => {
+    throw isTimeoutError(error) ? new Error('The AI service took too long to answer. Please try again.') : error;
   });
 
   const errorPayload = response.ok ? null : await response.json().catch(() => ({}));
@@ -1649,6 +1807,9 @@ async function callGeminiSearchApi({ message, contextText = '', systemInstructio
       tools: [{ google_search: {} }],
       generationConfig,
     }),
+    signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
+  }).catch((error) => {
+    throw isTimeoutError(error) ? new Error('Grounded price search took too long to answer.') : error;
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -1872,11 +2033,13 @@ async function executeSidekickTool(name, args, email) {
     await pool.query`DELETE FROM dbo.user_travel_styles WHERE user_id = ${user.user_id}`;
     await pool.query`DELETE FROM dbo.user_interests WHERE user_id = ${user.user_id}`;
     await pool.query`DELETE FROM dbo.user_preferred_places WHERE user_id = ${user.user_id}`;
-    for (const value of travelTypes) {
+    for (const value of currentPreferenceNames(travelTypes.map(String))) {
+      if (NEW_PREFERENCE_NAMES.travelStyles.includes(value)) await pool.query`IF NOT EXISTS (SELECT 1 FROM dbo.travel_styles WHERE style_name = ${value}) INSERT INTO dbo.travel_styles (style_name) VALUES (${value})`;
       const row = await pool.query`SELECT style_id FROM dbo.travel_styles WHERE style_name = ${String(value)}`;
       if (row.recordset[0]?.style_id) await pool.query`INSERT INTO dbo.user_travel_styles (user_id, style_id) VALUES (${user.user_id}, ${row.recordset[0].style_id})`;
     }
-    for (const value of interests) {
+    for (const value of currentPreferenceNames(interests.map(String))) {
+      if (NEW_PREFERENCE_NAMES.interests.includes(value)) await pool.query`IF NOT EXISTS (SELECT 1 FROM dbo.interests WHERE interest_name = ${value}) INSERT INTO dbo.interests (interest_name) VALUES (${value})`;
       const row = await pool.query`SELECT interest_id FROM dbo.interests WHERE interest_name = ${String(value)}`;
       if (row.recordset[0]?.interest_id) await pool.query`INSERT INTO dbo.user_interests (user_id, interest_id) VALUES (${user.user_id}, ${row.recordset[0].interest_id})`;
     }
@@ -2026,6 +2189,7 @@ async function fetchGooglePlaceReviewData(placeId) {
   const apiKey = getMapsApiKey();
   if (!apiKey) throw new Error('Google Maps is not configured on the backend.');
   const response = await fetch(`https://places.googleapis.com/v1/places/${encodeURIComponent(normalizedPlaceId)}`, {
+    signal: AbortSignal.timeout(GOOGLE_PLACES_TIMEOUT_MS),
     headers: {
       'X-Goog-Api-Key': apiKey,
       'X-Goog-FieldMask': 'id,displayName,rating,userRatingCount,reviews.rating,reviews.text,reviews.publishTime,googleMapsUri',
@@ -2376,7 +2540,22 @@ function hasRouteCoordinates(value) {
     && Number(lng) >= -180 && Number(lng) <= 180;
 }
 
-async function calculateRoute({ origin, destination, travelMode = 'DRIVE' }) {
+// The same route asked for twice at once (two itinerary legs, or the app and a build)
+// is looked up once.
+const routeInFlight = new Map();
+async function calculateRoute(request) {
+  const key = routeCacheKey(request?.origin, request?.destination, String(request?.travelMode || 'DRIVE').toUpperCase());
+  if (routeInFlight.has(key)) return routeInFlight.get(key);
+  const lookup = calculateRouteNow(request);
+  routeInFlight.set(key, lookup);
+  try {
+    return await lookup;
+  } finally {
+    routeInFlight.delete(key);
+  }
+}
+
+async function calculateRouteNow({ origin, destination, travelMode = 'DRIVE' }) {
   const mode = String(travelMode || 'DRIVE').toUpperCase();
   const allowedModes = new Set(['DRIVE', 'WALK', 'BICYCLE', 'TRANSIT', 'TWO_WHEELER']);
   const inputError = (message) => Object.assign(new Error(message), { statusCode: 400 });
@@ -2472,8 +2651,74 @@ const NON_VACATION_TYPES = new Set([
   'hair_salon', 'beauty_salon', 'barber_shop', 'nail_salon', 'preschool', 'child_care_agency',
   'courier_service', 'plumber', 'electrician', 'general_contractor', 'roofing_contractor', 'locksmith', 'painter',
 ]);
-const NON_VACATION_NAME = /\b(police|pnp|fire station|bfp|municipal hall|city hall|town hall|barangay hall|hall of justice|court|post office|hospital|clinic|medical|health center|pharmacy|drugstore|elementary school|high school|integrated school|central school|university|college|bank|pawnshop|terminal|gas station|gasoline|public market|wet market|fish market|meat market|palengke|talipapa|supermarket|grocery|mall|hardware|cemetery|funeral|memorial park|government|office|barangay|subdivision|residences|condominium|apartment|dormitory|boarding house|warehouse|factory|refinery|power plant|power station|substation|depot|industrial|economic zone|ecozone|headquarters|jail|prison|detention|police station|capitol compound|lto|bir|sss|philhealth|pag-?ibig|deped|dswd|salon|barbershop|car wash|repair shop|vulcanizing|junk ?shop|iglesia ni cristo|kingdom hall|jehovah|bible baptist|baptist church|born again|christian fellowship|ministries|assembly of god|seventh[- ]day)\b/i;
+const NON_VACATION_NAME = /\b(police|pnp|fire station|bfp|municipal hall|city hall|town hall|barangay hall|hall of justice|court|post office|hospital|clinic|medical|health center|pharmacy|drugstore|elementary school|high school|integrated school|central school|university|college|bank|pawnshop|terminal|gas station|gasoline|public market|wet market|fish market|meat market|palengke|talipapa|supermarket|grocery|mall|hardware|cemetery|funeral|memorial park|government|office|barangay|subdivision|residences|condominium|apartment|dormitory|boarding house|warehouse|factory|refinery|power plant|power station|substation|depot|industrial|economic zone|ecozone|headquarters|jail|prison|detention|police station|capitol compound|lto|bir|sss|philhealth|pag-?ibig|deped|dswd|salon|barbershop|car wash|repair shop|vulcanizing|junk ?shop|iglesia ni cristo|kingdom hall|jehovah|bible baptist|baptist church|born again|christian fellowship|ministries|assembly of god|seventh[- ]day|for sale|house and lot|real estate|realty|model house|reception hall|function hall|events? place|events? venue|catering|playmates|girlie|girls? bar|gentlemen'?s club|strip club|bikini bar|pilates|crossfit|yoga studio|dance studio|fitness (center|centre|gym|studio|club))\b/i;
 const EVENING_MARKET_NAME = /\b(night market|food park|night bazaar|food bazaar)\b/i;
+// A restaurant, cafe or eatery (by type, or by name when Google's types miss it: "San
+// Diego Restaurant"). Night markets and food parks are evening stops, not this.
+const FOOD_NAME = /\b(restaurant|resto|cafe|café|coffee|eatery|grill|bistro|kitchen|carinderia|kainan|bulalohan|lomihan|food house)\b/i;
+function isFoodPlace(place) {
+  return (place?.types || []).some((type) => /restaurant|cafe|food|bakery|meal_/.test(String(type)))
+    || (FOOD_NAME.test(String(place?.name || '')) && !EVENING_MARKET_NAME.test(String(place?.name || '')));
+}
+// A cafe, coffee shop, bakery or dessert place: a coffee or merienda stop, not a meal.
+const CAFE_NAME = /\b(cafe|café|coffee|kape|kapehan|kapihan|bakery|bakeshop|bake shop|panaderia|pasteleria|pastry|pastries|dessert|halo-halo|ice cream|tea house|milk ?tea)\b/i;
+function isCafePlace(place) {
+  const types = (place?.types || []).map(String);
+  return CAFE_NAME.test(String(place?.name || ''))
+    || (types.some((type) => /^(cafe|coffee_shop|bakery|dessert_shop|ice_cream_shop|tea_house|confectionery|donut_shop|juice_shop)$/.test(type))
+      && !types.some((type) => /restaurant$/.test(type) && type !== 'dessert_restaurant'));
+}
+// Chains found everywhere and fast food: never a food stop on a trip about local food.
+const FOOD_CHAIN_NAME = /\b(fast ?food|jollibee|mcdonald'?s|mcdo|chowking|mang inasal|greenwich|kfc|burger king|shakey'?s|max'?s|starbucks|7-eleven|ministop|red ribbon|goldilocks|pizza hut|yellow cab|bonchon|tokyo tokyo|potato corner|army navy|angel'?s burger|minute burger)\b/i;
+// Pasalubong centers, souvenir and craft shops (malls and markets are never stops).
+const SHOPPING_NAME = /\b(pasalubong|souvenirs?|handicrafts?|gift shop|delicacies|balisong|embroidery)\b/i;
+// Never suggested as a trip stop: golf courses and driving ranges, racing circuits, sports
+// centers, ports (where boats leave from, not a sight), memorial-park gardens (cemeteries
+// without the word in their name), and shops in a mall chain ("SM Batangas Prestige Lounge").
+const NOT_A_STOP_NAME = /\b(golf|driving range|racing circuit|raceway|speedway|sports (center|centre|complex)|gymnasium|port|eternal gardens|holy gardens|garden of memories)\b/i;
+const MALL_CHAIN_NAME = /^(sm|robinsons|puregold|savemore|waltermart|walter mart|vista mall|ayala malls)\b/i;
+// Batangas's towns and cities. A "place" named only after one ("Padre Garcia Batangas",
+// "Lipa City") is the town itself, not a spot to go to.
+const BATANGAS_TOWNS = new Set(['agoncillo', 'alitagtag', 'balayan', 'balete', 'bauan', 'calaca', 'calatagan', 'cuenca', 'ibaan',
+  'laurel', 'lemery', 'lian', 'lipa', 'lobo', 'mabini', 'malvar', 'mataasnakahoy', 'mataas na kahoy', 'nasugbu', 'padre garcia',
+  'rosario', 'san jose', 'san juan', 'san luis', 'san nicolas', 'san pascual', 'santa teresita', 'sta teresita', 'santo tomas',
+  'sto tomas', 'taal', 'talisay', 'tanauan', 'taysan', 'tingloy', 'tuy']);
+function isTownName(name) {
+  const plain = String(name || '').toLowerCase().replace(/[^a-z\s]/g, ' ')
+    .replace(/\b(batangas|city|municipality|town|of|the|province|proper|poblacion|philippines)\b/g, ' ')
+    .replace(/\s+/g, ' ').trim();
+  return !plain || BATANGAS_TOWNS.has(plain);
+}
+// The words of a place name that can tell places apart: lowercase, no accents, three
+// letters or more, without filler ("of", "the", "sa") or "Batangas" and "city".
+const NAME_FILLER = new Set(['the', 'and', 'of', 'in', 'at', 'for', 'de', 'del', 'la', 'las', 'los', 'ng', 'sa', 'ni', 'mga', 'batangas', 'philippines', 'city', 'town', 'province', 'barangay', 'brgy']);
+function nameWords(text) {
+  return String(text || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .split(/[^a-z0-9]+/).filter((word) => word.length >= 3 && !NAME_FILLER.has(word));
+}
+// Whether a place Google found for a name the AI gave is that place, or one like it: they
+// share a word that isn't a town or a word of the destination's own name (placeWords),
+// or the found name is a shorter form of the asked one ("Laiya" for "Laiya Beach"). The
+// AI sometimes names places that don't exist ("Laiya Night Food Market"), and the top
+// search result is then something else entirely ("Laiya Beach Resort"): not used.
+function nameMatches(foundName, askedName, placeWords = new Set()) {
+  const asked = nameWords(askedName);
+  const found = nameWords(foundName);
+  const telling = asked.filter((word) => !placeWords.has(word));
+  if (!telling.length || !found.length) return true;
+  // Two shared words for a name with three or more ("Yellow Door Restobar" isn't "Yellow
+  // Bell Resort"), one for a shorter name ("Mount Daguldol", another mountain).
+  const shared = telling.filter((word) => found.includes(word)).length;
+  return shared >= (telling.length >= 3 ? 2 : 1) || found.every((word) => asked.includes(word));
+}
+// A real stop to suggest: not a town's own name, nor any of NOT_A_STOP_NAME or a mall chain.
+// A name ending in "lot" or "lots" is a property listing or a parking lot, not a sight.
+const LAND_LOT_NAME = /\blots?\s*$/i;
+function isRealStop(place) {
+  const name = String(place?.name || '');
+  return !isTownName(name) && !NOT_A_STOP_NAME.test(name) && !LAND_LOT_NAME.test(name) && !MALL_CHAIN_NAME.test(name.trim())
+    && !(place?.types || []).map(String).some((type) => /^(golf_course|ferry_terminal|stadium|sports_complex)$/.test(type));
+}
 
 // A town, barangay, street or building rather than a place to visit. Some real spots
 // (an island that is also a barangay) carry these too, so they only rule a place out
@@ -2486,18 +2731,173 @@ const AREA_ONLY_TYPES = new Set([
 const TOURIST_TYPES = /tourist_attraction|natural_feature|beach|park|hiking|campground|museum|historical|landmark|monument|church|place_of_worship|amusement|zoo|aquarium|marina|resort|scenic|observation|island|lake|waterfall|spa/;
 
 // Churches, cathedrals, chapels, shrines and other places of worship (by type or by name).
-const WORSHIP_NAME = /\b(church|cathedral|basilica|chapel|shrine|parish|simbahan|monastery|convent|grotto|abbey|mosque|temple)\b/i;
+const WORSHIP_NAME = /\b(church|cathedral|basilica|chapel|shrine|parish|simbahan|monastery|convent|grotto|abbey|mosque|temple|retreat (center|centre|house))\b/i;
 function isWorshipPlace(place) {
   return (place?.types || []).some((type) => /^(church|place_of_worship|mosque|hindu_temple|synagogue)$/.test(String(type)))
     || WORSHIP_NAME.test(String(place?.name || ''));
 }
 // How many places of worship an itinerary may include, from the traveler's interests, travel
-// styles and trip focus.
+// styles and trip focus. Even a pilgrimage keeps to two churches a day. sundayOnly: the
+// traveler didn't ask for churches, so one is only planned on a Sunday (for Mass).
 function worshipLimitsFor(choices) {
   const text = choices.map(String).join(' ').toLowerCase();
-  if (/relig|pilgrim|faith|spiritual|church|visita iglesia|worship/.test(text)) return { perDay: Infinity, perTrip: Infinity };
-  if (/herit|histor|cultur|museum|old town/.test(text)) return { perDay: 2, perTrip: 4 };
-  return { perDay: 1, perTrip: 2 };
+  if (/relig|pilgrim|faith|spiritual|church|visita iglesia|worship/.test(text)) return { perDay: 2, perTrip: Infinity, sundayOnly: false };
+  // Museums alone don't bring in churches.
+  if (/herit|histor|cultur|old town/.test(text)) return { perDay: 1, perTrip: 3, sundayOnly: false };
+  return { perDay: 1, perTrip: Infinity, sundayOnly: true };
+}
+// Churches allowed on a trip day (weekday: 0 = Sunday).
+function worshipAllowedOnDay(limit, weekday) {
+  return limit.sundayOnly && weekday !== 0 ? 0 : limit.perDay;
+}
+
+// The kind of a stop, from the place itself (not the slot it was suggested for), to keep
+// each day realistic: one beach or swim, one hike, at most two museums, and so on.
+const WATER_NAME = /\b(beach|coast|cove|sandbar|island|islet|resort|island[- ]hopping|snorkel\w*|div(e|ing)|falls|waterfalls?|hot ?springs?|water ?park|swimming|kayak\w*|dive ?site|marine sanctuary)\b/i;
+const HIKE_NAME = /\b(hike|hiking|trek|trekking|trail|summit|mount|mt|volcano|peak)\b/i;
+function stopKind(entry) {
+  const place = entry?.place || {};
+  const name = String(place.name || '');
+  const types = (place.types || []).map(String);
+  if (isWorshipPlace(place)) return 'worship';
+  if (isBeachLike(place) || WATER_NAME.test(name) || types.some((type) => /^(beach|water_park|marina|scuba|island)/.test(type))) return 'water';
+  if ((HIKE_NAME.test(name) && !isViewDeckName(name)) || types.some((type) => /hiking/.test(type))) return 'hike';
+  if (/\b(theme park|amusement|zipline|adventure park|zoo)\b/i.test(name) || types.some((type) => /^(amusement_park|zoo)$/.test(type))) return 'themepark';
+  if (/\b(museum|gallery)\b/i.test(name) || types.some((type) => /museum|art_gallery/.test(type))) return 'museum';
+  if (/\b(night market|food park|night food)\b/i.test(name)) return 'nightmarket';
+  if (activityLengthRule(entry)?.night || types.some((type) => /^(bar|pub|night_club|wine_bar|karaoke|live_music_venue)$/.test(type))) return 'nightlife';
+  if (SHOPPING_NAME.test(name)) return 'shopping';
+  // A local eatery: a lunch or dinner stop on a trip about food (see fitItineraryDay); a
+  // cafe or bakery: coffee or merienda.
+  if (isFoodPlace(place)) return isCafePlace(place) ? 'cafe' : 'food';
+  // Seaside and lakeside walks, viewpoints and plazas: nice once a day, dull three times.
+  if (PROMENADE_NAME.test(name)) return 'promenade';
+  if (VIEWPOINT_NAME.test(name) || types.some((type) => /^(observation_deck|scenic_spot)$/.test(type))) return 'viewpoint';
+  if (/\bplaza\b/i.test(name) || types.includes('plaza')) return 'plaza';
+  if (types.some((type) => /(^|_)store$|^gift_shop$/.test(type)) && !types.some((type) => TOURIST_TYPES.test(type))) return 'shopping';
+  return 'other';
+}
+// The part of the day a kind of place suits, whatever the AI suggested: a hike starts at
+// dawn (so it's done before the midday heat), beaches, swims and theme parks are daytime,
+// museums and churches aren't evening stops, bars are at night and night markets in the
+// evening. Other kinds keep the suggested time.
+function suitedBestTime(kind, bestTime) {
+  const time = String(bestTime || '').toLowerCase();
+  const late = ['sunset', 'evening', 'night'].includes(time);
+  if (kind === 'hike') return 'early-morning';
+  // A local eatery is lunch (midday) or dinner (evening); a cafe is morning coffee or
+  // afternoon merienda.
+  if (kind === 'food') return late ? 'evening' : 'midday';
+  if (kind === 'cafe') return time === 'morning' || time === 'early-morning' ? 'morning' : 'afternoon';
+  // Only hikes and sunrise views need the dawn; a park, falls or museum is a morning stop.
+  if (time === 'early-morning' && kind !== 'viewpoint') return 'morning';
+  // Sunsets are for views, beaches and seaside walks, not a park, museum or church.
+  if (time === 'sunset' && ['other', 'museum', 'worship'].includes(kind)) return 'afternoon';
+  if ((kind === 'water' || kind === 'themepark') && late) return 'afternoon';
+  if ((kind === 'museum' || kind === 'worship') && (time === 'evening' || time === 'night')) return 'morning';
+  if (kind === 'nightlife') return 'night';
+  if (kind === 'nightmarket' && !late) return 'evening';
+  return time;
+}
+const PROMENADE_NAME = /\b(bay ?walk|board ?walk|sea ?wall|promenade|esplanade|lake ?walk|lakeside walk|river ?walk|baywalk)\b/i;
+const VIEWPOINT_NAME = /\b(view ?deck|viewing deck|viewpoint|view point|lookout|look out|overlook|vista|skyline)\b/i;
+// A view deck named after a mountain or the volcano ("Mt. Batulao View Deck", "Taal Volcano
+// Viewpoint") is a short roadside stop, not a hike: no summit, peak, trail or trek in it.
+function isViewDeckName(name) {
+  const text = String(name || '');
+  return HIKE_NAME.test(text) && /\b(view ?deck|viewing deck|viewpoint|view point|lookout|look out|overlook)\b/i.test(text)
+    && !/\b(summit|peak|trail|hike|hiking|trek|trekking|climb)\b/i.test(text);
+}
+// The stop label (category) for a kind of place, for a stop refilled with that kind.
+const KIND_STOP_LABELS = {
+  water: 'activity', hike: 'activity', themepark: 'activity', museum: 'museum', worship: 'landmark',
+  promenade: 'park', viewpoint: 'landmark', plaza: 'landmark', nightmarket: 'night market', nightlife: 'nightlife',
+  food: 'food', cafe: 'cafe', shopping: 'shopping', other: 'attraction',
+};
+// Per-day limits for each kind; worship is set per day from worshipAllowedOnDay. Food
+// stops (lunch and dinner), a cafe, shops and nightlife only when the trip asks for
+// them (stopKindLimitsFor).
+const STOP_KIND_LIMITS = { water: 1, hike: 1, themepark: 1, museum: 2, nightmarket: 1, nightlife: 1, promenade: 1, viewpoint: 1, plaza: 1, food: 2, cafe: 1, shopping: 1 };
+
+// What each trip focus the app offers (onboarding's travel styles and interests, and the
+// trip style's extra ideas) means on a Batangas trip: a line for the AI planner (means),
+// the Google search for more such places around each day's area (search), and the kinds
+// of stops only planned when a focus asks for them (allows). beach: a beach search, left
+// out when the destination already is the trip's beach. hikes / noHikes: a family trip
+// has no mountain hikes unless a focus that wants them is picked too.
+const TRIP_FOCUS_GUIDE = [
+  { test: /beach|relax/i, beach: true, search: 'beaches and beach resorts',
+    means: 'Beaches: a beach or beach-resort day to swim and relax.' },
+  { test: /island/i, search: 'island hopping tours',
+    means: 'Island Hopping: a morning boat trip to nearby islands, coves and sandbars.' },
+  { test: /water sport|snorkel|div(e|ing)/i, search: 'snorkeling and diving spots',
+    means: 'Water Sports: snorkeling, diving, kayaking or paddle boarding.' },
+  { test: /hik|mountain|trek/i, hikes: true, search: 'hiking trails and mountain viewpoints',
+    means: 'Hiking and Mountains: an early-morning hike with summit views, or ridge, lake and volcano views.' },
+  { test: /adventure/i, hikes: true, search: 'adventure activities zipline ATV',
+    means: 'Adventure: ziplines, ATV rides, canyoneering, cliff jumping, hikes and dives.' },
+  { test: /pilgrim|relig|church|herit|histor|cultur/i, search: 'old churches shrines and heritage sites',
+    means: 'Pilgrimage: old stone churches, shrines and heritage sites (heritage towns, ancestral houses, historic landmarks).' },
+  { test: /museum|galler/i, search: 'museums and galleries',
+    means: 'Museums: museums and galleries, not churches.' },
+  { test: /food|cuisine|culinary/i, allows: ['food'], search: 'famous local restaurants lomi bulalo',
+    means: 'Food: famous local eateries for Batangas dishes (lomi, bulalo, tapang Taal) as lunch or dinner stops, a kapeng barako cafe or bakery for merienda, and night markets.' },
+  { test: /nature|wildlife/i, search: 'nature parks waterfalls and eco parks',
+    means: 'Nature & Wildlife: waterfalls, eco parks, forests, caves, marine sanctuaries and wildlife.' },
+  { test: /city/i, search: 'town plaza and city landmarks',
+    means: 'City Exploration: town centers, plazas, heritage streets, baywalks and city landmarks.' },
+  { test: /night|party/i, allows: ['nightlife'], search: 'bars and live music',
+    means: 'Nightlife: bars, live music and beach parties at night, and night markets.' },
+  { test: /shop|souvenir|pasalubong/i, allows: ['shopping'], search: 'pasalubong center and souvenir shops',
+    means: 'Shopping: pasalubong centers and local crafts and delicacies (balisong knives, embroidery, kapeng barako), not malls, supermarkets or wet markets.' },
+  { test: /photo|sunset/i, search: 'scenic viewpoints and sunset spots',
+    means: 'Photography and sunsets: scenic viewpoints, lighthouses and sunset spots, at the best light.' },
+  { test: /hidden/i, search: 'hidden gem tourist spots',
+    means: 'Hidden gems: lesser-known spots that locals love and visitors rate well.' },
+  { test: /family|kid/i, noHikes: true, search: 'family friendly attractions',
+    means: 'Family-friendly: places for all ages (theme parks, farms, calm beaches, easy nature walks), no bars or hard hikes.' },
+  { test: /wellness|\bspa\b/i, search: 'spa and hot springs',
+    means: 'Wellness & spa: spas, hot springs and slow, unhurried visits.' },
+];
+// The guides for a trip's focus, in the traveler's order, each once.
+function tripFocusGuides(choices) {
+  const guides = [];
+  for (const choice of (choices || []).map(String)) {
+    for (const guide of TRIP_FOCUS_GUIDE) {
+      if (guide.test.test(choice) && !guides.includes(guide)) guides.push(guide);
+    }
+  }
+  return guides;
+}
+// A trip's per-day limits for each kind: STOP_KIND_LIMITS, with food stops (one for each
+// lunch or dinner in the day's hours) and a cafe, a pasalubong or souvenir shop and
+// nightlife only when the focus asks for them (nightlife also on a night-out plan).
+function stopKindLimitsFor(choices, timeOfDay = 'fullday') {
+  const guides = tripFocusGuides(choices);
+  const allowed = new Set(guides.flatMap((guide) => guide.allows || []));
+  if (timeOfDay === 'night') allowed.add('nightlife');
+  const meals = (TRIP_WINDOWS[timeOfDay] || TRIP_WINDOWS.fullday).meals.filter((meal) => !meal.beforeStart && meal.kind !== 'breakfast').length;
+  return {
+    ...STOP_KIND_LIMITS,
+    hike: guides.some((guide) => guide.noHikes) && !guides.some((guide) => guide.hikes) ? 0 : STOP_KIND_LIMITS.hike,
+    food: allowed.has('food') ? Math.min(STOP_KIND_LIMITS.food, meals) : 0,
+    cafe: allowed.has('food') ? STOP_KIND_LIMITS.cafe : 0,
+    shopping: allowed.has('shopping') ? STOP_KIND_LIMITS.shopping : 0,
+    nightlife: allowed.has('nightlife') ? STOP_KIND_LIMITS.nightlife : 0,
+  };
+}
+// A beach day, a hike and a theme park each take half a day or more: two at most.
+const MAJOR_STOP_KINDS = new Set(['water', 'hike', 'themepark']);
+// Dressed-up or indoor visits that don't come after swimming the same day.
+const AFTER_SWIM_KINDS = new Set(['worship', 'museum']);
+// Whether one more stop of this entry's kind fits a day with these kind counts (limits:
+// the trip's, from stopKindLimitsFor).
+function stopFitsDay(counts, entry, worshipToday, limits = STOP_KIND_LIMITS) {
+  const kind = stopKind(entry);
+  const limit = kind === 'worship' ? worshipToday : limits[kind];
+  if (limit !== undefined && (counts[kind] || 0) >= limit) return false;
+  if (MAJOR_STOP_KINDS.has(kind) && Array.from(MAJOR_STOP_KINDS).reduce((sum, item) => sum + (counts[item] || 0), 0) >= 2) return false;
+  return true;
 }
 
 function isVacationPlace(place) {
@@ -2514,16 +2914,168 @@ function isVacationPlace(place) {
   return true;
 }
 
-async function findVerifiedPlaces(query, destination) {
+// ---- Keeping a trip realistic ------------------------------------------------------------
+// Stops stay within ITINERARY_RADIUS_KM of the destination (a short drive, so a trip to
+// Nasugbu doesn't jump to Lipa or Anilao), and a day has at most one beach, island or
+// beach resort: a beach day already fills most of the day.
+const ITINERARY_RADIUS_KM = 25;
+const destinationCenterCache = new Map();
+
+// The destination's coordinates ({ lat, lng }), from its Google place or by its name;
+// null when they can't be found (the trip is then limited to Batangas only, as before).
+async function resolveDestinationCenter(destination, placeId = '') {
+  if (isDevelopmentMode || !getMapsApiKey()) return null;
+  const name = String(destination || '').trim();
+  const id = /^[A-Za-z0-9_-]{4,200}$/.test(String(placeId || '')) ? String(placeId) : '';
+  const key = `${id}|${name.toLowerCase()}`;
+  if (destinationCenterCache.has(key)) return destinationCenterCache.get(key);
+  let center = null;
+  try {
+    if (id) {
+      const response = await fetch(`https://places.googleapis.com/v1/places/${encodeURIComponent(id)}`, {
+        headers: { 'X-Goog-Api-Key': getMapsApiKey(), 'X-Goog-FieldMask': 'location' },
+        signal: AbortSignal.timeout(GOOGLE_PLACES_TIMEOUT_MS),
+      }).catch(() => null);
+      const place = response?.ok ? await response.json().catch(() => null) : null;
+      center = coordinatesOrNull(place?.location?.latitude, place?.location?.longitude);
+    }
+    if (!center && name) {
+      const data = await callGooglePlacesApi('places:searchText', { textQuery: `${name}, Batangas, Philippines`, maxResultCount: 1 });
+      const first = (data.places || []).map(mapPlace).find((place) => Number.isFinite(place.lat) && Number.isFinite(place.lng));
+      if (first) center = { lat: first.lat, lng: first.lng };
+    }
+  } catch (error) {
+    center = null;
+  }
+  if (center) {
+    if (destinationCenterCache.size >= 500) destinationCenterCache.clear();
+    destinationCenterCache.set(key, center);
+  }
+  return center;
+}
+
+// A starting or ending location the traveler typed (anywhere in the Philippines) as
+// { name, lat, lng }, or null when it can't be found.
+const tripPointCache = new Map();
+async function resolveTripPoint(text) {
+  const name = String(text || '').trim().slice(0, 240);
+  if (!name || isDevelopmentMode || !getMapsApiKey()) return null;
+  const key = name.toLowerCase();
+  if (tripPointCache.has(key)) return tripPointCache.get(key);
+  let point = null;
+  try {
+    const data = await callGooglePlacesApi('places:searchText', { textQuery: `${name}, Philippines`, maxResultCount: 1, anyRegion: true });
+    const place = (data?.places || []).map(mapPlace).find((item) => Number.isFinite(item.lat) && Number.isFinite(item.lng));
+    if (place) point = { name, lat: place.lat, lng: place.lng };
+  } catch (error) {
+    point = null;
+  }
+  if (point) {
+    if (tripPointCache.size >= 500) tripPointCache.clear();
+    tripPointCache.set(key, point);
+  }
+  return point;
+}
+
+// A beach, cove, island trip or beach resort (by name or Google type).
+const BEACH_NAME = /\b(beach|cove|sandbar|island|islet|resort)\b/i;
+function isBeachLike(place) {
+  return BEACH_NAME.test(String(place?.name || ''))
+    || (place?.types || []).some((type) => /^(beach|resort_hotel|island)$/.test(String(type)));
+}
+
+// An island or islet (reached by boat), by name or Google type.
+function isIslandPlace(place) {
+  return /\b(island|islet|isla)\b/i.test(String(place?.name || ''))
+    || (place?.types || []).some((type) => String(type) === 'island');
+}
+
+// A beach or beach resort to spend the day at (an island-hopping trip, falls or a hot
+// spring is an activity, not this).
+const BEACH_STAY_NAME = /\b(beach|cove|sandbar|resort|coast)\b/i;
+function isBeachStay(place) {
+  return BEACH_STAY_NAME.test(String(place?.name || ''))
+    || (place?.types || []).some((type) => /^(beach|resort_hotel)$/.test(String(type)));
+}
+
+// A place where travelers can also stay the night (a resort, or one Google lists as lodging).
+function hasRoomsPlace(place) {
+  return /\bresort\b/i.test(String(place?.name || ''))
+    || (place?.types || []).some((type) => /(^|_)(lodging|hotel|resort_hotel|motel|guest_house|bed_and_breakfast|campground)$/.test(String(type)));
+}
+
+// The destination as one specific place (a resort, a beach, an attraction) when the
+// traveler picked one, as { placeId, name, types, lat, lng }; null for a town or an area
+// such as "Laiya", which is a place to explore, not a place to be.
+const homePlaceCache = new Map();
+async function resolveHomePlace(destination, placeId = '') {
+  if (isDevelopmentMode || !getMapsApiKey()) return null;
+  const id = /^[A-Za-z0-9_-]{4,200}$/.test(String(placeId || '')) ? String(placeId) : '';
+  const name = String(destination || '').trim();
+  const key = `${id}|${name.toLowerCase()}`;
+  if (homePlaceCache.has(key)) return homePlaceCache.get(key);
+  let home = null;
+  try {
+    let place = null;
+    if (id) {
+      const response = await fetch(`https://places.googleapis.com/v1/places/${encodeURIComponent(id)}`, {
+        headers: { 'X-Goog-Api-Key': getMapsApiKey(), 'X-Goog-FieldMask': 'id,displayName,types,location,formattedAddress,rating,userRatingCount,photos.name,photos.authorAttributions,photos.googleMapsUri,regularOpeningHours.periods' },
+        signal: AbortSignal.timeout(GOOGLE_PLACES_TIMEOUT_MS),
+      }).catch(() => null);
+      const data = response?.ok ? await response.json().catch(() => null) : null;
+      if (data?.id) place = mapPlace(data);
+    }
+    if (!place && name) {
+      const data = await callGooglePlacesApi('places:searchText', { textQuery: `${name}, Batangas, Philippines`, maxResultCount: 1 });
+      place = (data.places || []).map(mapPlace)[0] || null;
+    }
+    const types = (place?.types || []).map(String);
+    const isArea = types.some((type) => AREA_ONLY_TYPES.has(type) || type === 'natural_feature' || type === 'colloquial_area');
+    // Found by name (no place picked): only the place of that very name ("Anilao" is an
+    // area, not "Anilao Market").
+    const plain = (text) => String(text || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    const typed = plain(name.split(',')[0]);
+    const found = plain(place?.name);
+    const nameMatches = Boolean(id) || (found && (found === typed || (found.length >= 8 && typed.includes(found))));
+    const isSpot = place && (isVacationPlace(place) || hasRoomsPlace(place));
+    // The full place record (address, photo, rating), since it becomes a stop itself.
+    if (place?.placeId && Number.isFinite(place.lat) && Number.isFinite(place.lng) && !isArea && nameMatches && isSpot) home = { ...place, types };
+  } catch (error) {
+    home = null;
+  }
+  if (homePlaceCache.size >= 500) homePlaceCache.clear();
+  homePlaceCache.set(key, home);
+  return home;
+}
+
+// How far out of the way a place is on the drive from one point to another (km).
+function routeDetourKm(leg, place) {
+  return haversineKm(leg.from, place) + haversineKm(place, leg.to) - haversineKm(leg.from, leg.to);
+}
+// Stops on the way may be this far off the straight line of the drive.
+const ROUTE_DETOUR_KM = 10;
+
+// center: the destination's { lat, lng }, to keep results within ITINERARY_RADIUS_KM.
+// legs: for a day spent driving to the destination or home from it ({ from, to } points),
+// places along that drive are also kept, not only those near the destination.
+async function findVerifiedPlaces(query, destination, center = null, legs = []) {
   if (isDevelopmentMode) return developmentPlaces(`${query} ${destination}`, 5);
-  const data = await callGooglePlacesApi('places:searchText', {
+  const onRoute = (place) => legs.some((leg) => routeDetourKm(leg, place) <= ROUTE_DETOUR_KM);
+  const data = await callGooglePlacesApi('places:searchText', legs.length ? {
+    // A stop on the way isn't "in" the destination: search all of Batangas.
+    textQuery: `${String(query).trim()}, Batangas`,
+    maxResultCount: 5,
+  } : {
     textQuery: `${String(query).trim()} in ${String(destination).trim()}`,
     maxResultCount: 5,
+    ...(center ? { locationBias: { circle: { center: { latitude: center.lat, longitude: center.lng }, radius: ITINERARY_RADIUS_KM * 1000 } } } : {}),
   });
   return (data.places || [])
     .map(mapPlace)
     .filter((place) => place.placeId && Number.isFinite(place.lat) && Number.isFinite(place.lng))
-    .filter(isVacationPlace);
+    .filter(isVacationPlace)
+    .map((place) => (center ? { ...place, distanceKm: Math.round(haversineKm(center, place) * 10) / 10 } : place))
+    .filter((place) => !center || place.distanceKm <= ITINERARY_RADIUS_KM || onRoute(place));
 }
 
 async function calculateVerifiedRoute(from, to, travelMode = 'DRIVE') {
@@ -2565,10 +3117,12 @@ const TRIP_WINDOWS = {
     ],
   },
 };
+// Suggested stops a day. Real trips (travel guides' Batangas itineraries) plan one main
+// activity plus a few short stops, so even a packed day has five at most.
 const TRIP_PACES = {
-  packed: { label: 'Packed', bufferMinutes: 10, maxStops: 7, durationScale: 0.85 },
-  balanced: { label: 'Balanced', bufferMinutes: 20, maxStops: 5, durationScale: 1 },
-  relaxed: { label: 'Relaxed', bufferMinutes: 35, maxStops: 4, durationScale: 1.15 },
+  packed: { label: 'Packed', bufferMinutes: 10, maxStops: 5, durationScale: 0.85 },
+  balanced: { label: 'Balanced', bufferMinutes: 20, maxStops: 4, durationScale: 1 },
+  relaxed: { label: 'Relaxed', bufferMinutes: 35, maxStops: 3, durationScale: 1.15 },
 };
 const BEST_TIME_ORDER = ['early-morning', 'morning', 'midday', 'afternoon', 'sunset', 'evening', 'night'];
 // Totals kept within what the app's cost research and editing screens accept.
@@ -2578,11 +3132,14 @@ const MAX_SCHEDULED_STOPS_PER_DAY = 8;
 
 function normalizeTripStyle(style) {
   const timeOfDay = Object.hasOwn(TRIP_WINDOWS, style?.timeOfDay) ? style.timeOfDay : 'fullday';
-  const pace = Object.hasOwn(TRIP_PACES, style?.pace) ? style.pace : 'packed';
+  const pace = Object.hasOwn(TRIP_PACES, style?.pace) ? style.pace : 'balanced';
   const focus = Array.from(new Set((Array.isArray(style?.focus) ? style.focus : [])
     .map((item) => String(item || '').replace(/[^\p{L}\p{N} &'’-]/gu, '').trim().slice(0, 40))
     .filter(Boolean))).slice(0, 12);
-  return { timeOfDay, pace, focus };
+  // How the traveler gets around (the app's "How are you getting there?"): car, commute
+  // (bus, van, jeepney or tricycle) or unsure; older app versions don't send it.
+  const transport = ['car', 'commute', 'unsure'].includes(style?.transport) ? style.transport : 'unsure';
+  return { timeOfDay, pace, focus, transport };
 }
 
 function formatMinuteOfDay(minutes) {
@@ -2592,45 +3149,109 @@ function formatMinuteOfDay(minutes) {
 }
 
 // Rough door-to-door time between two stops, used to decide which stops fit in a day
-// before real routes are requested (Philippine roads average about 22 km/h in town).
+// before real routes are requested (Batangas roads average about 28 km/h by car between
+// towns, about 22 km/h by bus or jeepney).
 function estimateTravelMinutes(from, to, travelMode = 'DRIVE') {
   if (!from || !to) return 0;
   const km = haversineKm(from, to);
   if (!Number.isFinite(km)) return 30;
-  const speedKmh = travelMode === 'WALK' ? 4.5 : travelMode === 'BICYCLE' ? 12 : 22;
-  return Math.max(10, Math.round((km / speedKmh) * 60) + 8);
+  const speedKmh = travelMode === 'WALK' ? 4.5 : travelMode === 'BICYCLE' ? 12 : travelMode === 'DRIVE' ? 28 : 22;
+  const overhead = travelMode === 'DRIVE' ? 5 : 8;
+  // By car or bus, a long drive is mostly highway (about 55 km/h past the first 20 km).
+  if ((travelMode === 'DRIVE' || travelMode === 'TRANSIT') && km > 20) {
+    return Math.round((20 / speedKmh + (km - 20) / 55) * 60) + overhead;
+  }
+  return Math.max(10, Math.round((km / speedKmh) * 60) + overhead);
 }
 
-// Orders a day's stops by the best time of day to visit (sunrise spots first, night
-// spots last) and, within the same part of the day, by distance from the previous stop.
-function orderStopsForDay(entries) {
-  const rank = (entry) => {
+// Orders a day's stops into one route that doesn't double back. Sunrise spots come
+// first and sunset, evening and night spots last; the daytime stops between them are
+// ordered as the shortest path (nearest stop next, then improved by reversing any
+// stretch that makes the route shorter). Times of day are still checked when scheduling.
+// origin: where the day starts ({ place: { lat, lng } }: home on day 1, else the stay).
+function orderStopsForDay(entries, origin = null) {
+  const part = (entry) => {
     const index = BEST_TIME_ORDER.indexOf(String(entry.activity?.bestTime || '').toLowerCase());
-    return index < 0 ? 2.5 : index; // unknown: between midday and afternoon
+    if (index === 0) return 0; // early morning
+    return index >= BEST_TIME_ORDER.indexOf('sunset') ? 2 : 1;
   };
-  const groups = new Map();
-  entries.forEach((entry, index) => {
-    const key = rank(entry);
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push({ entry, index });
-  });
-  const ordered = [];
-  for (const key of Array.from(groups.keys()).sort((a, b) => a - b)) {
-    const remaining = groups.get(key).sort((a, b) => a.index - b.index).map((item) => item.entry);
+  const distance = (a, b) => (a && b ? haversineKm(a.place, b.place) : 0);
+  const shortestPath = (stops, from) => {
+    const remaining = stops.slice();
+    const path = [];
+    let last = from;
     while (remaining.length) {
-      const last = ordered[ordered.length - 1]?.place;
       let bestIndex = 0;
       if (last) {
-        let bestDistance = Infinity;
         remaining.forEach((entry, index) => {
-          const distance = haversineKm(last, entry.place);
-          if (distance < bestDistance) { bestDistance = distance; bestIndex = index; }
+          if (distance(last, entry) < distance(last, remaining[bestIndex])) bestIndex = index;
         });
       }
-      ordered.push(remaining.splice(bestIndex, 1)[0]);
+      last = remaining.splice(bestIndex, 1)[0];
+      path.push(last);
+    }
+    // 2-opt: reverse a stretch whenever that shortens the route (open path, fixed start).
+    for (let improved = true, guard = 0; improved && guard < 50; guard += 1) {
+      improved = false;
+      for (let i = 0; i < path.length - 1; i += 1) {
+        for (let j = i + 1; j < path.length; j += 1) {
+          const before = i ? path[i - 1] : from;
+          const after = path[j + 1];
+          const now = distance(before, path[i]) + distance(path[j], after);
+          const swapped = distance(before, path[j]) + distance(path[i], after);
+          if (swapped < now - 0.05) {
+            path.splice(i, j - i + 1, ...path.slice(i, j + 1).reverse());
+            improved = true;
+          }
+        }
+      }
+    }
+    return path;
+  };
+  const ordered = [];
+  for (const key of [0, 1, 2]) {
+    const group = entries.filter((entry) => part(entry) === key);
+    if (key === 2) {
+      // Sunset and evening stops as one short route (not out to one and back for the
+      // other), then the night ones; the schedule still keeps each to its time.
+      const isNight = (entry) => String(entry.activity?.bestTime || '').toLowerCase() === 'night';
+      ordered.push(...shortestPath(group.filter((entry) => !isNight(entry)), ordered[ordered.length - 1] || origin));
+      ordered.push(...shortestPath(group.filter(isNight), ordered[ordered.length - 1] || origin));
+    } else {
+      // Churches and museums before the rest of the day (never after a swim), unless the
+      // swim belongs earlier in the day; then the beach keeps its time and the church is
+      // left for the scheduler, which never puts it after the swim.
+      const timeRank = (entry) => {
+        const index = BEST_TIME_ORDER.indexOf(String(entry.activity?.bestTime || '').toLowerCase());
+        return index < 0 ? 2.5 : index;
+      };
+      const firstSwim = Math.min(...group.filter((entry) => stopKind(entry) === 'water').map(timeRank));
+      const dry = group.filter((entry) => AFTER_SWIM_KINDS.has(stopKind(entry)) && timeRank(entry) <= firstSwim);
+      ordered.push(...shortestPath(dry, ordered[ordered.length - 1] || origin));
+      ordered.push(...shortestPath(group.filter((entry) => !dry.includes(entry)), ordered[ordered.length - 1] || origin));
     }
   }
   return ordered;
+}
+
+// A drive day's stops in driving order: by how far along the drive each one is (on a
+// one-day trip, the way there, the destination, then the way back), with the sunset,
+// evening and night stops after the daytime ones. legs: [{ from, to }] points.
+function orderStopsAlongRoute(entries, legs) {
+  const progress = (place) => {
+    let best = null;
+    legs.forEach((leg, index) => {
+      const fromStart = haversineKm(leg.from, place);
+      const detour = routeDetourKm(leg, place);
+      const along = fromStart / Math.max(0.1, fromStart + haversineKm(place, leg.to));
+      if (!best || detour < best.detour) best = { detour, value: index + along };
+    });
+    return best ? best.value : 0;
+  };
+  const isLate = (entry) => ['sunset', 'evening', 'night'].includes(String(entry.activity?.bestTime || '').toLowerCase());
+  const inOrder = (list) => list.map((entry) => ({ entry, at: progress(entry.place) }))
+    .sort((a, b) => a.at - b.at).map((item) => item.entry);
+  return [...inOrder(entries.filter((entry) => !isLate(entry))), ...inOrder(entries.filter(isLate))];
 }
 
 // Earliest sensible time for each part of the day (an hour of leeway is allowed), so a
@@ -2646,15 +3267,21 @@ const BEST_TIME_EARLIEST = {
 // night: the stop may run past midnight (it still starts before 11:30 PM).
 // latest: the latest sensible start, so a beach or an island is never visited in the dark
 // and a hike or boat trip starts early enough to finish in daylight.
+// Churches, monuments, plazas, lighthouses and viewpoints: short visits.
+const SHORT_STOP_LENGTH = { test: /\b(church|basilica|cathedral|shrine|chapel|monument|marker|plaza|lighthouse|viewpoint|view ?deck|viewing deck|bridge)\b/i, min: 30, max: 90, latest: 19 * 60 };
 const ACTIVITY_LENGTHS = [
   { test: /\b(hike|hiking|trek|trekking|trail|summit|mount|mt|volcano|peak|climb)\b/i, min: 240, max: 360, latest: 10 * 60 },
-  { test: /\b(island[- ]hopping|boat tour|snorkel|snorkeling|dive|diving|kayak|kayaking|dolphin|whale)\b/i, min: 180, max: 360, latest: 11 * 60 },
-  { test: /\b(nightlife|night ?club|club|clubbing|bar|bars|pub|party|disco|live music|acoustic|karaoke)\b/i, min: 180, max: 300, night: true },
+  // Island hopping and boat tours leave in the morning; a dive, snorkel or kayak trip can
+  // also go after lunch.
+  { test: /\b(island[- ]hopping|boat tour|dolphin|whale)\b/i, min: 180, max: 360, latest: 11 * 60 },
+  { test: /\b(snorkel|snorkeling|dive|diving|kayak|kayaking)\b/i, min: 120, max: 300, latest: 14 * 60 },
+  // "Club" alone is often a resort (Club Laiya, Club Punta Fuego), not a night out.
+  { test: /\b(nightlife|night ?club|clubbing|bar|bars|pub|party|disco|live music|acoustic|karaoke)\b/i, min: 180, max: 300, night: true },
   { test: /\b(night market|food park|night food)\b/i, min: 75, max: 150 },
-  { test: /\b(theme park|water ?park|amusement|zipline|adventure park)\b/i, min: 150, max: 300, latest: 13 * 60 },
+  { test: /\b(theme park|water ?park|amusement|zipline|adventure park)\b/i, min: 150, max: 300, latest: 15 * 60 },
   { test: /\b(beach|cove|sandbar|resort|island|swimming|falls|waterfall|hot spring)\b/i, min: 120, max: 300, latest: 16 * 60 + 30 },
   { test: /\b(museum|gallery|heritage house|ancestral house)\b/i, min: 60, max: 150, latest: 15 * 60 + 30 },
-  { test: /\b(church|basilica|cathedral|shrine|chapel|monument|marker|plaza|lighthouse|viewpoint|view ?deck|viewing deck|bridge)\b/i, min: 30, max: 90, latest: 19 * 60 },
+  SHORT_STOP_LENGTH,
 ];
 // The latest start for each part of the day the AI suggested.
 const BEST_TIME_LATEST = {
@@ -2663,6 +3290,8 @@ const BEST_TIME_LATEST = {
 };
 const LATE_NIGHT_END = 26 * 60 + 30; // 2:30 AM, as minutes after the day's midnight
 function activityLengthRule(entry) {
+  // A view deck named after a mountain is a short stop, whatever the slot was for.
+  if (isViewDeckName(entry.place?.name)) return SHORT_STOP_LENGTH;
   // The place's own name and type decide first; the AI's notes only when they say nothing.
   const named = [entry.activity?.category, entry.activity?.searchQuery, entry.place?.name, entry.place?.category].filter(Boolean).join(' ');
   return ACTIVITY_LENGTHS.find((rule) => rule.test.test(named))
@@ -2672,7 +3301,8 @@ function activityLengthRule(entry) {
 // Whether a visit from start for duration minutes (minutes after the trip day's
 // midnight) falls inside the place's opening hours on that weekday. Returns
 // { open: true } when it fits (or the hours are unknown), { opensAt } when it fits
-// later that day, or { open: false } when the place is closed for that visit.
+// later that day, or { open: false } when the place is closed for that visit, with
+// closesAt when it is open at the start but closes before the visit would end.
 function openingHoursFit(place, weekday, start, duration) {
   const periods = Array.isArray(place?.openPeriods) ? place.openPeriods : [];
   if (!periods.length || !Number.isInteger(weekday)) return { open: true };
@@ -2681,7 +3311,9 @@ function openingHoursFit(place, weekday, start, duration) {
   if (!today.length) return { open: false };
   if (today.some((period) => period.open <= start && start + duration <= period.close)) return { open: true };
   const later = today.find((period) => period.open > start && period.open + duration <= period.close);
-  return later ? { opensAt: later.open } : { open: false };
+  if (later) return { opensAt: later.open };
+  const current = today.find((period) => period.open <= start && start < period.close);
+  return current ? { open: false, closesAt: current.close } : { open: false };
 }
 
 function runsLateAtNight(entry) {
@@ -2699,15 +3331,50 @@ function runsLateAtNight(entry) {
 // afterLateNight: the late start follows a night out (the traveler still has breakfast
 // before going out), not a trip that begins later today.
 // weekday (0 = Sunday) is the trip day's day of the week, for the places' opening hours.
-function fitItineraryDay({ entries, window: baseWindow, pace, maxStops, travelMinutesFor, isLastDay, stayName, earliestStart = null, afterLateNight = false, weekday = null }) {
+// By the estimate, 50 minutes is about 25 km (the real route is often quicker); the final
+// schedule uses Google's route times.
+const MAX_HOP_MINUTES = 50;
+const MAX_DAY_DRIVING_MINUTES = 180;
+// Afternoon merienda at a cafe starts from 2:00 PM (after lunch, not right before it).
+const CAFE_MERIENDA_START = 14 * 60;
+// origin ({ place: { lat, lng } }): where the day starts, so the drive to the first stop
+// counts (a three-hour drive from home doesn't reach a 9 AM stop).
+// driveDay: the day drives to the destination or home with stops on the way.
+// departEarly: the day begins with a long drive from home (day 1): the traveler leaves
+// up to two hours earlier (not before 5:00 AM), so they arrive around the usual start
+// instead of losing the morning on the road.
+// homeDrive ({ minutes, name, point }): the last day ends in time to drive to the end
+// point, shown as a "Drive to …" break after the last stop.
+// maxStops counts the suggested stops only: must-visit ones (the destination, places the
+// traveler added) always have room.
+// A stop without the meal it was given by an earlier scheduling pass (the build schedules
+// with estimated, then real, travel times; the second pass decides the meals again).
+function withoutMealHere(entry) {
+  const { mealHere, ...rest } = entry;
+  return rest;
+}
+
+function fitItineraryDay({ entries, window: baseWindow, pace, maxStops, travelMinutesFor: givenTravelMinutes, isLastDay, stayName, earliestStart = null, afterLateNight = false, weekday = null, origin = null, driveDay = false, departEarly = false, homeDrive = null }) {
+  // A travel time that isn't a usable number (a failed lookup) becomes the estimate.
+  const travelMinutesFor = (from, to) => {
+    const minutes = Number(givenTravelMinutes(from, to));
+    return Number.isFinite(minutes) && minutes >= 0 ? minutes : estimateTravelMinutes(from?.place, to?.place);
+  };
   const lateStart = Number.isFinite(earliestStart) && earliestStart > baseWindow.start;
+  const startPlace = origin && Number.isFinite(origin.place?.lat) && Number.isFinite(origin.place?.lng) ? origin : null;
   // A day whose first stop is a sunrise spot or an early hike starts at 5:00 AM
   // (morning and full-day plans only).
   const firstBestTime = String(entries[0]?.activity?.bestTime || '').toLowerCase();
   const earlyStart = !lateStart && firstBestTime === 'early-morning' && baseWindow.start <= 8 * 60
     ? BEST_TIME_EARLIEST['early-morning'] : null;
-  const window = lateStart ? { ...baseWindow, start: Math.ceil(earliestStart / 5) * 5 }
+  let window = lateStart ? { ...baseWindow, start: Math.ceil(earliestStart / 5) * 5 }
     : earlyStart !== null ? { ...baseWindow, start: earlyStart } : baseWindow;
+  if (departEarly && !lateStart && startPlace && entries.length) {
+    const firstDrive = Math.round(travelMinutesFor(startPlace, entries[0]));
+    if (firstDrive > 60) window = { ...window, start: Math.max(5 * 60, window.start - Math.min(120, firstDrive - 30)) };
+  }
+  const homeDriveMinutes = homeDrive && Number.isFinite(homeDrive.minutes) && homeDrive.minutes > 0 ? homeDrive.minutes : 0;
+  if (homeDriveMinutes) window = { ...window, end: Math.max(window.start + 180, window.end - homeDriveMinutes) };
   // Nights out may run past midnight, except on morning-and-daytime plans.
   const canRunLate = window.end >= 21 * 60;
   const meals = window.meals
@@ -2726,60 +3393,162 @@ function fitItineraryDay({ entries, window: baseWindow, pace, maxStops, travelMi
   const roundUp = (minutes) => Math.ceil(minutes / 5) * 5;
   const durationOf = (entry) => {
     const rule = activityLengthRule(entry);
-    const min = rule ? rule.min : 30;
-    const max = rule ? rule.max : 240;
+    // A meal at a local eatery takes an hour to an hour and a half; coffee or merienda less;
+    // any other sight without its own length (a park, a farm, a rock formation) three hours at most.
+    const kind = rule ? null : stopKind(entry);
+    const min = rule ? rule.min : kind === 'food' ? 60 : 30;
+    const max = rule ? rule.max : kind === 'food' || kind === 'cafe' ? 90 : 180;
     const suggested = Number(entry.activity?.durationMinutes) || 90;
     const scaled = Math.round(Math.min(max, Math.max(min, suggested)) * pace.durationScale / 5) * 5;
     return Math.max(min, Math.min(max, scaled));
   };
+  // A stop's part of the day. On the day that ends with the drive home, sunset and
+  // evening stops are visited in the afternoon instead (not waiting until 5 PM to leave),
+  // except a night market, which only opens in the evening.
+  const partOf = (entry) => {
+    const part = String(entry.activity?.bestTime || '').toLowerCase();
+    return homeDriveMinutes && (part === 'sunset' || part === 'evening') && stopKind(entry) !== 'nightmarket' ? 'afternoon' : part;
+  };
   // The latest sensible start: the stricter of its kind (a beach by 4:30 PM) and its part
-  // of the day (a morning spot by 11 AM).
-  const latestOf = (entry) => Math.min(
-    activityLengthRule(entry)?.latest ?? Infinity,
-    BEST_TIME_LATEST[String(entry.activity?.bestTime || '').toLowerCase()] ?? Infinity,
-  );
+  // of the day (a morning spot by 11 AM, with an hour and a half of leeway for daytime
+  // parts, so a church isn't dropped for arriving at 11:05).
+  const latestOf = (entry) => {
+    const part = partOf(entry);
+    const leeway = ['morning', 'midday', 'afternoon'].includes(part) ? 90 : 0;
+    return Math.min(activityLengthRule(entry)?.latest ?? Infinity, (BEST_TIME_LATEST[part] ?? Infinity) + leeway);
+  };
   const earliestOf = (entry) => {
     // Bars, clubs and parties don't get going before about 8:30 PM.
     if (activityLengthRule(entry)?.night) return 20 * 60 + 30;
-    const time = BEST_TIME_EARLIEST[String(entry.activity?.bestTime || '').toLowerCase()];
-    return Number.isFinite(time) ? time - 60 : -Infinity;
+    const part = partOf(entry);
+    // Afternoon merienda at a cafe comes after lunch.
+    if (part === 'afternoon' && stopKind(entry) === 'cafe') return CAFE_MERIENDA_START;
+    const time = BEST_TIME_EARLIEST[part];
+    // A daytime stop may start two hours early when the day is free (no idle morning
+    // waiting for an "afternoon" park); sunrise, sunset and evening stops keep an hour.
+    const leeway = ['morning', 'midday', 'afternoon'].includes(part) ? 120 : 60;
+    return Number.isFinite(time) ? time - leeway : -Infinity;
   };
   const remaining = entries.slice();
   const kept = [];
   let clock = window.start;
-  let previous = null;
-  for (let guard = 0; remaining.length && kept.length < maxStops && guard < 300; guard += 1) {
+  let previous = startPlace;
+  const originEntry = previous;
+  const suggestedKept = () => kept.filter((item) => !item.mustVisit).length;
+  // A drive day's stops are spread along the route, so its drives may be longer (the
+  // drive to the destination itself can take two hours on real roads).
+  const maxHop = driveDay ? 120 : MAX_HOP_MINUTES;
+  const maxDriving = driveDay ? 240 : MAX_DAY_DRIVING_MINUTES;
+  // Driving between the day's stops (not the drive from where the day starts).
+  let drivingMinutes = 0;
+  for (let guard = 0; remaining.length && guard < 300; guard += 1) {
+    if (suggestedKept() >= maxStops && !remaining.some((item) => item.mustVisit)) break;
     const nextMeal = meals.find((meal) => !meal.placed && !meal.beforeStart && meal.start < window.end);
     let chosen = null;
     let waitUntil = Infinity;
+    // When a lunch or dinner stop can start (see mealStop below).
+    let mealWaitUntil = Infinity;
     for (let index = 0; index < remaining.length; index += 1) {
       const entry = remaining[index];
-      const duration = durationOf(entry);
+      if (!entry.mustVisit && suggestedKept() >= maxStops) continue;
+      // A local eatery is the day's next lunch or dinner, had there: it starts from half
+      // an hour before the meal's usual time to an hour after it. A suggested one with no
+      // meal left that day is left out; one the traveler added is then a usual stop. A
+      // night market is dinner too, while dinner is still ahead (its stalls are the meal),
+      // except on the day that ends with the drive home (it's visited before leaving).
+      const food = stopKind(entry) === 'food';
+      // (One picked for the evening is the dinner, while the day has one.)
+      const dinner = food && ['sunset', 'evening', 'night'].includes(String(entry.activity?.bestTime || '').toLowerCase())
+        ? meals.find((meal) => !meal.placed && meal.kind === 'dinner' && meal.start < window.end) : null;
+      const mealStop = dinner || ((food && nextMeal && nextMeal.kind !== 'breakfast')
+        || (!homeDriveMinutes && stopKind(entry) === 'nightmarket' && nextMeal?.kind === 'dinner') ? nextMeal : null);
+      if (food && !mealStop && !entry.mustVisit) continue;
+      let duration = durationOf(entry);
       const travel = previous ? Math.max(0, Math.round(travelMinutesFor(previous, entry))) : 0;
+      // No long drives between stops: at most MAX_HOP_MINUTES each and MAX_DAY_DRIVING_MINUTES
+      // in all (a must-visit stop, the destination or one the traveler added, still goes).
+      if (!entry.mustVisit && previous && previous !== originEntry
+        && (travel > maxHop || drivingMinutes + travel > maxDriving)) continue;
       const start = roundUp(clock + travel);
-      const earliest = earliestOf(entry);
-      if (start < earliest) { waitUntil = Math.min(waitUntil, earliest - travel); continue; }
-      if (start > latestOf(entry)) continue;
+      if (mealStop) {
+        // (Only the next meal is waited for: a dinner stop lets lunch come first.)
+        if (start < mealStop.start - 30) {
+          if (mealStop === nextMeal) mealWaitUntil = Math.min(mealWaitUntil, mealStop.start - 30 - travel);
+          continue;
+        }
+        if (start > mealStop.start + 60) continue;
+      } else {
+        const earliest = earliestOf(entry);
+        if (start < earliest) { waitUntil = Math.min(waitUntil, earliest - travel); continue; }
+        if (start > latestOf(entry)) continue;
+      }
+      // No church or museum after the day's beach or swim.
+      if (AFTER_SWIM_KINDS.has(stopKind(entry)) && kept.some((item) => stopKind(item) === 'water')) continue;
+      // A must-visit stop (the trip's destination) still has to start in time after this one.
+      if (!entry.mustVisit && remaining.some((other) => other.mustVisit && other !== entry
+        && start + duration + pace.bufferMinutes + Math.max(0, Math.round(travelMinutesFor(entry, other))) > latestOf(other))) continue;
       // Only while the place is open that day (Google's hours): wait for it to open, or
       // leave it for a backup stop when it is closed or closes before the visit ends.
       const hours = openingHoursFit(entry.place, weekday, start, duration);
       if (hours.opensAt !== undefined) { waitUntil = Math.min(waitUntil, hours.opensAt - travel); continue; }
-      if (!hours.open) continue;
-      if (nextMeal && (start >= nextMeal.start - 15 || start + duration > nextMeal.start + 45)) continue;
+      if (!hours.open) {
+        // Open now but closing before the visit would end: a shorter visit until closing
+        // time, when at least three quarters of the usual shortest visit is left.
+        const untilClose = Number.isFinite(hours.closesAt) ? Math.floor((hours.closesAt - start) / 5) * 5 : 0;
+        const shortest = Math.max(45, Math.round((activityLengthRule(entry)?.min ?? 60) * 0.75));
+        if (untilClose < shortest) continue;
+        duration = untilClose;
+      }
+      // A stop that runs into the next meal waits for it, except a long visit (a beach
+      // day, island hopping, a theme park, a hike: 2½ hours or more) at a place with food
+      // (a beach or resort, a theme park, a packed lunch on the trail) that starts by an
+      // hour into the meal: the traveler eats there (lunch at the resort) instead of eating
+      // first somewhere else and arriving late, staying until the meal is over when the
+      // visit would end during it (within its longest sensible length, while it's open).
+      // Any other visit that would run into the meal ends when the meal starts, when that
+      // still leaves its shortest sensible length; otherwise it waits for after the meal.
+      let mealThere = mealStop;
+      if (!mealThere && nextMeal && (start >= nextMeal.start - 15 || start + duration > nextMeal.start + 45)) {
+        const rule = activityLengthRule(entry);
+        const stay = Math.max(duration, roundUp(nextMeal.start + nextMeal.minutes - start));
+        const servesFood = ['water', 'themepark', 'hike'].includes(stopKind(entry)) || hasRoomsPlace(entry.place) || isFoodPlace(entry.place);
+        if (duration >= 150 && servesFood && nextMeal.kind !== 'breakfast' && start < nextMeal.start + 60
+          && stay <= (rule ? rule.max : 240) && openingHoursFit(entry.place, weekday, start, stay).open === true) {
+          duration = stay;
+          mealThere = nextMeal;
+        } else if (start < nextMeal.start - 15 && nextMeal.start - start >= (rule ? rule.min : 30)) {
+          duration = nextMeal.start - start;
+        } else continue;
+      }
+      // (The must-visit check again, with the visit's final length.)
+      if (!entry.mustVisit && remaining.some((other) => other.mustVisit && other !== entry
+        && start + duration + pace.bufferMinutes + Math.max(0, Math.round(travelMinutesFor(entry, other))) > latestOf(other))) continue;
       const endLimit = canRunLate && runsLateAtNight(entry) ? Math.max(window.end, LATE_NIGHT_END) : window.end;
       if (start + duration > endLimit) continue;
       if (endLimit > window.end && start > 23 * 60 + 30) continue;
-      chosen = { index, entry, start, duration, travel };
+      chosen = { index, entry, start, duration, travel, mealThere };
       break;
     }
     if (chosen) {
       remaining.splice(chosen.index, 1);
-      kept.push({ ...chosen.entry, startMinute: chosen.start, durationMinutes: chosen.duration, travelMinutes: chosen.travel });
+      // The meal is had during the visit, so it isn't shown as a separate break.
+      if (chosen.mealThere) chosen.mealThere.placed = true;
+      kept.push({
+        // (A meal had here in an earlier pass doesn't carry over: only this pass decides.)
+        ...withoutMealHere(chosen.entry), startMinute: chosen.start, durationMinutes: chosen.duration, travelMinutes: chosen.travel,
+        ...(chosen.mealThere ? { mealHere: chosen.mealThere.kind } : {}),
+      });
+      if (previous && previous !== originEntry) drivingMinutes += chosen.travel;
       clock = chosen.start + chosen.duration + pace.bufferMinutes;
       previous = chosen.entry;
       continue;
     }
-    // Nothing can start now: eat if a meal comes before any later stop...
+    // Nothing can start now: a lunch or dinner stop waits for its meal time...
+    if (mealWaitUntil !== Infinity && mealWaitUntil <= waitUntil) {
+      clock = roundUp(Math.max(clock, mealWaitUntil));
+      continue;
+    }
+    // ...eat if a meal comes before any later stop...
     if (nextMeal && (waitUntil === Infinity || waitUntil >= nextMeal.start - 30)) {
       clock = addMeal(nextMeal, roundUp(Math.max(clock, nextMeal.start - 30)));
       continue;
@@ -2795,11 +3564,29 @@ function fitItineraryDay({ entries, window: baseWindow, pace, maxStops, travelMi
   // trimmed to the time that is left.
   // If a meal took the little time there was, the stop comes first and the meal after it.
   if (!kept.length && entries.length) {
-    const shortest = entries.slice().sort((a, b) => durationOf(a) - durationOf(b))[0];
-    const start = roundUp(window.start);
-    const duration = Math.min(durationOf(shortest), Math.floor((window.end - start) / 5) * 5);
-    if (duration >= 30) {
-      kept.push({ ...shortest, startMinute: start, durationMinutes: duration, travelMinutes: 0 });
+    // (Not an eatery when there is anything else: it belongs at a meal time.)
+    // Only a stop that can really be visited then: reached from where the day starts,
+    // open for the whole visit (Google's hours), not a bar in the daytime, and not a
+    // beach or hike past its latest sensible start. With none, the day stays free.
+    const fallback = entries.slice()
+      .sort((a, b) => Number(stopKind(a) === 'food') - Number(stopKind(b) === 'food') || durationOf(a) - durationOf(b))
+      .map((entry) => {
+        const travel = startPlace ? Math.max(0, Math.round(travelMinutesFor(startPlace, entry))) : 0;
+        let start = roundUp(window.start + travel);
+        const hours = openingHoursFit(entry.place, weekday, start, 30);
+        if (hours.opensAt !== undefined) start = roundUp(hours.opensAt);
+        const duration = Math.min(durationOf(entry), Math.floor((window.end - start) / 5) * 5);
+        const rule = activityLengthRule(entry);
+        const usable = duration >= 30
+          && !(rule?.night && start < 20 * 60 + 30)
+          && start <= (rule?.latest ?? Infinity)
+          && openingHoursFit(entry.place, weekday, start, duration).open === true;
+        return usable ? { entry, start, duration, travel } : null;
+      })
+      .find(Boolean);
+    if (fallback) {
+      const { entry: shortest, start, duration } = fallback;
+      kept.push({ ...withoutMealHere(shortest), startMinute: start, durationMinutes: duration, travelMinutes: fallback.travel });
       let after = start + duration + 10;
       for (const item of breaks.filter((entry) => entry.startMinute < start + duration && entry.endMinute > start).sort((a, b) => a.startMinute - b.startMinute)) {
         const length = item.endMinute - item.startMinute;
@@ -2829,6 +3616,23 @@ function fitItineraryDay({ entries, window: baseWindow, pace, maxStops, travelMi
     if (at > meal.start + 180) continue;
     addMeal(meal, at);
   }
+  // The last day: the drive to the end point after the last stop. A meal already under way
+  // is finished first; meals that would start after leaving are left out (eaten on the way
+  // or at home).
+  if (homeDriveMinutes && kept.length) {
+    const lastStop = kept[kept.length - 1];
+    const minutes = homeDrive.point
+      ? Math.max(10, Math.round(travelMinutesFor(lastStop, { place: homeDrive.point })))
+      : homeDriveMinutes;
+    let leave = roundUp(lastEnd + 15);
+    for (const item of breaks) {
+      if (item.startMinute < leave && Number.isFinite(item.endMinute) && item.endMinute > leave) leave = roundUp(item.endMinute);
+    }
+    for (let index = breaks.length - 1; index >= 0; index -= 1) {
+      if (breaks[index].startMinute >= leave) breaks.splice(index, 1);
+    }
+    breaks.push({ kind: 'drive', label: `Drive to ${String(homeDrive.name || 'your end point').slice(0, 80)}`, startMinute: leave, endMinute: leave + minutes });
+  }
   if (!isLastDay) {
     const lastBreakEnd = breaks.reduce((latest, item) => Math.max(latest, item.endMinute), 0);
     const restStart = Math.min(Math.max(lastEnd, lastBreakEnd) + 15, LATE_NIGHT_END + 30);
@@ -2851,6 +3655,74 @@ function fitItineraryDay({ entries, window: baseWindow, pace, maxStops, travelMi
   };
 }
 
+// Whether a stop can fit a day's hours at all (entry.activity.bestTime: its part of the
+// day). window: the day's TRIP_WINDOWS entry; opens: when its first stop can start;
+// travel: minutes to get there from where the day starts; dawn: whether the day could
+// start at dawn for it. The same limits as fitItineraryDay: no hike or morning boat trip on
+// a day that starts in the afternoon, no museum or theme park on a night out, no bar or
+// evening stop on a daytime plan, a food stop only when the day has a lunch or dinner,
+// and nothing that can't be reached before its latest start.
+function stopFitsHours(entry, window, opens = window.start, travel = 0, dawn = true) {
+  const drive = Math.max(0, Number(travel) || 0);
+  if (stopKind(entry) === 'food') {
+    return window.meals.some((meal) => !meal.beforeStart && meal.kind !== 'breakfast' && meal.start + 60 >= opens + drive);
+  }
+  const rule = activityLengthRule(entry);
+  if (rule?.night) return window.end >= 21 * 60;
+  const part = String(entry.activity?.bestTime || '').toLowerCase();
+  const daytime = ['morning', 'midday', 'afternoon'].includes(part);
+  // Sunrise spots and hikes may start at dawn on plans that start in the morning.
+  const first = (dawn && part === 'early-morning' && window.start <= 8 * 60 && opens === window.start ? BEST_TIME_EARLIEST['early-morning'] : opens) + drive;
+  const earliest = Math.max(first, part === 'afternoon' && stopKind(entry) === 'cafe' ? CAFE_MERIENDA_START
+    : (BEST_TIME_EARLIEST[part] ?? -Infinity) - (daytime ? 120 : 60));
+  const latest = Math.min(rule?.latest ?? Infinity, (BEST_TIME_LATEST[part] ?? Infinity) + (daytime ? 90 : 0), window.end - (rule?.min ?? 30));
+  return earliest <= latest;
+}
+
+// The final check of a built day (fitItineraryDay's result), independent of how it was
+// built: every problem a traveler would run into. kept: stops with startMinute,
+// durationMinutes and travelMinutes (the minutes from the previous stop or the day's
+// start); breaks: the day's meals and drives. Returns a list of { type, stop, detail }:
+// overlap (a stop starts before the one before it ends plus the travel between them),
+// meal (a stop runs through a lunch or dinner break it isn't having there), closed (a
+// stop outside the place's known opening hours that day), drive (the drive to the end
+// point starts before the last stop ends).
+function findScheduleConflicts({ kept = [], breaks = [], weekday = null }) {
+  const conflicts = [];
+  const name = (entry) => String(entry.place?.name || entry.title || 'A stop');
+  const stops = kept.slice().sort((a, b) => a.startMinute - b.startMinute);
+  stops.forEach((entry, index) => {
+    const start = entry.startMinute;
+    const end = start + entry.durationMinutes;
+    if (!Number.isFinite(start) || !(entry.durationMinutes > 0)) {
+      conflicts.push({ type: 'time', stop: name(entry), detail: 'no valid start time or length' });
+      return;
+    }
+    const before = stops[index - 1];
+    if (before) {
+      const arrive = before.startMinute + before.durationMinutes + Math.max(0, Number(entry.travelMinutes) || 0);
+      if (start < arrive) conflicts.push({ type: 'overlap', stop: name(entry), detail: `starts ${arrive - start} min before it can be reached` });
+    }
+    for (const meal of breaks) {
+      if (!['lunch', 'dinner', 'breakfast'].includes(meal.kind) || entry.mealHere === meal.kind) continue;
+      if (!Number.isFinite(meal.endMinute)) continue;
+      if (start < meal.endMinute && end > meal.startMinute) conflicts.push({ type: 'meal', stop: name(entry), detail: `runs into ${meal.label}` });
+    }
+    if (entry.mealHere && breaks.some((item) => item.kind === entry.mealHere)) {
+      conflicts.push({ type: 'meal', stop: name(entry), detail: `${entry.mealHere} is planned both here and as a separate break` });
+    }
+    if (openingHoursFit(entry.place, weekday, start, entry.durationMinutes).open !== true) {
+      conflicts.push({ type: 'closed', stop: name(entry), detail: 'outside its opening hours that day' });
+    }
+  });
+  const drive = breaks.find((item) => item.kind === 'drive');
+  const last = stops[stops.length - 1];
+  if (drive && last && drive.startMinute < last.startMinute + last.durationMinutes) {
+    conflicts.push({ type: 'drive', stop: name(last), detail: 'the drive home starts before this stop ends' });
+  }
+  return conflicts;
+}
+
 // A trip's destination must be in Batangas. Looked up once per place, then remembered.
 const destinationScopeCache = new Map();
 async function assertDestinationInBatangas(destination, placeId = '') {
@@ -2865,6 +3737,7 @@ async function assertDestinationInBatangas(destination, placeId = '') {
     if (id && getMapsApiKey()) {
       const response = await fetch(`https://places.googleapis.com/v1/places/${encodeURIComponent(id)}`, {
         headers: { 'X-Goog-Api-Key': getMapsApiKey(), 'X-Goog-FieldMask': 'formattedAddress,location' },
+        signal: AbortSignal.timeout(GOOGLE_PLACES_TIMEOUT_MS),
       }).catch(() => null);
       if (response?.ok) place = await response.json().catch(() => null);
     }
@@ -2879,9 +3752,12 @@ async function assertDestinationInBatangas(destination, placeId = '') {
   if (!inside) throw Object.assign(new Error(OUT_OF_SCOPE_MESSAGE), { statusCode: 400 });
 }
 
-async function generateVerifiedItineraryFromAi({ email, message, selectedDestination, profile, origin, includeBudgetResearch = false, onProgress = null }) {
+// endLocation: where the traveler goes after the trip ({ name, address }); the start
+// (origin) when not given.
+async function generateVerifiedItineraryFromAi({ email, message, selectedDestination, profile, origin, endLocation = null, includeBudgetResearch = false, onProgress = null, planOnly = false }) {
   // Build progress for the app's percentage screen (percent, the next stage's percent, label).
-  const progress = (percent, next, label) => { try { onProgress?.(percent, next, label); } catch (error) { /* display only */ } };
+  let progressHandler = onProgress;
+  const progress = (percent, next, label) => { try { progressHandler?.(percent, next, label); } catch (error) { /* display only */ } };
   progress(5, 10, 'Reading your trip details');
   const userProfile = profile || (email ? await getUserProfileContext(email) : {});
   const destination = selectedDestination?.name || selectedDestination?.destination || userProfile.preferredPlaces?.[0];
@@ -2961,14 +3837,26 @@ async function generateVerifiedItineraryFromAi({ email, message, selectedDestina
   if (firstDayStartMinute !== null && firstDayStartMinute > firstDayWindow.end - 60) {
     throw new Error(`It’s too late today for a “${firstDayWindow.label}” plan, which ends at ${formatMinuteOfDay(firstDayWindow.end)}. Start your trip tomorrow${firstDayWindowKey === 'night' ? '' : ' or choose a later time of day'}.`);
   }
+  // Where each day starts ({ place: { lat, lng } } or null), set once the trip's
+  // points are known below: the traveler's start on day 1, the stay after that.
+  let dayOriginFor = () => null;
+  let isDriveDay = () => false;
+  // { departEarly, homeDrive } for a day (see fitItineraryDay), also set below.
+  let dayTravelFor = () => ({});
   // previousDayEnd: when the day before ran past midnight, this day starts about eight
   // hours after it ended (a 2:00 AM night out means a 10:00 AM start).
+  // Commuting (bus, jeepney, tricycle) is slower than the car times Google gives and
+  // includes waiting for a ride: the plan leaves half as long again plus 10 minutes.
+  const commuteMinutes = (minutes) => (tripStyle.transport === 'commute' && Number.isFinite(minutes) ? Math.round(minutes * 1.5) + 10 : minutes);
   const scheduleDay = (entries, dayIndex, travelMinutesFor, previousDayEnd = null) => fitItineraryDay({
+    origin: dayOriginFor(dayIndex),
+    driveDay: isDriveDay(dayIndex),
+    ...dayTravelFor(dayIndex),
     entries,
     window: dayIndex === 0 ? firstDayWindow : tripWindow,
     pace: tripPace,
     maxStops: maxStopsPerDay,
-    travelMinutesFor,
+    travelMinutesFor: (from, to) => commuteMinutes(travelMinutesFor(from, to)),
     isLastDay: dayIndex === durationDays - 1,
     stayName: stay?.name || '',
     earliestStart: dayIndex === 0 ? firstDayStartMinute
@@ -3063,44 +3951,124 @@ async function generateVerifiedItineraryFromAi({ email, message, selectedDestina
     };
   }
 
+  // What this trip is for: the focus picked for it in the app (unpicking Pilgrimage there
+  // means no churches), or the saved interests and travel styles when none was picked
+  // (the chat planner). It decides the churches (only on a Sunday of the trip unless
+  // asked for), the kinds of stops planned each day (eateries, shops and nightlife only
+  // when asked for), and what the AI and each day's area searches look for.
+  const tripChoices = profile?.tripStyle && typeof profile.tripStyle === 'object'
+    ? tripStyle.focus
+    : [...(userProfile.interests || []), ...(userProfile.travelTypes || [])];
+  const worshipLimit = worshipLimitsFor(tripChoices);
+  const focusGuides = tripFocusGuides(tripChoices);
+  const kindLimits = stopKindLimitsFor(tripChoices, tripStyle.timeOfDay);
+  // The meals a food stop can be on this plan: lunch, dinner or both.
+  const mealStopNames = tripWindow.meals.filter((meal) => !meal.beforeStart && meal.kind !== 'breakfast').map((meal) => meal.kind);
+  const tripWeekday = (dayNumber) => (new Date(`${startDate}T00:00:00Z`).getUTCDay() + dayNumber - 1) % 7;
+  const worshipOnDay = (dayNumber) => worshipAllowedOnDay(worshipLimit, tripWeekday(dayNumber));
+
+  // Stops stay near the destination; each stop offers three places to choose from.
+  const [center, home, startPoint, endPointGiven] = await Promise.all([
+    resolveDestinationCenter(destination, selectedDestination?.placeId),
+    resolveHomePlace(destination, selectedDestination?.placeId),
+    resolveTripPoint(origin?.address || origin?.name),
+    resolveTripPoint(endLocation?.address || endLocation?.name),
+  ]);
+  const endPoint = endPointGiven || startPoint;
+  const startText = String(origin?.name || origin?.address || '').trim();
+  const endText = String(endLocation?.name || endLocation?.address || '').trim() || startText;
+  // The trip as one journey: day 1 drives from the start to the destination with stops
+  // on the way, the last day drives on toward the end point, and the days between stay
+  // near the destination. (Only when that drive is longer than the trip's radius.)
+  const firstDayLeg = center && startPoint && haversineKm(startPoint, center) > ITINERARY_RADIUS_KM ? { from: startPoint, to: center } : null;
+  const lastDayLeg = center && endPoint && haversineKm(center, endPoint) > ITINERARY_RADIUS_KM ? { from: center, to: endPoint } : null;
+  const legsForDay = (dayNumber) => [
+    ...(dayNumber === 1 && firstDayLeg ? [firstDayLeg] : []),
+    ...(dayNumber === durationDays && lastDayLeg ? [lastDayLeg] : []),
+  ];
+  // The destination itself when it's a beach or resort: the traveler's beach for the
+  // trip. They don't change to a different beach resort every day.
+  const homeIsBeach = Boolean(home && isBeachStay(home));
+  const otherBeachStays = homeIsBeach ? 0 : Math.max(1, Math.ceil(durationDays / 3));
+  // Where each day starts: the start on day 1, then the chosen stay, the destination
+  // itself, or the middle of the destination area.
+  const base = stay && Number.isFinite(stay.lat) && Number.isFinite(stay.lng) ? stay : home || center;
+  isDriveDay = (dayIndex) => legsForDay(dayIndex + 1).length > 0;
+  // Day 1 leaves home early when the drive is long; the last day ends in time to drive to
+  // the end point (or back to the start), when it's at least 20 minutes away.
+  // (Replaced by Google's route time when the itinerary is built.)
+  let homeDriveMinutes = endPoint && (base || center) ? estimateTravelMinutes(base || center, endPoint, travelMode) : 0;
+  dayTravelFor = (dayIndex) => ({
+    departEarly: dayIndex === 0 && Boolean(startPoint),
+    homeDrive: dayIndex === durationDays - 1 && homeDriveMinutes >= 20
+      ? { minutes: homeDriveMinutes, name: endText || 'home', point: endPoint }
+      : null,
+  });
+  dayOriginFor = (dayIndex) => {
+    const point = dayIndex === 0 ? (startPoint || base) : base;
+    return point ? { place: { lat: point.lat, lng: point.lng } } : null;
+  };
+  // A day's stops in visiting order: along the drive on a drive day, otherwise the
+  // shortest route from where the day starts.
+  const orderDay = (entries, dayIndex) => (legsForDay(dayIndex + 1).length
+    ? orderStopsAlongRoute(entries, legsForDay(dayIndex + 1))
+    : orderStopsForDay(entries, dayOriginFor(dayIndex)));
+  const slotsPerDay = maxStopsPerDay;
   const planningContext = [
     'You are preparing a preliminary travel itinerary plan for a trip in Batangas, Philippines. Use only places in Batangas.',
     `Destination: ${destination}`,
-    `Interests: ${(userProfile.interests || []).join(', ') || 'not provided'}`,
-    `Travel style: ${(userProfile.travelTypes || []).join(', ') || 'not provided'}`,
+    `Saved interests: ${(userProfile.interests || []).join(', ') || 'not provided'}`,
+    `Saved travel style: ${(userProfile.travelTypes || []).join(', ') || 'not provided'}`,
     `Whole-trip budget: ${budgetAmountPhp ? `PHP ${budgetAmountPhp.toLocaleString()} total, including travel to/from, lodging, meals, local transport, activities, and a contingency` : userProfile.budget || 'not provided'}`,
     ...(activityBudgetTargetPhp ? [
       `Entrance fees and tours allowance: about PHP ${activityBudgetTargetPhp.toLocaleString()} total, roughly PHP ${dailyActivityBudgetTargetPhp.toLocaleString()} per day${travelers > 1 ? ` for the whole group (about PHP ${perPersonActivityTargetPhp.toLocaleString()} per person for the trip)` : ''}. This is what remains after ${stay?.nightlyLowPhp ? 'the chosen hotel' : 'lodging'}, three meals a day and a 10% reserve for transport and surprises. It is a target, not a quote.`,
     ] : []),
     `Group: ${travelers === 1 ? '1 traveler (solo)' : `${travelers} travelers traveling together (${rooms} room${rooms === 1 ? '' : 's'})`}. ${travelers >= 4 ? 'Prefer stops that welcome groups (spacious beaches, island hopping by boat, group-friendly tours) over places that only fit one or two people.' : ''}`.trim(),
-    `Dates: ${startDate} through ${endDate}, inclusive (${durationDays} days).`,
-    `Daily schedule (${tripWindow.label}): sightseeing from ${formatMinuteOfDay(tripWindow.start)} to ${formatMinuteOfDay(tripWindow.end)}. Meal breaks are kept free: ${tripWindow.meals.map((meal) => `${meal.label.toLowerCase()} around ${formatMinuteOfDay(meal.start)}`).join(', ')}. The day may start earlier for a sunrise spot or an early hike, and a night out (bars, live music, beach parties) may run past midnight.`,
+    `Dates: ${startDate} through ${endDate}, inclusive (${durationDays} days). ${Array.from({ length: durationDays }, (_, index) => `Day ${index + 1} is a ${['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][tripWeekday(index + 1)]}`).join('; ')}.`,
+    `Daily schedule (${tripWindow.label}): sightseeing from ${formatMinuteOfDay(tripWindow.start)} to ${formatMinuteOfDay(tripWindow.end)}. Meal breaks are kept free${kindLimits.food ? ' unless a food stop is that meal' : ''}: ${tripWindow.meals.map((meal) => `${meal.label.toLowerCase()} around ${formatMinuteOfDay(meal.start)}`).join(', ')}.${tripWindow.start <= 8 * 60 ? ' The day may start earlier for a sunrise spot or an early hike.' : ''}${kindLimits.nightlife && tripWindow.end >= 21 * 60 ? ' A night out (bars, live music, beach parties) may run past midnight.' : ''}`,
+    ...(tripWindow.start >= 13 * 60 ? [`This plan starts at ${formatMinuteOfDay(tripWindow.start)}: no hikes, island hopping or other trips that must start in the morning${tripWindow.start >= 16 * 60 ? ', and no museums, theme parks or long beach days' : ''}.`] : []),
+    ...(tripWindow.end < 21 * 60 ? [`This plan ends at ${formatMinuteOfDay(tripWindow.end)}: no night markets, nightlife or other evening stops.`] : []),
     ...(firstDayStartMinute !== null ? [
       `Day 1 is today and starts late: plan day 1 only from ${formatMinuteOfDay(firstDayStartMinute)} to ${formatMinuteOfDay(firstDayWindow.end)}, with fewer stops that suit that time of day (no morning places on day 1).${firstDayWindowKey !== tripStyle.timeOfDay ? ' From day 2 on, follow the daily schedule above, including its morning and daytime places.' : ''}`,
     ] : []),
     `Pace: ${tripPace.label} (${tripStyle.pace === 'packed' ? 'fill each day with as many good stops as fit' : tripStyle.pace === 'balanced' ? 'a full day with some breathing room' : 'fewer stops with longer, unhurried visits'}).`,
-    `Trip focus chosen for this trip: ${tripStyle.focus.join(', ') || 'no specific focus (use the interests above)'}.`,
+    `Trip focus chosen for this trip: ${tripStyle.focus.join(', ') || 'no specific focus (use the saved interests above)'}.`,
+    ...(focusGuides.length ? [`What this trip looks for: ${focusGuides.map((guide) => guide.means).join(' ')}`] : []),
     `Must-see: ${(profile?.mustSee || []).join(', ') || 'none'}`,
     `Avoid: ${(profile?.avoid || []).join(', ') || 'none'}`,
     ...(stay ? [`Lodging: the traveler is staying at ${stay.name}${stay.address ? ` (${stay.address})` : ''}. Prefer stops that are practical to reach from there.`] : []),
+    `Keep every stop within about ${ITINERARY_RADIUS_KM} km of ${destination} (a short drive); never send the traveler to towns far away${firstDayLeg || lastDayLeg ? ', except the stops on the way described next' : ''}.`,
+    ...(firstDayLeg ? [`Day 1 is the drive from ${startText} to ${destination}: plan day 1's stops along the way, in driving order, each at most about ${ROUTE_DETOUR_KM} km off the route (places in Batangas only), and make the last stop of day 1 at or right near ${destination}, so the traveler arrives in the afternoon.`] : []),
+    ...(lastDayLeg ? [`Day ${durationDays} is the drive from ${destination} to ${endText}: plan its stops along the way, in driving order, each at most about ${ROUTE_DETOUR_KM} km off the route (places in Batangas only), with the last stop the one nearest ${endText}.`] : []),
+    ...(durationDays > new Set([firstDayLeg ? 1 : 0, lastDayLeg ? durationDays : 0].filter(Boolean)).size
+      ? [`${firstDayLeg || lastDayLeg ? 'The other days stay' : 'Every day stays'} near ${destination}.`] : []),
+    homeIsBeach
+      ? `${home.name} is the traveler's beach for this trip: their beach and swimming time is there. Include "${home.name}" itself as one stop (searchQuery exactly "${home.name}", category beach, bestTime afternoon) on day 1, and never add any other beach, cove or beach resort. Fill the other stops and days with different things to do nearby (island hopping, snorkeling or diving trips, falls, hot springs, hikes, viewpoints, heritage, food), not another beach.`
+      : `Don't send the traveler to a different beach or beach resort every day: at most ${otherBeachStays} beach or beach-resort stop${otherBeachStays === 1 ? '' : 's'} in the whole trip. Fill the other days with different things to do (island hopping, snorkeling, falls, hot springs, hikes, viewpoints, heritage, food).`,
+    'At most one beach, cove, island trip or beach resort per day: a beach visit already fills most of the day.',
+    `Every stop must fit ${tripStyle.focus.length ? "this trip's focus (the saved interests above are background only)" : 'the saved interests above'}, or be one of the destination's must-see highlights that suits it. Do not add stops of a kind the traveler did not ask for: for a beach and relaxation trip, plan beaches, resorts, coves, hot springs, spas, scenic viewpoints and sunset spots, not churches, museums or city tours.${kindLimits.nightlife ? '' : ' No bars, clubs, beach parties or other nightlife.'}${kindLimits.shopping ? '' : ' No shops or pasalubong centers.'}${kindLimits.hike ? '' : ' No mountain hikes (easy nature walks are fine).'}`,
+    'Plan each day in one area so the route goes one way, not back and forth: stops of the same day should be within about 12 km of each other (10–30 minutes apart by car), and different days may cover different areas. Fewer, closer stops make a better day than many far apart.',
+    `Build each day like a real trip: one main activity (a beach day, island hopping, a snorkeling or diving trip, a hike, a theme park, or a heritage town walk) plus a few shorter stops near it, all different kinds of places.${kindLimits.food ? ' Lunch or dinner at a famous local eatery is part of the day.' : ''} Stops on the way during a drive day are short (30–90 minutes).`,
     `Request: ${message}`,
   ].join('\n');
   progress(10, 40, 'Planning your days with AI');
   const preliminaryText = await callGeminiApi({
     message,
     contextText: planningContext,
-    systemInstruction: `Return JSON only: {"destination":"...","durationDays":${durationDays},"days":[{"day":1,"theme":"...","activities":[{"searchQuery":"exact name of one real place","category":"attraction|museum|park|beach|landmark|activity|shopping|tour|nightlife|night market","bestTime":"early-morning|morning|midday|afternoon|sunset|evening|night","durationMinutes":90,"notes":"..."}]}]}. Return exactly ${durationDays} days from ${startDate} through ${endDate}, with exactly ${maxActivitiesPerDay} activities per day: enough to fill the daily schedule, listed in visiting order; the last ones are backups used only if time allows. Every searchQuery must be the exact, official name of one specific, real, currently operating tourist spot, tour or experience in or near the selected destination (never a generic category such as "beach" or "museum"), because it is looked up on Google Maps and the top match is used. Do not include restaurants, cafes, or hotels; meal breaks are already reserved and the traveler picks meals and lodging separately (night markets and food parks are fine as evening stops). Every stop must be somewhere a tourist on vacation would go: never police or fire stations, town or barangay halls, government offices, courts, public or wet markets (palengke), malls, supermarkets, schools, hospitals, banks, bus terminals, gas stations or cemeteries. Give each stop a realistic durationMinutes (30-360) for what people actually do there, including getting around inside it: a mountain hike with the summit views 240-360 (bestTime early-morning), island hopping or a snorkeling or diving trip 180-360, a beach or resort day 120-300, a theme or water park 150-300, a museum 60-150, a church, shrine, monument, lighthouse or viewpoint 30-90, a night market 75-150, and nightlife (bars, clubs, live music, beach parties) 180-300 with bestTime night, since it runs late into the night. Give the bestTime to be there and fit stops to the daily schedule: sunrise spots and hikes early, museums and indoor places at midday heat, viewpoints and beaches at sunset, and night markets, light shows, night views or nightlife in the evening. Use what is generally known about each place's busy hours and atmosphere when choosing bestTime (popular beaches are calmer early in the morning and best again late afternoon, bars and beach parties get lively later at night, heritage towns and churches are quieter in the morning, and the most popular spots are busiest on weekends), and when useful add a short tip to notes, such as "quieter before 9 AM" or "liveliest after 10 PM", written as general advice, not as exact data. Beaches, islands, coves, hikes and boat trips are daytime stops that start by mid-afternoon at the latest; every evening or night stop must be a place that is good after dark (night markets, food parks, night views, bars, live music, beach parties, lit-up plazas), never a beach, an island or a museum at night. Keep each day's stops close together, grouped by area, within the selected destination. Mix different kinds of stops each day; include at most one church, cathedral, chapel or shrine per day unless the trip focus or interests are religious, pilgrimage or heritage. Match the trip focus first, then the traveler's interests, and still include the destination's must-see highlights.`
+    systemInstruction: `Return JSON only: {"destination":"...","durationDays":${durationDays},"days":[{"day":1,"theme":"...","activities":[{"searchQuery":"exact name of one real place","alternatives":["exact name of another real place","exact name of a third real place"],"category":"attraction|museum|park|beach|landmark|activity|shopping|tour|nightlife|night market${kindLimits.food ? '|food' : ''}","bestTime":"early-morning|morning|midday|afternoon|sunset|evening|night","durationMinutes":90,"notes":"..."}]}]}. Return exactly ${durationDays} days from ${startDate} through ${endDate}, with exactly ${slotsPerDay} activities per day, listed in visiting order. For each activity also give "alternatives": two other specific, real places of the same kind that suit the same time slot, so the traveler can choose one of three. Every searchQuery must be the exact, official name of one specific, real, currently operating tourist spot, tour or experience in or near the selected destination (never a generic category such as "beach" or "museum"), because it is looked up on Google Maps and the top match is used. ${kindLimits.food
+    ? `Do not include hotels. Food is a focus of this trip: include famous local eateries known for Batangas dishes (lomi, bulalo, tapang Taal) as meal stops, at most one ${mealStopNames.map((meal) => `${meal} (bestTime "${meal === 'lunch' ? 'midday' : 'evening'}")`).join(' and one ')} a day (category "food", durationMinutes 60-90); a night market or food park can be the dinner. Add at most one cafe or bakery a day for kapeng barako or merienda (category "food", bestTime "afternoon", durationMinutes 45-60). Never fast-food chains. Other meals stay free.`
+    : 'Do not include restaurants, cafes, or hotels; meal breaks are already reserved and the traveler picks meals and lodging separately (night markets and food parks are fine as evening stops).'} Every stop must be somewhere a tourist on vacation would go: never police or fire stations, town or barangay halls, government offices, courts, public or wet markets (palengke), malls, supermarkets, schools, hospitals, banks, bus terminals, gas stations or cemeteries. Give each stop a realistic durationMinutes (30-360) for what people actually do there, including getting around inside it: a mountain hike with the summit views 240-360 (bestTime early-morning), island hopping or a snorkeling or diving trip 180-360, a beach or resort day 120-300, a theme or water park 150-300, a museum 60-150, a church, shrine, monument, lighthouse or viewpoint 30-90, ${kindLimits.nightlife ? 'a night market 75-150, and nightlife (bars, clubs, live music, beach parties) 180-300 with bestTime night, since it runs late into the night' : 'and a night market 75-150'}. Give the bestTime to be there and fit stops to the daily schedule: sunrise spots and hikes early, museums and indoor places at midday heat, viewpoints and beaches at sunset, and night markets, light shows${kindLimits.nightlife ? ', night views or nightlife' : ' or night views'} in the evening. Use what is generally known about each place's busy hours and atmosphere when choosing bestTime (popular beaches are calmer early in the morning and best again late afternoon, bars and beach parties get lively later at night, heritage towns and churches are quieter in the morning, and the most popular spots are busiest on weekends), and when useful add a short tip to notes, such as "quieter before 9 AM" or "liveliest after 10 PM", written as general advice, not as exact data. Beaches, islands, coves, hikes and boat trips are daytime stops that start by mid-afternoon at the latest; every evening or night stop must be a place that is good after dark (night markets, food parks, night views, ${kindLimits.nightlife ? 'bars, live music, beach parties, ' : ''}lit-up plazas), never a beach, an island or a museum at night. Keep each day's stops close together, grouped by area, within about ${ITINERARY_RADIUS_KM} km of the selected destination (except stops on the way on a travel day, as described in the context). Include at most one beach, cove, island trip or beach resort per day, since a beach visit fills most of the day. Mix different kinds of stops each day, but only kinds that fit the trip focus and interests. Churches, cathedrals, chapels and shrines: ${worshipLimit.sundayOnly ? 'only on a Sunday of the trip, at most one that day, in the morning (for Mass)' : `at most ${worshipLimit.perDay} per day`}. Each day may have at most one beach, island, swimming, falls or hot spring stop, at most one hike, at most one theme or water park, at most two museums, and no more than two of these long stops (beach or swim, hike, theme park) in total. A church or museum never comes after swimming or the beach on the same day: plan it earlier that day or on another day. Match the trip focus first, then the traveler's interests, and still include the destination's must-see highlights.`
       + ` Treat the stated budget as the ceiling for the whole trip, not just admission tickets. Use the entrance fees and tours allowance well: when it is generous, include the destination's best paid experiences (island hopping, guided tours, adventure activities, top attractions) rather than only free places; when it is tight, favor excellent free or low-cost places but still fill every day. Avoid repeating places. Never invent place IDs, addresses, ratings, opening hours, ticket prices, transportation fares, or travel times. Leave unverified prices unavailable.`,
     responseMimeType: 'application/json',
     // Room for each stop's notes and timing tip, so the plan is never cut off mid-answer.
-    maxOutputTokens: Math.min(12000, 1500 + durationDays * maxActivitiesPerDay * 200),
+    maxOutputTokens: Math.min(14000, 1500 + durationDays * slotsPerDay * 320),
     thinkingLevel: 'low',
   });
   const preliminary = extractJsonObject(preliminaryText);
   if (!preliminary?.days?.length) throw new Error('The AI returned an invalid preliminary itinerary.');
   if (preliminary.days.length !== durationDays) throw new Error(`The AI returned ${preliminary.days.length} days, but ${durationDays} days were requested.`);
 
-  const requestedActivities = preliminary.days.flatMap((day, dayIndex) => (day.activities || []).slice(0, maxActivitiesPerDay).map((activity, activityIndex) => ({
+  const requestedActivities = preliminary.days.flatMap((day, dayIndex) => (day.activities || []).slice(0, slotsPerDay).map((activity, activityIndex) => ({
     ...activity,
     day: dayIndex + 1,
     activityIndex,
@@ -3108,27 +4076,414 @@ async function generateVerifiedItineraryFromAi({ email, message, selectedDestina
     theme: String(day.theme || ''),
   })));
   progress(40, 55, 'Finding each place on Google Maps');
+  // Each stop's three named places (the AI's pick and its two alternatives), each looked
+  // up on Google Maps within the trip's radius. When the destination is one place (a
+  // resort), the search names the province, not that place: "Mount Daguldol in <resort>"
+  // finds resorts, not the mountain.
+  const searchArea = home ? 'Batangas' : destination;
   const placeResults = await Promise.all(requestedActivities.map(async (activity) => {
-    try {
-      return { activity, places: await findVerifiedPlaces(activity.searchQuery || activity.category, destination) };
-    } catch (error) {
-      return { activity, places: [], lookupError: error.message };
-    }
+    const names = [activity.searchQuery || activity.category, ...(Array.isArray(activity.alternatives) ? activity.alternatives : [])]
+      .map((name) => String(name || '').trim())
+      .filter(Boolean)
+      .filter((name, index, all) => all.findIndex((other) => other.toLowerCase() === name.toLowerCase()) === index)
+      .slice(0, 3);
+    const lookups = await Promise.all(names.map((name) => findVerifiedPlaces(name, searchArea, center, legsForDay(activity.day)).catch(() => [])));
+    return { activity, names, lookups };
   }));
-  const verifiedPlaces = Array.from(new Map(placeResults.flatMap((result) => result.places).map((place) => [place.placeId, place])).values());
+  const verifiedPlaces = Array.from(new Map(placeResults.flatMap((result) => result.lookups.flat()).map((place) => [place.placeId, place])).values());
   if (!verifiedPlaces.length) throw new Error('Google Places could not verify any locations for this itinerary.');
 
-  const candidateSets = placeResults.map(({ activity, places }) => ({
-    sourceKey: activity.sourceKey,
-    day: activity.day,
-    searchQuery: activity.searchQuery,
-    category: activity.category,
-    candidates: places.slice(0, 3).map((place) => ({
-      placeId: place.placeId, name: place.name, address: place.address,
-      lat: place.lat, lng: place.lng, rating: place.rating,
-      ratingCount: place.ratingCount, types: place.types, priceLevel: place.priceLevel,
-    })),
-  }));
+  const isLodging = (place) => (place.types || []).some((type) => /(^|_)(lodging|hotel|motel|hostel|guest_house|bed_and_breakfast)$/.test(String(type)));
+  const fitsSlot = (place, category) => {
+    const wanted = String(category || '').toLowerCase();
+    if (/hotel/.test(wanted)) return true;
+    // A pasalubong center or souvenir shop is a shopping stop, though Google often lists it
+    // as food (it sells delicacies).
+    if (/shop|souvenir|pasalubong/.test(wanted) && SHOPPING_NAME.test(String(place.name || ''))) return !isLodging(place);
+    // A food stop on a trip about food is a local eatery, a cafe, a night market or a
+    // food park (not a plaza or a park), never a fast-food chain.
+    if (kindLimits.food > 0 && /^(food|restaurant|cafe|café|eatery|meal)$/.test(wanted.trim())) {
+      return !isLodging(place) && !(place.types || []).map(String).includes('fast_food_restaurant')
+        && !FOOD_CHAIN_NAME.test(String(place.name || '')) && (isFoodPlace(place) || EVENING_MARKET_NAME.test(String(place.name || '')));
+    }
+    // Night markets, food parks, bars and evening spots (a plaza, a baywalk) are real
+    // stops; a single restaurant or a fast-food chain is a meal, not a stop, except a
+    // famous local eatery on a trip about food (its lunch or dinner stop).
+    if (/restaurant|cafe|food|market|nightlife/.test(wanted)) {
+      if (isLodging(place)) return false;
+      const types = (place.types || []).map(String);
+      if (types.includes('fast_food_restaurant')) return false;
+      return EVENING_MARKET_NAME.test(String(place.name || ''))
+        || types.some((type) => /^(bar|pub|night_club|wine_bar|karaoke|live_music_venue|food_court)$/.test(type))
+        || !isFoodPlace(place)
+        || (kindLimits.food > 0 && /restaurant|cafe|food/.test(wanted) && !FOOD_CHAIN_NAME.test(String(place.name || '')));
+    }
+    // A beach resort is a beach stop, even when Google lists it as lodging.
+    if (isLodging(place) && isBeachLike(place) && !isFoodPlace(place)) return true;
+    return !isLodging(place) && !isFoodPlace(place);
+  };
+
+  const kindEntry = (place, set) => ({ place, activity: { category: set.category || '' } });
+  // A day around the destination keeps its stops within about this distance of one spot
+  // (stops usually 10–30 minutes' drive apart), so the route is short.
+  const DAY_AREA_KM = 12;
+  // A stop's options are all within this distance of its first option (one town or beach area).
+  const OPTION_SPREAD_KM = 8;
+  // The hours a trip day's stops can use: its time window, and when its first stop can
+  // start (later on a trip that starts later today).
+  const dayHours = (day) => {
+    const window = day === 1 ? firstDayWindow : tripWindow;
+    return { window, opens: day === 1 && firstDayStartMinute !== null ? firstDayStartMinute : window.start };
+  };
+  // A stop's part of the day for this place (see suitedBestTime): the AI's suggestion,
+  // corrected for the kind of place (a hike at dawn, not in the afternoon) and for the
+  // day's hours: a food stop is dinner on a day that starts after lunch, and on a day
+  // that starts in the afternoon a morning stop is visited then instead.
+  const stopBestTime = (set, place) => {
+    const suggested = requestedActivities.find((activity) => activity.sourceKey === set.sourceKey)?.bestTime;
+    if (!place) return String(suggested || '').toLowerCase();
+    const kind = stopKind(kindEntry(place, set));
+    const time = suitedBestTime(kind, suggested);
+    const { window, opens } = dayHours(set.day);
+    if (kind === 'food') {
+      return time === 'midday' && !window.meals.some((meal) => meal.kind === 'lunch' && !meal.beforeStart && meal.start + 60 >= opens) ? 'evening' : time;
+    }
+    const rank = BEST_TIME_ORDER.indexOf(time);
+    return opens >= 13 * 60 && rank >= 0 && rank < BEST_TIME_ORDER.indexOf('afternoon') ? 'afternoon' : time;
+  };
+  // A place this trip plans (no bar without Nightlife, no eatery unless the trip is about
+  // food, no shop without Shopping), open that day (an eatery at one of the day's lunch or
+  // dinner times, by its Google hours), and reachable in time from where the day starts
+  // (stopFitsHours), so the stop picker never offers a stop the schedule would always drop.
+  const fitsTrip = (place, set) => {
+    const kind = stopKind(kindEntry(place, set));
+    if (kindLimits[kind] === 0) return false;
+    const { window, opens } = dayHours(set.day);
+    const weekday = tripWeekday(set.day);
+    const periods = Array.isArray(place.openPeriods) ? place.openPeriods : [];
+    if (periods.length && !periods.some((period) => period.allDay || period.day === weekday)) return false;
+    const part = stopBestTime(set, place);
+    // Day 1's evening is spent near the destination, where the traveler sleeps, not back
+    // along the drive there.
+    if (set.day === 1 && firstDayLeg && ['sunset', 'evening', 'night'].includes(part) && haversineKm(firstDayLeg.to, place) > DAY_AREA_KM) return false;
+    // The drive from where the day starts (on day 1 the traveler leaves up to two hours
+    // earlier for a long one, as fitItineraryDay plans it). A dawn start (a sunrise hike) is
+    // only possible near that start on a drive day, whose stops go in driving order.
+    const origin = dayOriginFor(set.day - 1)?.place;
+    const fullDrive = origin ? estimateTravelMinutes(origin, place, travelMode) : 0;
+    const drive = set.day === 1 && startPoint && fullDrive > 60 ? fullDrive - Math.min(120, fullDrive - 30) : fullDrive;
+    const dawn = !isDriveDay(set.day - 1) || fullDrive <= 30;
+    if (kind === 'food' && !window.meals.some((meal) => !meal.beforeStart && meal.kind !== 'breakfast' && meal.start + 60 >= opens + drive
+      && [meal.start - 30, meal.start, meal.start + 30, meal.start + 60].some((at) => openingHoursFit(place, weekday, at, 60).open === true))) return false;
+    return stopFitsHours({ place, activity: { category: set.category || '', bestTime: part } }, window, opens, drive, dawn);
+  };
+  // Up to three options per stop: one place for each name, never offered twice in the
+  // trip, so a place picked for one stop never shows up as an option for another.
+  const offeredInTrip = new Set();
+  // A stop option from a verified place. notesFit: found for the AI's own pick (not an
+  // alternative), so the AI's notes describe this place.
+  const toCandidate = (place, notesFit = false) => ({
+    placeId: place.placeId, name: place.name, address: place.address,
+    lat: place.lat, lng: place.lng, rating: place.rating,
+    ratingCount: place.ratingCount, types: place.types, priceLevel: place.priceLevel,
+    photoResource: place.photoResource || null,
+    distanceKm: Number.isFinite(place.distanceKm) ? place.distanceKm : (center ? Math.round(haversineKm(center, place) * 10) / 10 : null),
+    isBeach: isBeachLike(place),
+    hasRooms: hasRoomsPlace(place),
+    ...(notesFit ? { notesFit: true } : {}),
+  });
+  // Words that only say where a place is (the destination's own name, Batangas's towns):
+  // sharing one of them doesn't make two places the same (see nameMatches).
+  const placeWords = new Set([...nameWords(destination), ...Array.from(BATANGAS_TOWNS).flatMap((town) => town.split(' '))]);
+  const candidateSets = placeResults.map(({ activity, names, lookups }) => {
+    const candidates = [];
+    // Real, known spots only: a place with under 10 Google reviews (a roadside curve
+    // bikers know, a tiny chapel) isn't offered; one with 30 or more is preferred.
+    // The destination always fits (a resort Google also lists as a restaurant, for one).
+    const usable = (candidate) => !offeredInTrip.has(candidate.placeId)
+      && (fitsSlot(candidate, activity.category) || candidate.placeId === home?.placeId)
+      && !(worshipOnDay(activity.day) === 0 && isWorshipPlace(candidate))
+      && (Number(candidate.ratingCount || 0) >= 10 || candidate.placeId === home?.placeId)
+      && (candidate.placeId === home?.placeId || (isRealStop(candidate) && fitsTrip(candidate, activity)));
+    for (const [lookupIndex, places] of lookups.entries()) {
+      // The place the AI named, not just the top result of its search (or the destination).
+      const named = (candidate) => usable(candidate) && (candidate.placeId === home?.placeId || nameMatches(candidate.name, names[lookupIndex], placeWords));
+      const place = places.find((candidate) => named(candidate) && Number(candidate.ratingCount) >= 30) || places.find(named);
+      if (!place) continue;
+      offeredInTrip.add(place.placeId);
+      candidates.push(toCandidate(place, lookupIndex === 0));
+    }
+    // The lookups' other good results: more options for this stop when the area or the
+    // daily limits leave it with few (known spots only, 30+ reviews).
+    const spares = lookups.flat().filter((place) => usable(place) && Number(place.ratingCount) >= 30
+      && !candidates.some((candidate) => candidate.placeId === place.placeId));
+    return {
+      sourceKey: activity.sourceKey,
+      day: activity.day,
+      searchQuery: activity.searchQuery,
+      category: activity.category,
+      candidates,
+      spares,
+    };
+  });
+  // The destination itself (a resort, a beach, an attraction) is always a stop: on day 1,
+  // in the afternoon, after any stops on the way. The AI is asked to include it, but
+  // it's added here when it didn't.
+  if (home && !candidateSets.some((set) => set.candidates.some((place) => place.placeId === home.placeId))) {
+    const homeIsStay = isBeachStay(home);
+    requestedActivities.push({
+      sourceKey: 'd1home', day: 1, activityIndex: requestedActivities.filter((activity) => activity.day === 1).length,
+      searchQuery: home.name, category: homeIsStay ? 'beach' : 'attraction', bestTime: 'afternoon',
+      durationMinutes: homeIsStay ? 240 : 120, notes: 'Your destination.', theme: '',
+    });
+    if (!verifiedPlaces.some((place) => place.placeId === home.placeId)) verifiedPlaces.push(home);
+    offeredInTrip.add(home.placeId);
+    // Before day 1's sunset, evening and night stops, so the list reads in visiting order.
+    const lateKeys = new Set(requestedActivities
+      .filter((activity) => activity.day === 1 && ['sunset', 'evening', 'night'].includes(String(activity.bestTime || '').toLowerCase()))
+      .map((activity) => activity.sourceKey));
+    const firstLate = candidateSets.findIndex((set) => set.day === 1 && lateKeys.has(set.sourceKey));
+    const lastDayOne = candidateSets.map((set) => set.day).lastIndexOf(1);
+    const at = firstLate >= 0 ? firstLate : lastDayOne + 1;
+    candidateSets.splice(at, 0, {
+      sourceKey: 'd1home', day: 1, searchQuery: home.name, category: homeIsStay ? 'beach' : 'attraction',
+      candidates: [{
+        placeId: home.placeId, name: home.name, address: home.address,
+        lat: home.lat, lng: home.lng, rating: home.rating,
+        ratingCount: home.ratingCount, types: home.types, priceLevel: home.priceLevel,
+        photoResource: home.photoResource || null,
+        distanceKm: 0,
+        isBeach: isBeachLike(home),
+        hasRooms: hasRoomsPlace(home),
+        notesFit: true,
+      }],
+    });
+  }  // Which stop of a day a kind belongs to, by the stop's category ("beach" stop gets the beach).
+  const KIND_CATEGORY = {
+    water: /beach|island|swim|resort|cove|snorkel|div|falls|spring/i, hike: /hike|hiking|trek|mountain|trail|volcano/i,
+    themepark: /theme|amusement|water ?park/i, nightmarket: /market|food/i, nightlife: /nightlife|bar|club/i,
+    worship: /church|worship|pilgrim|relig/i, museum: /museum|gallery/i,
+    promenade: /baywalk|boardwalk|promenade|walk/i, viewpoint: /view|lookout|scenic/i, plaza: /plaza|town/i,
+    food: /food|restaurant|eatery|lunch|dinner|cuisine/i, cafe: /cafe|coffee|bakery|dessert|merienda|snack/i,
+    shopping: /shop|souvenir|pasalubong/i,
+  };
+  // The trip's beach. When the destination is a beach or resort, its stop offers only
+  // it and no other stop offers a beach or beach resort. Otherwise only otherBeachStays
+  // stops in the whole trip (on different days) offer one; other stops keep their
+  // other options, so the traveler isn't sent to a new beach resort every day.
+  const isHome = (place) => Boolean(home) && place.placeId === home.placeId;
+  for (const set of candidateSets) {
+    if (set.candidates.some(isHome)) set.candidates = set.candidates.filter(isHome);
+  }
+  const isOtherBeach = (place) => isBeachStay(place) && !isHome(place);
+  const beachOffering = candidateSets.filter((set) => set.candidates.some(isOtherBeach));
+  const beachScore = (set) => (KIND_CATEGORY.water.test(String(set.category || '')) ? 0 : 2) + (isOtherBeach(set.candidates[0]) ? 0 : 1);
+  const beachOwners = new Set();
+  const beachDays = new Set(candidateSets.filter((set) => set.candidates.some(isHome)).map((set) => set.day));
+  for (const set of beachOffering.slice().sort((a, b) => beachScore(a) - beachScore(b))) {
+    if (beachOwners.size >= otherBeachStays) break;
+    if (beachDays.has(set.day)) continue;
+    beachOwners.add(set);
+    beachDays.add(set.day);
+  }
+  for (const set of beachOffering) {
+    if (!beachOwners.has(set)) set.candidates = set.candidates.filter((place) => !isOtherBeach(place));
+  }
+  const tripDays = Array.from(new Set(candidateSets.map((set) => set.day)));
+  // A day spent around the destination stays in one area: the spot where the most of
+  // the day's stops have an option within DAY_AREA_KM (closest to where the traveler
+  // stays when that's a tie, or the destination itself when it's a stop that day). Every
+  // option further than that from it is dropped, and a stop with none left is dropped;
+  // the area widens once when that would leave the day with a single stop.
+  // (Drive days follow their route instead.)
+  // A drive day's places: on the way (at most ROUTE_DETOUR_KM off the drive), or on the
+  // day the traveler arrives, around the destination too, where that drive ends. (On the
+  // last day one near the destination but in the other direction would mean going out
+  // and back.)
+  const onTheWayFor = (day) => (place) => legsForDay(day).some((leg) => routeDetourKm(leg, place) <= ROUTE_DETOUR_KM)
+    || (day === 1 && Boolean(firstDayLeg) && haversineKm(firstDayLeg.to, place) <= DAY_AREA_KM);
+  const dayAreas = new Map();
+  for (const day of tripDays) {
+    // A drive day keeps only places on the way; the destination itself always stays.
+    const dayLegs = legsForDay(day);
+    if (dayLegs.length) {
+      const onTheWay = onTheWayFor(day);
+      for (const set of candidateSets.filter((item) => item.day === day)) {
+        set.candidates = set.candidates.filter((place) => isHome(place) || onTheWay(place));
+      }
+      continue;
+    }
+    const sets = candidateSets.filter((item) => item.day === day && item.candidates.length);
+    const options = sets.flatMap((set) => set.candidates);
+    const stopsNear = (spot, km) => sets.filter((set) => set.candidates.some((place) => haversineKm(spot, place) <= km)).length;
+    const pickArea = (km) => options.find(isHome) || options.reduce((best, spot) => {
+      const score = stopsNear(spot, km) * 1000 - (base ? haversineKm(base, spot) : 0);
+      return !best || score > best.score ? { spot, score } : best;
+    }, null)?.spot;
+    for (const km of [DAY_AREA_KM, DAY_AREA_KM * 1.5]) {
+      const area = pickArea(km);
+      if (!area) break;
+      if (km === DAY_AREA_KM && stopsNear(area, km) < Math.min(2, sets.length)) continue;
+      for (const set of sets) {
+        set.candidates = set.candidates
+          .filter((place) => haversineKm(area, place) <= km)
+          .sort((a, b) => haversineKm(area, a) - haversineKm(area, b));
+      }
+      dayAreas.set(day, { area, km });
+      break;
+    }
+    // A day with fewer than two of its ideas kept (all other beaches, say, or names that
+    // weren't real places) gets more options from around where the traveler stays, not
+    // only around its one remaining stop.
+    if (sets.length < 2 && (base || center)) {
+      const around = base || center;
+      dayAreas.set(day, { area: { lat: around.lat, lng: around.lng }, km: DAY_AREA_KM * 1.5 });
+    }
+  }
+  // Well-known things to do in each day's area, to give every stop up to three options of
+  // the same kind when its own searches found fewer nearby: a search for each of the trip
+  // focus's first two ideas (TRIP_FOCUS_GUIDE's search, so "Food Tour" looks for famous
+  // local restaurants), then a general one; focus results come first.
+  // (Beach searches are left out when the trip already has its beach: those results would
+  // all be resorts it can't offer.)
+  const poolSearches = focusGuides.filter((guide) => !(homeIsBeach && guide.beach)).slice(0, 2).map((guide) => guide.search);
+  // Where each day's searches look: the day's area, or on a drive day around the middle
+  // of each drive (then only places on the way are kept), so a stop on the way whose own
+  // searches found nothing on the route still gets options.
+  const poolCircles = new Map(Array.from(dayAreas.entries()).map(([day, { area, km }]) => [day, [{ area, km }]]));
+  for (const day of tripDays) {
+    const legs = legsForDay(day);
+    if (!legs.length) continue;
+    poolCircles.set(day, [
+      ...legs.map((leg) => ({
+        area: { lat: (leg.from.lat + leg.to.lat) / 2, lng: (leg.from.lng + leg.to.lng) / 2 },
+        km: Math.min(50, haversineKm(leg.from, leg.to) / 2 + ROUTE_DETOUR_KM),
+      })),
+      // (The day the traveler arrives: around the destination too.)
+      ...(day === 1 && firstDayLeg ? [{ area: firstDayLeg.to, km: DAY_AREA_KM }] : []),
+    ]);
+  }
+  const dayPools = new Map(await Promise.all(Array.from(poolCircles.entries()).map(async ([day, circles]) => {
+    if (isDevelopmentMode) return [day, []];
+    const legs = legsForDay(day);
+    const onTheWay = onTheWayFor(day);
+    const results = await Promise.all(circles.flatMap(({ area, km }) => [...poolSearches, 'top tourist spots and things to do']
+      .map((textQuery) => callGooglePlacesApi('places:searchText', {
+        textQuery,
+        maxResultCount: 20,
+        locationBias: { circle: { center: { latitude: area.lat, longitude: area.lng }, radius: km * 1000 } },
+      }).catch(() => ({})))));
+    // (A food stop only at a well-rated eatery: 4 stars or more.)
+    const places = Array.from(new Map(results.flatMap((data) => (data.places || []).map(mapPlace))
+      .filter((place) => place.placeId && Number.isFinite(place.lat) && Number.isFinite(place.lng))
+      .filter((place) => isVacationPlace(place) && isRealStop(place) && Number(place.ratingCount) >= 30)
+      .filter((place) => (legs.length ? onTheWay(place) : circles.some(({ area, km }) => haversineKm(area, place) <= km)))
+      .filter((place) => !isFoodPlace(place) || Number(place.rating) >= 4)
+      .map((place) => [place.placeId, place])).values());
+    return [day, places];
+  })));
+  for (const day of tripDays) {
+    // Only as many stops as the day allows may offer a kind: one stop offers beaches (so
+    // the traveler can't pick a beach for every stop), one offers hikes, one a baywalk,
+    // and so on. The other stops keep their other options (and are refilled below).
+    // (Every stop of the day, so one whose options were all removed can be refilled.)
+    const daySets = candidateSets.filter((item) => item.day === day);
+    for (const kind of Object.keys(KIND_CATEGORY)) {
+      const limit = kind === 'worship' ? worshipOnDay(day) : kindLimits[kind];
+      const isKind = (place, set) => stopKind(kindEntry(place, set)) === kind;
+      const offering = daySets.filter((set) => set.candidates.some((place) => isKind(place, set)));
+      if (offering.length <= limit) continue;
+      // Owners: stops named for this kind first, then stops whose first option is one.
+      const score = (set) => (KIND_CATEGORY[kind].test(String(set.category || '')) ? 0 : 2) + (isKind(set.candidates[0], set) ? 0 : 1);
+      const owners = new Set(offering.slice().sort((a, b) => score(a) - score(b)).slice(0, limit));
+      // (The destination itself always stays, even as a kind the trip doesn't plan.)
+      for (const set of offering) {
+        if (!owners.has(set)) set.candidates = set.candidates.filter((place) => isHome(place) || !isKind(place, set));
+      }
+    }
+    // A stop's options are all in one place: within OPTION_SPREAD_KM of its first option,
+    // so whichever the traveler picks, the day's route stays the same (not one option in
+    // Laiya and the others back in Lipa on a drive day). Refills below follow the same rule.
+    for (const set of daySets) {
+      if (set.candidates.length < 2 || set.candidates.some(isHome)) continue;
+      const anchor = set.candidates[0];
+      set.candidates = set.candidates.filter((place) => place === anchor || haversineKm(anchor, place) <= OPTION_SPREAD_KM);
+    }
+    // Fill each stop up to three options: first its own searches' other results, then
+    // the area's things to do. Places of the same kind as the stop's first option
+    // (another museum for a museum); a stop the limits emptied gets a kind the day still
+    // has room for. Always in the day's area (or on the drive), not offered elsewhere,
+    // never a beach or resort unless this stop is the trip's beach, and churches only
+    // when the day allows them. The destination's own stop stays as it is.
+    const area = dayAreas.get(day);
+    const legs = legsForDay(day);
+    const kindLimit = (kind) => (kind === 'worship' ? worshipOnDay(day) : kindLimits[kind]);
+    const kindOpen = (kind, forSet) => kindLimit(kind) === undefined
+      || daySets.filter((set) => set !== forSet && set.candidates.some((place) => stopKind(kindEntry(place, set)) === kind)).length < kindLimit(kind);
+    for (const set of daySets.filter((item) => !item.candidates.some(isHome))) {
+      const wasEmpty = !set.candidates.length;
+      let kind = wasEmpty ? null : stopKind(kindEntry(set.candidates[0], set));
+      for (const place of [...(set.spares || []), ...(dayPools.get(day) || [])]) {
+        if (set.candidates.length >= 3) break;
+        const placeKind = stopKind(kindEntry(place, set));
+        if (offeredInTrip.has(place.placeId) || !fitsSlot(place, set.category)) continue;
+        if (area && haversineKm(area.area, place) > area.km) continue;
+        if (legs.length && !onTheWayFor(day)(place)) continue;
+        if (set.candidates.length && haversineKm(set.candidates[0], place) > OPTION_SPREAD_KM) continue;
+        if (isBeachStay(place) && !beachOwners.has(set)) continue;
+        if (isWorshipPlace(place) && worshipOnDay(day) === 0) continue;
+        if (!fitsTrip(place, set)) continue;
+        if (kind ? placeKind !== kind : !kindOpen(placeKind, set)) continue;
+        kind = placeKind;
+        offeredInTrip.add(place.placeId);
+        set.candidates.push(toCandidate(place));
+        if (!verifiedPlaces.some((item) => item.placeId === place.placeId)) verifiedPlaces.push(place);
+      }
+      // A refilled stop is labelled for what it now offers (not "Beach" for a museum).
+      if (wasEmpty && kind) set.category = KIND_STOP_LABELS[kind] || 'attraction';
+    }
+    // One stop per site: an option within 300 m of an earlier stop's first option whose name
+    // matches it (the basilica, then its historical marker) gives way.
+    const sitesSoFar = [];
+    for (const set of daySets) {
+      if (!set.candidates.some(isHome)) {
+        set.candidates = set.candidates.filter((place) => !sitesSoFar.some((site) => haversineKm(site, place) <= 0.3
+          && (nameMatches(place.name, site.name, placeWords) || nameMatches(site.name, place.name, placeWords))));
+      }
+      if (set.candidates[0]) sitesSoFar.push(set.candidates[0]);
+    }
+    // A beach day ends at the beach: the sunset, evening and night stops after it only
+    // offer places within walking distance (BEACH_EVENING_KM), so the traveler keeps
+    // swimming instead of driving off to a town plaza. A stop with none nearby is dropped.
+    const BEACH_EVENING_KM = 3;
+    const late = (set) => ['sunset', 'evening', 'night'].includes(stopBestTime(set, set.candidates[0]));
+    const beachSet = daySets.find((set) => set.candidates.length && !late(set) && set.candidates.every(isBeachStay));
+    if (beachSet) {
+      const beach = beachSet.candidates[0];
+      for (const set of daySets.filter((item) => item !== beachSet && late(item))) {
+        set.candidates = set.candidates.filter((place) => haversineKm(beach, place) <= BEACH_EVENING_KM);
+      }
+    }
+    // Each stop's first option (picked to start in the app) keeps the day realistic: no
+    // second beach, third church and so on. Others stay as choices; the build checks again.
+    const counts = {};
+    for (const set of candidateSets.filter((item) => item.day === day && item.candidates.length)) {
+      const fitting = set.candidates.find((place) => stopFitsDay(counts, kindEntry(place, set), worshipOnDay(day), kindLimits));
+      if (!fitting) continue;
+      set.candidates = [fitting, ...set.candidates.filter((place) => place !== fitting)];
+      const kind = stopKind(kindEntry(fitting, set));
+      counts[kind] = (counts[kind] || 0) + 1;
+    }
+    // A day's two eatery stops are its lunch and its dinner, not two lunches (the AI's
+    // part of the day is changed for the stop picker and the schedule).
+    const mealSets = daySets.filter((set) => set.candidates.length && stopKind(kindEntry(set.candidates[0], set)) === 'food');
+    if (mealSets.length === 2 && stopBestTime(mealSets[0], mealSets[0].candidates[0]) === stopBestTime(mealSets[1], mealSets[1].candidates[0])) {
+      mealSets.forEach((set, index) => {
+        const requested = requestedActivities.find((activity) => activity.sourceKey === set.sourceKey);
+        if (requested) requested.bestTime = index ? 'evening' : 'midday';
+      });
+    }
+  }
   let candidatePriceResearch = null;
   const candidatePriceByPlaceId = new Map();
   progress(55, 70, budgetAmountPhp && includeBudgetResearch ? 'Checking entrance fees' : 'Choosing the best stops');
@@ -3137,7 +4492,7 @@ async function generateVerifiedItineraryFromAi({ email, message, selectedDestina
     const seenCandidateIds = new Set();
     // Price each activity's best candidate first, then alternatives, with a
     // bounded request so long trips do not create an unbounded Search call.
-    for (let candidateRank = 0; candidateRank < 2 && researchCandidates.length < 30; candidateRank++) {
+    for (let candidateRank = 0; candidateRank < 3 && researchCandidates.length < 30; candidateRank++) {
       for (const set of candidateSets) {
         const place = set.candidates[candidateRank];
         if (!place || seenCandidateIds.has(place.placeId) || researchCandidates.length >= 30) continue;
@@ -3166,9 +4521,30 @@ async function generateVerifiedItineraryFromAi({ email, message, selectedDestina
       }
     }
   }
+  // What the traveler can't check in advance counts when choosing a stop's first option:
+  // for places that keep opening hours (museums, eateries, shops, theme parks, night spots),
+  // an option whose hours Google lists goes first when it is about as good (rating within
+  // 0.2, at least half the reviews); on a tight entry-fee budget (under ₱500 a person a
+  // day), so does one with a known price. The destination itself is never replaced, and
+  // the other options are still offered.
+  const HOURS_KINDS = new Set(['museum', 'themepark', 'food', 'cafe', 'shopping', 'nightmarket', 'nightlife']);
+  const tightEntryBudget = Boolean(perPersonDailyActivityTargetPhp) && perPersonDailyActivityTargetPhp < 500;
+  const comparable = (option, first) => (!Number.isFinite(first.rating) || (Number.isFinite(option.rating) && option.rating >= first.rating - 0.2))
+    && Number(option.ratingCount || 0) >= Number(first.ratingCount || 0) / 2;
+  const hasHours = (place) => Array.isArray(place.openPeriods) && place.openPeriods.length > 0;
+  const preferKnown = (set, candidates) => {
+    if (candidates.length < 2 || candidates.some(isHome)) return candidates;
+    const first = candidates[0];
+    const needsHours = HOURS_KINDS.has(stopKind({ place: first, activity: { category: set.category || '' } })) && !hasHours(first);
+    const needsPrice = tightEntryBudget && !first.admissionEstimate;
+    if (!needsHours && !needsPrice) return candidates;
+    const better = candidates.slice(1).find((option) => comparable(option, first)
+      && (!needsHours || hasHours(option)) && (!needsPrice || option.admissionEstimate));
+    return better ? [better, ...candidates.filter((option) => option !== better)] : candidates;
+  };
   const pricedCandidateSets = candidateSets.map((set) => ({
     ...set,
-    candidates: set.candidates.map((place) => {
+    candidates: preferKnown(set, set.candidates.map((place) => {
       const cost = candidatePriceByPlaceId.get(String(place.placeId));
       return {
         ...place,
@@ -3176,256 +4552,517 @@ async function generateVerifiedItineraryFromAi({ email, message, selectedDestina
           ? { lowPhp: cost.lowPhp, highPhp: cost.highPhp, basis: cost.basis || 'web estimate' }
           : null,
       };
-    }),
+    })),
   }));
   const candidateSetsByKey = new Map(pricedCandidateSets.map((item) => [item.sourceKey, item]));
 
-  // Choose each stop without a second AI call. The planning call already named a
-  // specific real place per slot, so Google's top verified match for that exact
-  // name is used, skipping duplicates and results of the wrong kind (for example a
-  // hotel returned for an attraction search). Each day's stops are then put in
-  // visiting order: by the best time of day for each, then by distance.
-  const isLodging = (place) => (place.types || []).some((type) => /(^|_)(lodging|hotel|motel|hostel|guest_house|bed_and_breakfast)$/.test(String(type)));
-  // By type, or by name when Google's types miss it ("San Diego Restaurant").
-  const isFood = (place) => (place.types || []).some((type) => /restaurant|cafe|food|bakery|meal_/.test(String(type)))
-    || (/\b(restaurant|resto|cafe|café|coffee|eatery|grill|bistro|kitchen|carinderia|kainan|bulalohan|lomihan|food house)\b/i.test(String(place.name || ''))
-      && !EVENING_MARKET_NAME.test(String(place.name || '')));
-  const fitsSlot = (place, category) => {
-    const wanted = String(category || '').toLowerCase();
-    if (/hotel/.test(wanted)) return true;
-    // Night markets and food streets are real stops; single restaurants are not.
-    if (/restaurant|cafe|food|market|nightlife/.test(wanted)) return !isLodging(place);
-    return !isLodging(place) && !isFood(place);
-  };
-  const verifiedById = new Map(verifiedPlaces.map((place) => [place.placeId, place]));
-  const requestedByKey = new Map(requestedActivities.map((activity) => [activity.sourceKey, activity]));
-  const usedPlaces = new Set();
-  // Churches and shrines are good stops, but a day of them gets repetitive: at most
-  // WORSHIP_LIMITS per day and per trip, unless the traveler chose a religious or heritage trip.
-  // Extra ones are skipped, and the day's backup stops take their place.
-  const worshipLimit = worshipLimitsFor([...(userProfile.interests || []), ...(userProfile.travelTypes || []), ...(tripStyle.focus || [])]);
-  let worshipInTrip = 0;
-  const selectedDays = preliminary.days.map((day, dayIndex) => {
-    const selected = [];
-    let worshipToday = 0;
-    const skippedWorship = [];
-    for (const set of pricedCandidateSets.filter((item) => item.day === dayIndex + 1)) {
-      const requested = requestedByKey.get(set.sourceKey) || {};
-      const worshipFull = worshipToday >= worshipLimit.perDay || worshipInTrip >= worshipLimit.perTrip;
-      const allowed = (candidate) => !usedPlaces.has(candidate.placeId) && !(worshipFull && isWorshipPlace(candidate));
-      const place = set.candidates.find((candidate) => allowed(candidate) && fitsSlot(candidate, set.category))
-        || set.candidates.find((candidate) => allowed(candidate) && !isLodging(candidate) && !isFood(candidate));
-      if (!place) {
-        const church = worshipFull && set.candidates.find((candidate) => !usedPlaces.has(candidate.placeId) && isWorshipPlace(candidate));
-        if (church) skippedWorship.push({ set, requested, place: church });
-        continue;
-      }
-      if (!verifiedById.has(place.placeId)) continue;
-      if (isWorshipPlace(place)) { worshipToday++; worshipInTrip++; }
-      usedPlaces.add(place.placeId);
-      selected.push({
-        activity: {
-          durationMinutes: requested.durationMinutes,
-          bestTime: String(requested.bestTime || ''),
-          category: set.category || requested.category || '',
-          notes: requested.notes || '',
-        },
-        // Keep the full verified record (photo, etc.) together with the priced candidate fields.
-        place: { ...verifiedById.get(place.placeId), ...place },
-        sourceKey: set.sourceKey,
-      });
-    }
-    // A day that would be empty without them keeps one skipped church.
-    if (!selected.length && skippedWorship.length && verifiedById.has(skippedWorship[0].place.placeId)) {
-      const { set, requested, place } = skippedWorship[0];
-      usedPlaces.add(place.placeId);
-      selected.push({
-        activity: { durationMinutes: requested.durationMinutes, bestTime: String(requested.bestTime || ''), category: set.category || requested.category || '', notes: requested.notes || '' },
-        place: { ...verifiedById.get(place.placeId), ...place },
-        sourceKey: set.sourceKey,
-      });
-    }
-    if (!selected.length) throw new Error(`Google Places could not verify activities for day ${dayIndex + 1}.`);
-    return orderStopsForDay(selected);
-  });
-
-  if (candidatePriceResearch && activityBudgetTargetPhp) {
-    const rebalanceWithinLimit = (entries, limit) => {
-      const totalHigh = () => entries.reduce((sum, entry) => {
-        const cost = candidatePriceByPlaceId.get(String(entry.place.placeId));
-        return sum + (cost && Number.isFinite(cost.highPhp) ? cost.highPhp : 0);
-      }, 0);
-      let currentTotalHigh = totalHigh();
-      if (currentTotalHigh <= limit) return;
-      const selectedByCost = entries
-        .map((entry) => ({ entry, cost: candidatePriceByPlaceId.get(String(entry.place.placeId)) }))
-        .filter(({ cost }) => cost && Number.isFinite(cost.highPhp))
-        .sort((a, b) => b.cost.highPhp - a.cost.highPhp);
-      for (const { entry, cost: currentCost } of selectedByCost) {
-        if (currentTotalHigh <= limit) break;
-        const set = candidateSetsByKey.get(entry.sourceKey);
-        const alternatives = (set?.candidates || [])
-          .filter((candidate) => candidate.placeId !== entry.place.placeId && !usedPlaces.has(candidate.placeId))
-          .map((candidate) => ({ candidate, cost: candidatePriceByPlaceId.get(String(candidate.placeId)) }))
-          .filter(({ candidate, cost }) => cost && Number.isFinite(cost.highPhp)
-            && cost.highPhp < currentCost.highPhp
-            && (!entry.place.rating || !candidate.rating || candidate.rating >= entry.place.rating - 0.7))
-          .sort((a, b) => a.cost.highPhp - b.cost.highPhp || Number(b.candidate.rating || 0) - Number(a.candidate.rating || 0));
-        const replacement = alternatives[0];
-        if (!replacement) continue;
-        const projectedTotal = currentTotalHigh - currentCost.highPhp + replacement.cost.highPhp;
-        if (projectedTotal >= currentTotalHigh) continue;
-        usedPlaces.delete(entry.place.placeId);
-        usedPlaces.add(replacement.candidate.placeId);
-        entry.place = replacement.candidate;
-        currentTotalHigh = projectedTotal;
-      }
+  // extraStops: places the traveler added in the stop picker ([{ day, placeId }]).
+  // searchedStops: places the traveler searched for in the stop picker and picked for a
+  // stop instead of its options ([{ key, placeId }]).
+  const buildFromChoices = async (choices = null, extraStops = [], searchedStops = []) => {
+    // Each added or searched place is looked up on Google (it must be a real spot in
+    // Batangas, not a town or an area) and kept as a must-visit stop of its day.
+    const lookUp = async (placeId) => {
+      const place = await resolveHomePlace('', placeId).catch(() => null);
+      return place && isInBatangas({ text: place.address, lat: place.lat, lng: place.lng }) ? place : null;
     };
-    // Prices are per person: compared with each person's share of the allowance.
-    if (perPersonDailyActivityTargetPhp) {
-      for (const day of selectedDays) rebalanceWithinLimit(day, perPersonDailyActivityTargetPhp);
+    const addedByDay = new Map();
+    const added = await Promise.all((extraStops || []).map(async (extra) => {
+      const place = await lookUp(extra.placeId);
+      return place ? { ...extra, place } : null;
+    }));
+    for (const item of added.filter(Boolean)) {
+      if (item.day > durationDays) continue;
+      if (!addedByDay.has(item.day)) addedByDay.set(item.day, []);
+      addedByDay.get(item.day).push(item.place);
     }
-    rebalanceWithinLimit(selectedDays.flat(), perPersonActivityTargetPhp);
-  }
-
-  // First pass: decide which stops fit each day using estimated travel times, so real
-  // routes are only requested for stops that are actually kept.
-  const estimatedTravel = (from, to) => estimateTravelMinutes(from.place, to.place, travelMode);
-  progress(70, 80, 'Fitting stops into each day');
-  // Days are scheduled in order, so a late night pushes the next day's start later.
-  let plannedPreviousEnd = null;
-  const plannedDays = selectedDays.map((entries, dayIndex) => {
-    const { kept } = scheduleDay(entries, dayIndex, estimatedTravel, plannedPreviousEnd);
-    plannedPreviousEnd = dayEndMinute(kept);
-    return kept;
-  });
-  progress(80, 95, 'Working out travel times');
-
-  const routePairs = plannedDays.flatMap((activities, dayIndex) => activities.slice(1).map((entry, index) => ({
-    day: dayIndex + 1,
-    from: activities[index].place,
-    to: entry.place,
-  })));
-  const routeResults = await Promise.all(routePairs.map(async (pair) => {
-    try {
-      const route = await calculateVerifiedRoute(pair.from, pair.to, travelMode);
-      return { ...pair, route, unavailableReason: '' };
-    } catch (error) {
-      return { ...pair, route: null, unavailableReason: 'Route time unavailable; the schedule uses an estimated travel time.' };
-    }
-  }));
-  const routeByEdge = new Map(routeResults.map((entry) => [`${entry.day}:${entry.from.placeId}:${entry.to.placeId}`, entry]));
-
-  // Second pass: the final times with real travel times (a stop that no longer fits
-  // before the day ends is left out).
-  let finalPreviousEnd = null;
-  const finalDays = plannedDays.map((entries, dayIndex) => {
-    const day = scheduleDay(entries, dayIndex, (from, to) => {
-      const route = routeByEdge.get(`${dayIndex + 1}:${from.place.placeId}:${to.place.placeId}`)?.route;
-      return Number.isFinite(route?.durationMinutes) ? route.durationMinutes : estimatedTravel(from, to);
-    }, finalPreviousEnd);
-    finalPreviousEnd = dayEndMinute(day.kept);
-    return day;
-  });
-
-  let selectedBudgetResearch = null;
-  if (candidatePriceResearch) {
-    const selectedActivities = finalDays.flatMap((day) => day.kept);
-    const liveActivityCosts = selectedActivities.map(({ place }) => {
-      const cost = candidatePriceByPlaceId.get(String(place.placeId));
-      return cost || { placeId: place.placeId, lowPhp: null, highPhp: null, sourceUrls: [] };
+    const searchedByKey = new Map((await Promise.all((searchedStops || []).map(async (item) => {
+      const place = pricedCandidateSets.some((set) => set.sourceKey === item.key) ? await lookUp(item.placeId) : null;
+      return place ? [item.key, place] : null;
+    }))).filter(Boolean));
+    // A searched place's own kind and stop label (a museum picked for a "beach" stop is
+    // a museum: its length and time of day follow that).
+    const searchedStop = (set) => {
+      const place = searchedByKey.get(set.sourceKey);
+      if (!place) return null;
+      const kind = stopKind({ place, activity: { category: '' } });
+      return { place, kind, set: { ...set, category: KIND_STOP_LABELS[kind] || 'attraction' } };
+    };
+    // Choose each stop without a second AI call. Each stop has up to three verified
+    // options (the AI's pick and two alternatives): the traveler's pick is used, or else
+    // the first option that fits, skipping duplicates and results of the wrong kind (for
+    // example a hotel returned for an attraction search). Each day's stops are then put
+    // in visiting order: by the best time of day for each, then by distance.
+    const verifiedById = new Map(verifiedPlaces.map((place) => [place.placeId, place]));
+    const requestedByKey = new Map(requestedActivities.map((activity) => [activity.sourceKey, activity]));
+    const usedPlaces = new Set();
+    // Each day stays realistic: churches only as worshipLimit allows (and per trip), and
+    // one beach or swim, one hike, at most two museums and so on (stopFitsDay). A stop
+    // whose pick would break that uses one of its other options, or is left out.
+    let worshipInTrip = 0;
+    const selectedDays = preliminary.days.map((day, dayIndex) => {
+      const selected = [];
+      const kindCounts = {};
+      const worshipToday = worshipOnDay(dayIndex + 1);
+      const skippedWorship = [];
+      const daySets = pricedCandidateSets.filter((item) => item.day === dayIndex + 1);
+      // The places the traveler searched for count first, so the day's other stops give
+      // way to them (no second beach next to the one they chose).
+      for (const set of daySets) {
+        const searched = searchedStop(set);
+        if (!searched || (choices && choices[set.sourceKey] === '')) continue;
+        kindCounts[searched.kind] = (kindCounts[searched.kind] || 0) + 1;
+        if (isWorshipPlace(searched.place)) worshipInTrip++;
+      }
+      for (const set of daySets) {
+        // Removed by the traveler in the stop picker.
+        if (choices && choices[set.sourceKey] === '') continue;
+        const requested = requestedByKey.get(set.sourceKey) || {};
+        // Searched for and picked by the traveler: it takes this stop, at the stop's time
+        // of day (corrected for its kind), as long as the kind of place takes.
+        const searched = searchedStop(set);
+        if (searched) {
+          if (usedPlaces.has(searched.place.placeId)) continue;
+          usedPlaces.add(searched.place.placeId);
+          selected.push({
+            activity: { durationMinutes: 90, bestTime: stopBestTime(searched.set, searched.place), category: searched.set.category, notes: 'Picked by you.' },
+            place: searched.place,
+            sourceKey: set.sourceKey,
+            userChosen: true,
+            mustVisit: true,
+          });
+          continue;
+        }
+        const allowed = (candidate) => !usedPlaces.has(candidate.placeId)
+          && (candidate.placeId === home?.placeId || (
+            !(isWorshipPlace(candidate) && worshipInTrip >= worshipLimit.perTrip)
+            && stopFitsDay(kindCounts, kindEntry(candidate, set), worshipToday, kindLimits)));
+        // The traveler's own pick for this stop comes first, when it fits the day.
+        const picked = choices?.[set.sourceKey];
+        const pickedPlace = picked ? set.candidates.find((candidate) => candidate.placeId === picked) : null;
+        const place = (pickedPlace && allowed(pickedPlace) ? pickedPlace : null)
+          || set.candidates.find((candidate) => allowed(candidate) && fitsSlot(candidate, set.category))
+          || set.candidates.find((candidate) => allowed(candidate) && !isLodging(candidate) && !isFoodPlace(candidate));
+        if (!place) {
+          const church = set.candidates.find((candidate) => !usedPlaces.has(candidate.placeId) && isWorshipPlace(candidate));
+          if (church) skippedWorship.push({ set, requested, place: church });
+          continue;
+        }
+        if (!verifiedById.has(place.placeId)) continue;
+        if (isWorshipPlace(place)) worshipInTrip++;
+        const kind = stopKind(kindEntry(place, set));
+        kindCounts[kind] = (kindCounts[kind] || 0) + 1;
+        usedPlaces.add(place.placeId);
+        selected.push({
+          activity: {
+            durationMinutes: requested.durationMinutes,
+            bestTime: stopBestTime(set, place),
+            category: set.category || requested.category || '',
+            // The AI's tip only when it was written for this place.
+            notes: place.notesFit ? requested.notes || '' : '',
+          },
+          // Keep the full verified record (photo, etc.) together with the priced candidate fields.
+          place: { ...verifiedById.get(place.placeId), ...place },
+          sourceKey: set.sourceKey,
+          userChosen: Boolean(picked) && place.placeId === picked,
+          // The trip's destination: the schedule keeps time for it.
+          ...(place.placeId === home?.placeId ? { mustVisit: true } : {}),
+        });
+      }
+      // A day that would be empty without them keeps one skipped church.
+      if (!selected.length && skippedWorship.length && verifiedById.has(skippedWorship[0].place.placeId)) {
+        const { set, requested, place } = skippedWorship[0];
+        usedPlaces.add(place.placeId);
+        selected.push({
+          activity: { durationMinutes: requested.durationMinutes, bestTime: stopBestTime(set, place), category: set.category || requested.category || '', notes: place.notesFit ? requested.notes || '' : '' },
+          place: { ...verifiedById.get(place.placeId), ...place },
+          sourceKey: set.sourceKey,
+        });
+      }
+      for (const place of addedByDay.get(dayIndex + 1) || []) {
+        if (usedPlaces.has(place.placeId)) continue;
+        usedPlaces.add(place.placeId);
+        selected.push({
+          // The kind of place (beach, museum...) sets how long it takes and when it fits.
+          activity: { durationMinutes: 90, bestTime: '', category: '', notes: 'Added by you.' },
+          place,
+          sourceKey: `added-${place.placeId}`,
+          userChosen: true,
+          mustVisit: true,
+        });
+      }
+      // A day with nothing left to suggest for the daytime (all its ideas were, say, other
+      // beaches) has beach time at the destination itself when it's the resort or beach the
+      // traveler stays at (before any evening stops), otherwise it stays open for "Add to
+      // this day". It never fails the whole trip.
+      const daytimeStop = selected.some((entry) => !['sunset', 'evening', 'night'].includes(String(entry.activity?.bestTime || '').toLowerCase()));
+      if (!daytimeStop && home && isBeachStay(home) && verifiedById.has(home.placeId) && !selected.some((entry) => entry.place.placeId === home.placeId)) {
+        selected.push({
+          activity: { durationMinutes: 300, bestTime: 'morning', category: 'beach', notes: selected.length ? `Beach time at ${home.name} before the evening.` : `A free day to enjoy ${home.name}.` },
+          place: { ...verifiedById.get(home.placeId) },
+          sourceKey: `free-day-${dayIndex + 1}`,
+          userChosen: true,
+          mustVisit: true,
+        });
+      }
+      return orderDay(selected, dayIndex);
     });
-    const pricedBands = liveActivityCosts.filter((cost) => Number.isFinite(cost.lowPhp) && Number.isFinite(cost.highPhp));
-    const total = pricedBands.length ? addPriceBands(pricedBands) : null;
-    const sourceMap = new Map(liveActivityCosts.flatMap((cost) => cost.sources || []).map((source) => [source.url, source]));
-    selectedBudgetResearch = {
-      liveActivityCosts,
-      liveTripBudget: {
-        status: pricedBands.length && pricedBands.length === selectedActivities.length ? 'complete-estimate' : 'partial-estimate',
-        currency: 'PHP',
+    if (!selectedDays.some((day) => day.length)) throw new Error('Google Places could not verify activities for this trip.');
+
+    if (candidatePriceResearch && activityBudgetTargetPhp) {
+      const rebalanceWithinLimit = (entries, limit) => {
+        const totalHigh = () => entries.reduce((sum, entry) => {
+          const cost = candidatePriceByPlaceId.get(String(entry.place.placeId));
+          return sum + (cost && Number.isFinite(cost.highPhp) ? cost.highPhp : 0);
+        }, 0);
+        let currentTotalHigh = totalHigh();
+        if (currentTotalHigh <= limit) return;
+        const selectedByCost = entries
+          .filter((entry) => !entry.userChosen)
+          .map((entry) => ({ entry, cost: candidatePriceByPlaceId.get(String(entry.place.placeId)) }))
+          .filter(({ cost }) => cost && Number.isFinite(cost.highPhp))
+          .sort((a, b) => b.cost.highPhp - a.cost.highPhp);
+        for (const { entry, cost: currentCost } of selectedByCost) {
+          if (currentTotalHigh <= limit) break;
+          const set = candidateSetsByKey.get(entry.sourceKey);
+          const alternatives = (set?.candidates || [])
+            .filter((candidate) => candidate.placeId !== entry.place.placeId && !usedPlaces.has(candidate.placeId))
+            .map((candidate) => ({ candidate, cost: candidatePriceByPlaceId.get(String(candidate.placeId)) }))
+            .filter(({ candidate, cost }) => cost && Number.isFinite(cost.highPhp)
+              && cost.highPhp < currentCost.highPhp
+              // Same kind of stop, or a plain one, so the day's limits still hold
+              // (never a second beach, an extra church, or a church after a swim).
+              && [stopKind(entry), 'other'].includes(stopKind({ place: candidate, activity: entry.activity }))
+              && (!entry.place.rating || !candidate.rating || candidate.rating >= entry.place.rating - 0.7))
+            .sort((a, b) => a.cost.highPhp - b.cost.highPhp || Number(b.candidate.rating || 0) - Number(a.candidate.rating || 0));
+          const replacement = alternatives[0];
+          if (!replacement) continue;
+          const projectedTotal = currentTotalHigh - currentCost.highPhp + replacement.cost.highPhp;
+          if (projectedTotal >= currentTotalHigh) continue;
+          usedPlaces.delete(entry.place.placeId);
+          usedPlaces.add(replacement.candidate.placeId);
+          entry.place = replacement.candidate;
+          if (!replacement.candidate.notesFit) entry.activity.notes = '';
+          currentTotalHigh = projectedTotal;
+        }
+      };
+      // Prices are per person: compared with each person's share of the allowance.
+      if (perPersonDailyActivityTargetPhp) {
+        for (const day of selectedDays) rebalanceWithinLimit(day, perPersonDailyActivityTargetPhp);
+      }
+      rebalanceWithinLimit(selectedDays.flat(), perPersonActivityTargetPhp);
+    }
+
+    // The drive from the stay to the end point on the last day, by Google's route (it
+    // decides how early the last day ends); the estimate stays when there is no route.
+    if (homeDriveMinutes && endPoint && (base || center) && !isIslandPlace(base || center)) {
+      const route = await calculateVerifiedRoute(base || center, endPoint, travelMode).catch(() => null);
+      if (Number.isFinite(route?.durationMinutes)) homeDriveMinutes = route.durationMinutes;
+    }
+
+    // First pass: decide which stops fit each day using estimated travel times, so real
+    // routes are only requested for stops that are actually kept.
+    const estimatedTravel = (from, to) => estimateTravelMinutes(from.place, to.place, travelMode);
+    progress(70, 80, 'Fitting stops into each day');
+    // Days are scheduled in order, so a late night pushes the next day's start later.
+    let plannedPreviousEnd = null;
+    const plannedDays = selectedDays.map((entries, dayIndex) => {
+      const { kept } = scheduleDay(entries, dayIndex, estimatedTravel, plannedPreviousEnd);
+      plannedPreviousEnd = dayEndMinute(kept);
+      return kept;
+    });
+    progress(80, 95, 'Working out travel times');
+
+    // Real travel times for every leg of each day: from where the day starts (home on
+    // day 1, the stay after that) to the first stop, between stops, and on the last day
+    // from the last stop to the end point. The day's start and end points have no place
+    // id, so legs are keyed by place id or coordinates.
+    const pointId = (point) => (point?.placeId ? String(point.placeId)
+      : Number.isFinite(point?.lat) && Number.isFinite(point?.lng) ? `@${point.lat.toFixed(5)},${point.lng.toFixed(5)}` : '');
+    const edgeKey = (day, from, to) => `${day}:${pointId(from)}:${pointId(to)}`;
+    const routeByEdge = new Map();
+    const dayLegs = (kept, dayIndex) => {
+      const legs = [];
+      const start = dayOriginFor(dayIndex)?.place;
+      if (start && kept.length) legs.push({ day: dayIndex + 1, kind: 'start', from: start, to: kept[0].place });
+      kept.slice(1).forEach((entry, index) => legs.push({ day: dayIndex + 1, kind: 'between', from: kept[index].place, to: entry.place }));
+      const endAt = dayTravelFor(dayIndex).homeDrive?.point;
+      if (endAt && kept.length) legs.push({ day: dayIndex + 1, kind: 'end', from: kept[kept.length - 1].place, to: endAt });
+      // Every other evening: back from the last stop to where the next day starts (the stay).
+      const nightAt = dayIndex < durationDays - 1 ? dayOriginFor(dayIndex + 1)?.place : null;
+      if (nightAt && kept.length) legs.push({ day: dayIndex + 1, kind: 'return', from: kept[kept.length - 1].place, to: nightAt });
+      return legs.filter((leg) => pointId(leg.from) && pointId(leg.to));
+    };
+    const fetchLegs = async (legs) => {
+      const missing = Array.from(new Map(legs
+        .filter((leg) => !routeByEdge.has(edgeKey(leg.day, leg.from, leg.to)))
+        .map((leg) => [edgeKey(leg.day, leg.from, leg.to), leg])).values());
+      const results = await Promise.all(missing.map(async (pair) => {
+        // An island is reached by boat: a driving route there is a long detour or none at
+        // all, so the schedule keeps its estimate and the stop says so.
+        if (isIslandPlace(pair.from) || isIslandPlace(pair.to)) {
+          return { ...pair, route: null, unavailableReason: 'Reached by boat; check boat times at the port. The schedule uses an estimated travel time.' };
+        }
+        try {
+          const route = await calculateVerifiedRoute(pair.from, pair.to, travelMode);
+          return { ...pair, route, unavailableReason: '' };
+        } catch (error) {
+          // Logged so a missing land route can be looked into (which places, and why).
+          console.warn('[routes] no route for itinerary leg:', JSON.stringify({
+            from: String(pair.from?.name || pointId(pair.from)).slice(0, 80), to: String(pair.to?.name || pointId(pair.to)).slice(0, 80),
+            byPlaceId: Boolean(pair.from?.placeId && pair.to?.placeId), reason: String(error?.message || error).slice(0, 160),
+          }));
+          return { ...pair, route: null, unavailableReason: 'Route time unavailable; the schedule uses an estimated travel time.' };
+        }
+      }));
+      results.forEach((entry) => routeByEdge.set(edgeKey(entry.day, entry.from, entry.to), entry));
+      return results.length;
+    };
+    await fetchLegs(plannedDays.flatMap(dayLegs));
+
+    // Second pass: the final times with real travel times (a stop that no longer fits
+    // before the day ends is left out). Leaving a stop out joins two stops that had no
+    // route between them yet: those routes are fetched and the days scheduled once more
+    // (a leg still without a route then keeps its estimate and says so).
+    const scheduleWithRoutes = () => {
+      let finalPreviousEnd = null;
+      return plannedDays.map((entries, dayIndex) => {
+        const day = scheduleDay(entries, dayIndex, (from, to) => {
+          const route = routeByEdge.get(edgeKey(dayIndex + 1, from.place, to.place))?.route;
+          return Number.isFinite(route?.durationMinutes) ? route.durationMinutes : estimatedTravel(from, to);
+        }, finalPreviousEnd);
+        finalPreviousEnd = dayEndMinute(day.kept);
+        return day;
+      });
+    };
+    let finalDays = scheduleWithRoutes();
+    if (await fetchLegs(finalDays.flatMap((day, dayIndex) => dayLegs(day.kept, dayIndex)))) finalDays = scheduleWithRoutes();
+
+    let selectedBudgetResearch = null;
+    if (candidatePriceResearch) {
+      const selectedActivities = finalDays.flatMap((day) => day.kept);
+      const liveActivityCosts = selectedActivities.map(({ place }) => {
+        const cost = candidatePriceByPlaceId.get(String(place.placeId));
+        return cost || { placeId: place.placeId, lowPhp: null, highPhp: null, sourceUrls: [] };
+      });
+      const pricedBands = liveActivityCosts.filter((cost) => Number.isFinite(cost.lowPhp) && Number.isFinite(cost.highPhp));
+      const total = pricedBands.length ? addPriceBands(pricedBands) : null;
+      const sourceMap = new Map(liveActivityCosts.flatMap((cost) => cost.sources || []).map((source) => [source.url, source]));
+      selectedBudgetResearch = {
+        liveActivityCosts,
+        liveTripBudget: {
+          status: pricedBands.length && pricedBands.length === selectedActivities.length ? 'complete-estimate' : 'partial-estimate',
+          currency: 'PHP',
+          startDate,
+          endDate,
+          searchedAt: candidatePriceResearch.tripBudget.searchedAt,
+          searchSuggestionHtml: candidatePriceResearch.tripBudget.searchSuggestionHtml,
+          totalLowPhp: total?.lowPhp ?? null,
+          totalHighPhp: total?.highPhp ?? null,
+          pricedActivityCount: pricedBands.length,
+          totalActivityCount: selectedActivities.length,
+          missingActivityPriceCount: Math.max(0, selectedActivities.length - pricedBands.length),
+          sources: Array.from(sourceMap.values()).slice(0, 12),
+        },
+      };
+    }
+
+    // Quality check of the finished schedule (see findScheduleConflicts), with how much
+    // of it rests on verified data: Google place ids, opening hours, route times.
+    const startWeekday = new Date(`${startDate}T00:00:00Z`).getUTCDay();
+    const scheduleConflicts = finalDays.flatMap((day, dayIndex) => findScheduleConflicts({
+      kept: day.kept, breaks: day.breaks, weekday: (startWeekday + dayIndex) % 7,
+    }).map((conflict) => ({ day: dayIndex + 1, ...conflict })));
+    if (scheduleConflicts.length) console.warn('[itinerary] schedule check found problems:', JSON.stringify(scheduleConflicts).slice(0, 2000));
+    const finalStops = finalDays.flatMap((day) => day.kept);
+    const finalLegs = finalDays.flatMap((day, dayIndex) => dayLegs(day.kept, dayIndex));
+    const legRoutes = finalLegs.map((leg) => routeByEdge.get(edgeKey(leg.day, leg.from, leg.to)));
+    const quality = {
+      stopCount: finalStops.length,
+      stopsWithPlaceId: finalStops.filter((entry) => /^[A-Za-z0-9_-]{4,200}$/.test(String(entry.place?.placeId || ''))).length,
+      // Stops whose opening hours Google gave (checked when scheduling); the rest are unknown.
+      stopsWithOpeningHours: finalStops.filter((entry) => Array.isArray(entry.place?.openPeriods) && entry.place.openPeriods.length).length,
+      legCount: finalLegs.length,
+      legsWithRouteTime: legRoutes.filter((entry) => Number.isFinite(entry?.route?.durationMinutes)).length,
+      legsEstimated: legRoutes.filter((entry) => !Number.isFinite(entry?.route?.durationMinutes)).length,
+      scheduleConflictCount: scheduleConflicts.length,
+      scheduleConflicts: scheduleConflicts.slice(0, 20),
+    };
+
+    // The drives that aren't between two stops: from where each day starts to its first
+    // stop, and the last day's drive to the end point. Road distance and time from Google
+    // when there is a route; otherwise only the straight-line distance (the app treats it
+    // as an estimate). Used for the trip's travel costs.
+    const tripLegs = finalDays.flatMap((day, dayIndex) => dayLegs(day.kept, dayIndex)
+      .filter((leg) => leg.kind !== 'between')
+      .map((leg) => {
+        const entry = routeByEdge.get(edgeKey(leg.day, leg.from, leg.to));
+        const route = entry?.route;
+        const viaRoute = Number.isFinite(route?.durationMinutes) && Number.isFinite(route?.distanceMeters);
+        return {
+          day: leg.day,
+          kind: leg.kind,
+          km: viaRoute ? Math.round(route.distanceMeters / 100) / 10 : null,
+          minutes: viaRoute ? route.durationMinutes : null,
+          straightKm: Math.round(haversineKm(leg.from, leg.to) * 10) / 10,
+          source: viaRoute ? (isDevelopmentMode ? 'development-estimate' : 'google-routes') : entry?.unavailableReason?.startsWith('Reached by boat') ? 'boat-estimate' : 'estimate',
+        };
+      }));
+
+    // "Back to your stay to rest" says how long that drive is (a day that ends far from
+    // the stay, such as an arrival day with stops on the way).
+    finalDays.forEach((day, dayIndex) => {
+      const leg = dayLegs(day.kept, dayIndex).find((item) => item.kind === 'return');
+      const minutes = leg ? commuteMinutes(routeByEdge.get(edgeKey(leg.day, leg.from, leg.to))?.route?.durationMinutes) : null;
+      const rest = day.breaks.find((item) => item.kind === 'rest');
+      if (rest && Number.isFinite(minutes) && minutes >= 15) {
+        rest.label = `${rest.label} (about ${minutes} min ${tripStyle.transport === 'commute' ? 'away' : 'drive'})`;
+      }
+    });
+
+    progress(95, 99, 'Almost done');
+    // When the places' details (opening hours) were read from Google, for the app's
+    // "check they haven't changed" note on trips planned long in advance.
+    const builtAt = new Date().toISOString();
+    const itinerary = finalDays.map(({ kept, breaks }, dayIndex) => {
+      const scheduledActivities = kept.map(({ activity, place, startMinute, durationMinutes, mealHere }, activityIndex) => {
+        const previous = activityIndex ? kept[activityIndex - 1].place : null;
+        const routeEntry = previous ? routeByEdge.get(edgeKey(dayIndex + 1, previous, place)) : null;
+        const dueAt = Date.parse(`${startDate}T00:00:00Z`) + dayIndex * 86400000 + startMinute * 60000;
+        return {
+          id: `verified-${dayIndex + 1}-${activityIndex + 1}`,
+          timeLabel: formatMinuteOfDay(startMinute),
+          durationMinutes,
+          title: place.name,
+          location: place.address,
+          category: String(activity.category || ''),
+          placeId: place.placeId,
+          photoResource: place.photoResource || '',
+          ...(hasRoomsPlace(place) ? { hasRooms: true } : {}),
+          locationCoords: { lat: place.lat, lng: place.lng },
+          // A long visit that includes a meal says so (its meal isn't a separate break).
+          note: [String(activity.notes || ''), mealHere === 'lunch' ? 'Have lunch here.' : mealHere === 'dinner' ? 'Have dinner here.' : '']
+            .filter(Boolean).join(' '),
+          // A leg with no route looked up at all (rare) says its time is an estimate too.
+          routeStatus: routeEntry ? routeEntry.unavailableReason || '' : previous ? 'Route time unavailable; the schedule uses an estimated travel time.' : '',
+          // Where the travel time comes from: google-routes, boat-estimate (reached by
+          // boat) or estimate (no route); none for a day's first stop.
+          routeSource: !previous ? 'none'
+            : Number.isFinite(routeEntry?.route?.durationMinutes) ? 'google-routes'
+              : String(routeEntry?.unavailableReason || '').startsWith('Reached by boat') ? 'boat-estimate' : 'estimate',
+          // Google's opening hours (minutes from midnight; the app checks edits against them).
+          ...(Array.isArray(place.openPeriods) && place.openPeriods.length ? { openPeriods: place.openPeriods.slice(0, 21), hoursCheckedAt: builtAt } : {}),
+          transportMode: routeEntry?.route?.travelMode || travelMode,
+          travelMinutes: routeEntry?.route?.durationMinutes ?? null,
+          travelDistanceKm: routeEntry?.route ? routeEntry.route.distanceMeters / 1000 : null,
+          estimatedActivityCostPhp: null,
+          estimatedTransportCostPhp: null,
+          estimatedTotalCostPhp: null,
+          dueAt,
+          iso: new Date(dueAt).toISOString(),
+        };
+      });
+      return {
+        dayNumber: dayIndex + 1,
+        dateLabel: labelDate(new Date(Date.parse(`${startDate}T00:00:00Z`) + dayIndex * 86400000).toISOString()),
+        estimatedDayCostPhp: null,
+        estimatedDayCostLowPhp: null,
+        estimatedDayCostHighPhp: null,
+        activities: scheduledActivities,
+        breaks,
+      };
+    });
+
+    return {
+      itinerary,
+      meta: {
+        destination,
         startDate,
         endDate,
-        searchedAt: candidatePriceResearch.tripBudget.searchedAt,
-        searchSuggestionHtml: candidatePriceResearch.tripBudget.searchSuggestionHtml,
-        totalLowPhp: total?.lowPhp ?? null,
-        totalHighPhp: total?.highPhp ?? null,
-        pricedActivityCount: pricedBands.length,
-        totalActivityCount: selectedActivities.length,
-        missingActivityPriceCount: Math.max(0, selectedActivities.length - pricedBands.length),
-        sources: Array.from(sourceMap.values()).slice(0, 12),
+        durationDays,
+        source: 'gemini-google-verified',
+        generatedAt: new Date().toISOString(),
+        budget: budgetAmountPhp ? `PHP ${budgetAmountPhp.toLocaleString()} total` : userProfile.budget || null,
+        budgetAmountPhp,
+        activityBudgetTargetPhp,
+        dailyActivityBudgetTargetPhp,
+        travelers,
+        rooms,
+        ...(selectedBudgetResearch || {}),
+        currency: 'PHP',
+        tripStyle: tripStyleMeta,
+        verifiedPlaceCount: verifiedPlaces.length,
+        quality,
+        tripLegs,
+        ...(stay ? { stay } : {}),
+        origin: origin ? {
+          name: String(origin.name || '').slice(0, 120),
+          address: String(origin.address || '').slice(0, 240),
+          placeId: String(origin.placeId || '').slice(0, 160),
+          lat: Number.isFinite(Number(origin.lat)) ? Number(origin.lat) : null,
+          lng: Number.isFinite(Number(origin.lng)) ? Number(origin.lng) : null,
+        } : null,
+        travelMode,
+      },
+    };
+  };
+
+  // The app shows each stop's options first: the traveler picks one per stop, and
+  // continueBuild then builds the itinerary from those picks ({ stopKey: placeId }).
+  if (planOnly) {
+    return {
+      plan: {
+        destination,
+        startDate,
+        endDate,
+        durationDays,
+        radiusKm: center ? ITINERARY_RADIUS_KM : null,
+        // Travel days with stops on the way: 'first', 'last' (or both).
+        onTheWay: [firstDayLeg ? 'first' : '', lastDayLeg ? 'last' : ''].filter(Boolean),
+        days: preliminary.days.map((day, dayIndex) => ({
+          day: dayIndex + 1,
+          dateLabel: labelDate(new Date(Date.parse(`${startDate}T00:00:00Z`) + dayIndex * 86400000).toISOString()),
+          theme: String(day.theme || ''),
+          // In visiting order (the same route order the build uses), by each stop's first option.
+          stops: orderDay(
+            pricedCandidateSets.filter((set) => set.day === dayIndex + 1 && set.candidates.length).map((set) => ({
+              set,
+              place: set.candidates[0],
+              activity: { bestTime: stopBestTime(set, set.candidates[0]), category: set.category || '' },
+            })),
+            dayIndex,
+          ).map(({ set }) => set).map((set) => {
+            return {
+              key: set.sourceKey,
+              category: String(set.category || ''),
+              // The trip's destination itself (not searched over in the app).
+              ...(set.candidates.some(isHome) ? { home: true } : {}),
+              bestTime: stopBestTime(set, set.candidates[0]),
+              options: set.candidates.map((candidate) => ({
+                placeId: candidate.placeId,
+                name: candidate.name,
+                address: candidate.address,
+                lat: candidate.lat,
+                lng: candidate.lng,
+                rating: candidate.rating,
+                ratingCount: candidate.ratingCount,
+                photoResource: candidate.photoResource,
+                distanceKm: candidate.distanceKm,
+                isBeach: candidate.isBeach,
+                hasRooms: candidate.hasRooms,
+                admission: candidate.admissionEstimate,
+              })),
+            };
+          }),
+        })),
+      },
+      continueBuild: async (choices, nextProgress = null, extraStops = [], searchedStops = []) => {
+        progressHandler = nextProgress;
+        return buildFromChoices(choices, extraStops, searchedStops);
       },
     };
   }
-
-  progress(95, 99, 'Almost done');
-  const itinerary = finalDays.map(({ kept, breaks }, dayIndex) => {
-    const scheduledActivities = kept.map(({ activity, place, startMinute, durationMinutes }, activityIndex) => {
-      const previous = activityIndex ? kept[activityIndex - 1].place : null;
-      const routeEntry = previous ? routeByEdge.get(`${dayIndex + 1}:${previous.placeId}:${place.placeId}`) : null;
-      const dueAt = Date.parse(`${startDate}T00:00:00Z`) + dayIndex * 86400000 + startMinute * 60000;
-      return {
-        id: `verified-${dayIndex + 1}-${activityIndex + 1}`,
-        timeLabel: formatMinuteOfDay(startMinute),
-        durationMinutes,
-        title: place.name,
-        location: place.address,
-        category: String(activity.category || ''),
-        placeId: place.placeId,
-        photoResource: place.photoResource || '',
-        locationCoords: { lat: place.lat, lng: place.lng },
-        note: String(activity.notes || ''),
-        routeStatus: routeEntry?.unavailableReason || '',
-        transportMode: routeEntry?.route?.travelMode || travelMode,
-        travelMinutes: routeEntry?.route?.durationMinutes ?? null,
-        travelDistanceKm: routeEntry?.route ? routeEntry.route.distanceMeters / 1000 : null,
-        estimatedActivityCostPhp: null,
-        estimatedTransportCostPhp: null,
-        estimatedTotalCostPhp: null,
-        dueAt,
-        iso: new Date(dueAt).toISOString(),
-      };
-    });
-    return {
-      dayNumber: dayIndex + 1,
-      dateLabel: labelDate(new Date(Date.parse(`${startDate}T00:00:00Z`) + dayIndex * 86400000).toISOString()),
-      estimatedDayCostPhp: null,
-      estimatedDayCostLowPhp: null,
-      estimatedDayCostHighPhp: null,
-      activities: scheduledActivities,
-      breaks,
-    };
-  });
-
-  return {
-    itinerary,
-    meta: {
-      destination,
-      startDate,
-      endDate,
-      durationDays,
-      source: 'gemini-google-verified',
-      generatedAt: new Date().toISOString(),
-      budget: budgetAmountPhp ? `PHP ${budgetAmountPhp.toLocaleString()} total` : userProfile.budget || null,
-      budgetAmountPhp,
-      activityBudgetTargetPhp,
-      dailyActivityBudgetTargetPhp,
-      travelers,
-      rooms,
-      ...(selectedBudgetResearch || {}),
-      currency: 'PHP',
-      tripStyle: tripStyleMeta,
-      verifiedPlaceCount: verifiedPlaces.length,
-      ...(stay ? { stay } : {}),
-      origin: origin ? {
-        name: String(origin.name || '').slice(0, 120),
-        address: String(origin.address || '').slice(0, 240),
-        placeId: String(origin.placeId || '').slice(0, 160),
-        lat: Number.isFinite(Number(origin.lat)) ? Number(origin.lat) : null,
-        lng: Number.isFinite(Number(origin.lng)) ? Number(origin.lng) : null,
-      } : null,
-      travelMode,
-    },
-  };
+  return buildFromChoices(null);
 }
 
 async function generateChatReply({ email, message, selectedDestination, history, profile }) {
@@ -4032,7 +5669,11 @@ app.post('/api/admin/login', async (req, res) => {
   }
   await recordAdminAudit(req, 'admin_login', 'success', username);
 
-  return sendJson(res, 200, { token, user: { username, role: 'super-admin' } });
+  return sendJson(res, 200, {
+    token,
+    user: { username, role: 'super-admin' },
+    pagesBase: adminPagesBase(token, Date.now() + ADMIN_SESSION_TTL_MS),
+  });
 });
 
 app.post('/api/admin/logout', requireAdminAuth, async (req, res) => {
@@ -4053,6 +5694,8 @@ app.get('/api/admin/session', requireAdminAuth, async (req, res) => {
   return sendJson(res, 200, {
     ok: true,
     user: { username: req.admin?.username || 'admin', role: req.admin?.role || 'super-admin', displayName },
+    // A fresh page key for this session (session-check.js uses it after a server restart).
+    pagesBase: adminPagesBase(getAdminTokenFromRequest(req), req.admin?.expiresAt || Date.now() + ADMIN_SESSION_TTL_MS),
   });
 });
 
@@ -4971,19 +6614,16 @@ app.get('/api/admin/analytics', requireAdminAuth, async (req, res) => {
     const [registrationTrend, tripTrend, travelStyles, interests, preferredPlaces, tripBudgets, preferenceCoverage] = await Promise.all([
       trendRequest().query('SELECT CONVERT(date, created_at) AS day, COUNT_BIG(*) AS count_value FROM dbo.users WHERE created_at >= @fromDate GROUP BY CONVERT(date, created_at) ORDER BY day ASC'),
       trendRequest().query('SELECT CONVERT(date, created_at) AS day, COUNT_BIG(*) AS count_value FROM dbo.trips WHERE created_at >= @fromDate GROUP BY CONVERT(date, created_at) ORDER BY day ASC'),
+      // Every pick (user and choice), so renamed choices can be merged before counting.
       pool.query`
-        SELECT TOP 8 ts.style_name AS name, COUNT(DISTINCT uts.user_id) AS user_count
+        SELECT DISTINCT uts.user_id, ts.style_name AS name
         FROM dbo.user_travel_styles uts
         JOIN dbo.travel_styles ts ON ts.style_id = uts.style_id
-        GROUP BY ts.style_name
-        ORDER BY user_count DESC, ts.style_name ASC
       `,
       pool.query`
-        SELECT TOP 8 i.interest_name AS name, COUNT(DISTINCT ui.user_id) AS user_count
+        SELECT DISTINCT ui.user_id, i.interest_name AS name
         FROM dbo.user_interests ui
         JOIN dbo.interests i ON i.interest_id = ui.interest_id
-        GROUP BY i.interest_name
-        ORDER BY user_count DESC, i.interest_name ASC
       `,
       pool.query`
         SELECT TOP 8 pp.place_name AS name, COUNT(DISTINCT upp.user_id) AS user_count
@@ -5011,6 +6651,20 @@ app.get('/api/admin/analytics', requireAdminAuth, async (req, res) => {
       name: row.name,
       count: Number(row[key] || 0),
     }));
+    // Users per choice under today's names ("Cultural" and "Historical Sites" are now
+    // "Pilgrimage", "Mountains" is "Hiking"): a user who picked both old names counts once.
+    // Every choice is returned (the admin page shows the top ones and the rest as "Other").
+    const toPickCounts = (result) => {
+      const users = new Map();
+      for (const row of result.recordset || []) {
+        const name = currentPreferenceNames([row.name])[0];
+        if (!name) continue;
+        if (!users.has(name)) users.set(name, new Set());
+        users.get(name).add(row.user_id);
+      }
+      return Array.from(users, ([name, ids]) => ({ name, count: ids.size }))
+        .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+    };
     const usageTrackingAvailable = await hasAppUsageEventsTable(pool);
     const usageTrend = usageTrackingAvailable
       ? await trendRequest().query(`
@@ -5047,8 +6701,8 @@ app.get('/api/admin/analytics', requireAdminAuth, async (req, res) => {
       rangeEnd: toDate.toISOString().slice(0, 10),
       profileSummary: {
         usersWithPreferences: Number(preferenceCoverage.recordset[0]?.users_with_preferences || 0),
-        travelStyles: toCounts(travelStyles),
-        interests: toCounts(interests),
+        travelStyles: toPickCounts(travelStyles),
+        interests: toPickCounts(interests),
         preferredPlaces: toCounts(preferredPlaces),
         savedItineraryBudgets: toCounts(tripBudgets, 'trip_count'),
       },
@@ -6257,6 +7911,7 @@ app.get('/api/auth/google/callback', async (req, res) => {
   }
   try {
     const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+      signal: AbortSignal.timeout(GOOGLE_PLACES_TIMEOUT_MS),
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
@@ -6269,7 +7924,7 @@ app.get('/api/auth/google/callback', async (req, res) => {
     });
     const tokens = await tokenResponse.json().catch(() => ({}));
     if (!tokenResponse.ok || !tokens.id_token) throw new Error('Google token exchange failed.');
-    const infoResponse = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(tokens.id_token)}`);
+    const infoResponse = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(tokens.id_token)}`, { signal: AbortSignal.timeout(GOOGLE_PLACES_TIMEOUT_MS), });
     const info = await infoResponse.json().catch(() => ({}));
     if (!infoResponse.ok || info.aud !== config.clientId
       || !['accounts.google.com', 'https://accounts.google.com'].includes(info.iss)
@@ -7366,8 +9021,8 @@ app.get('/api/preferences/:email', requireAppAuth, requireOwnEmail, async (req, 
     `;
 
     return sendJson(res, 200, {
-      travelTypes: styleRows.recordset.map((row) => row.style_name),
-      interests: interestRows.recordset.map((row) => row.interest_name),
+      travelTypes: currentPreferenceNames(styleRows.recordset.map((row) => row.style_name)),
+      interests: currentPreferenceNames(interestRows.recordset.map((row) => row.interest_name)),
       preferredPlaces: placeRows.recordset.map((row) => row.place_name),
     });
   } catch (error) {
@@ -7405,14 +9060,21 @@ app.put('/api/preferences/:email', requireAppAuth, requireOwnEmail, async (req, 
       DELETE FROM dbo.user_interests WHERE user_id = @userId;
       DELETE FROM dbo.user_preferred_places WHERE user_id = @userId;
     `);
-    for (const styleName of travelTypes) {
+    for (const styleName of currentPreferenceNames(travelTypes)) {
+      // New choices ("Pilgrimage") are added to the list the first time they're saved.
+      const addMissing = NEW_PREFERENCE_NAMES.travelStyles.includes(styleName)
+        ? 'IF NOT EXISTS (SELECT 1 FROM dbo.travel_styles WITH (UPDLOCK, HOLDLOCK) WHERE style_name = @name) INSERT INTO dbo.travel_styles (style_name) VALUES (@name);' : '';
       await run().input('name', sql.NVarChar(200), styleName).query(`
+        ${addMissing}
         INSERT INTO dbo.user_travel_styles (user_id, style_id)
         SELECT @userId, style_id FROM dbo.travel_styles WHERE style_name = @name
       `);
     }
-    for (const interestName of interests) {
+    for (const interestName of currentPreferenceNames(interests)) {
+      const addMissing = NEW_PREFERENCE_NAMES.interests.includes(interestName)
+        ? 'IF NOT EXISTS (SELECT 1 FROM dbo.interests WITH (UPDLOCK, HOLDLOCK) WHERE interest_name = @name) INSERT INTO dbo.interests (interest_name) VALUES (@name);' : '';
       await run().input('name', sql.NVarChar(200), interestName).query(`
+        ${addMissing}
         INSERT INTO dbo.user_interests (user_id, interest_id)
         SELECT @userId, interest_id FROM dbo.interests WHERE interest_name = @name
       `);
@@ -7645,11 +9307,12 @@ app.post('/api/maps/place-suggestions', requireAppAuth, limitPerUser('maps-sugge
     const nearBias = { locationRestriction: { rectangle: BATANGAS_BOUNDS } };
     const requestSuggestions = async (includedPrimaryTypes, bias = nearBias) => {
       const response = await fetch('https://places.googleapis.com/v1/places:autocomplete', {
+        signal: AbortSignal.timeout(GOOGLE_PLACES_TIMEOUT_MS),
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'X-Goog-Api-Key': apiKey,
-          'X-Goog-FieldMask': 'suggestions.placePrediction.placeId,suggestions.placePrediction.text,suggestions.placePrediction.structuredFormat,suggestions.placePrediction.types',
+          'X-Goog-FieldMask': 'suggestions.placePrediction.placeId,suggestions.placePrediction.text,suggestions.placePrediction.structuredFormat,suggestions.placePrediction.types,suggestions.placePrediction.distanceMeters',
         },
         body: JSON.stringify({
           input,
@@ -7680,12 +9343,15 @@ app.post('/api/maps/place-suggestions', requireAppAuth, limitPerUser('maps-sugge
       if (!isVacationPlace({ name: mainText, types: allowAreas ? types.filter((type) => !AREA_ONLY_TYPES.has(type)) : types })) return null;
       const secondaryText = prediction.structuredFormat?.secondaryText?.text || '';
       const rank = touristTypeOrder.findIndex((type) => types.includes(type));
+      const distanceMeters = Number(prediction.distanceMeters);
       return {
         placeId: prediction.placeId,
         text: prediction.text?.text || [mainText, secondaryText].filter(Boolean).join(', '),
         name: mainText,
         secondaryText,
         types,
+        // How far it is from the "near" point the search was given (straight-line, from Google).
+        ...(Number.isFinite(distanceMeters) && distanceMeters > 0 ? { distanceKm: Math.round(distanceMeters / 100) / 10 } : {}),
         touristRank: rank < 0 ? touristTypeOrder.length : rank,
         originalRank: index,
       };
@@ -7718,12 +9384,79 @@ app.post('/api/maps/place-suggestions', requireAppAuth, limitPerUser('maps-sugge
       suggestions = Array.from(new Map(merged.map((item) => [item.placeId, item])).values())
         .slice(0, 6).map(({ touristRank, originalRank, ...suggestion }) => suggestion);
     } else if (activityScope) {
-      suggestions = mapSuggestions(await requestSuggestions(null))
+      // near ({ lat, lng }, the stop picker's search): places close to it come first, each
+      // with how far it is from there. Still Batangas places only.
+      const near = coordinatesOrNull(req.body?.near?.lat, req.body?.near?.lng);
+      const nearStop = near && insideBatangasBox(near.lat, near.lng)
+        ? {
+          locationBias: { circle: { center: { latitude: near.lat, longitude: near.lng }, radius: 20000 } },
+          origin: { latitude: near.lat, longitude: near.lng },
+        }
+        : nearBias;
+      suggestions = mapSuggestions(await requestSuggestions(null, nearStop))
         .sort((a, b) => a.originalRank - b.originalRank)
         .slice(0, 5).map(({ touristRank, originalRank, ...suggestion }) => suggestion);
     } else {
-      suggestions = mapSuggestions(await requestSuggestions(touristTypeOrder))
-        .slice(0, 5).map(({ touristRank, originalRank, ...suggestion }) => suggestion);
+      // The trip's destination (and the home search): real spots to build a trip around,
+      // never a town, barangay or area such as "Laiya, Batangas". Tourist attractions plus
+      // resorts, beaches, parks and hiking spots (Google takes five types per request).
+      const [touristData, spotData, areaData] = await Promise.all([
+        requestSuggestions(touristTypeOrder),
+        requestSuggestions(['resort_hotel', 'beach', 'amusement_park', 'water_park', 'hiking_area']).catch(() => ({})),
+        requestSuggestions(null).catch(() => ({})),
+      ]);
+      // When the search names an area ("Laiya": Google lists it as a beach area, its
+      // barangays as sublocalities), the spots there come up too (Cocoons Resort, the
+      // beaches...), not only places with that name.
+      const AREA_TYPES = /^(locality|sublocality|sublocality_level_\d|political|neighborhood|colloquial_area|natural_feature|administrative_area_level_[3-5]|archipelago|island)$/;
+      const typed = input.toLowerCase();
+      const area = (areaData.suggestions || []).map((item) => item.placePrediction)
+        .find((prediction) => prediction?.placeId
+          && (prediction.types || []).some((type) => AREA_TYPES.test(String(type)))
+          && String(prediction.structuredFormat?.mainText?.text || prediction.text?.text || '').toLowerCase().startsWith(typed)
+          && isInBatangas({ text: prediction.text?.text || '' }));
+      let areaSpots = [];
+      if (area) {
+        const areaName = area.structuredFormat?.mainText?.text || input;
+        // Just the area's name with the province, so Google picks the well-known one
+        // (Anilao the dive spot in Mabini, not the barangay of the same name in Lipa).
+        const areaText = `${areaName}, Batangas`;
+        const found = await callGooglePlacesApi('places:searchText', {
+          textQuery: `best resorts, beaches and tourist spots in ${areaText}`,
+          maxResultCount: 10,
+        }).catch(() => ({}));
+        areaSpots = (found.places || []).map(mapPlace)
+          .filter((place) => place.placeId && isVacationPlace(place))
+          // Spots only: no restaurants or cafés, and no plain hotels (resorts are fine).
+          .filter((place) => !(place.types || []).some((type) => /restaurant|cafe|food|bakery|meal_|bar$/.test(String(type))))
+          .filter((place) => !hasRoomsPlace(place) || isBeachLike(place) || /\bresort\b/i.test(place.name))
+          // The best-known spots first (most reviews).
+          .sort((a, b) => Number(b.ratingCount || 0) - Number(a.ratingCount || 0))
+          .map((place, index) => ({
+            placeId: place.placeId,
+            text: [place.name, place.address].filter(Boolean).join(', '),
+            name: place.name,
+            secondaryText: place.address ? place.address : areaName,
+            types: place.types || [],
+            touristRank: 0,
+            originalRank: 100 + index,
+          }));
+      }
+      const spotRankOrder = ['tourist_attraction', 'resort_hotel', 'beach', 'landmark', 'national_park', 'amusement_park', 'water_park', 'hiking_area', 'museum', 'park'];
+      const spotRank = (types) => {
+        const rank = spotRankOrder.findIndex((type) => types.includes(type));
+        return rank < 0 ? spotRankOrder.length : rank;
+      };
+      const merged = [...mapSuggestions(touristData), ...mapSuggestions(spotData)]
+        .filter((suggestion) => !suggestion.types.some((type) => AREA_ONLY_TYPES.has(type)));
+      const named = Array.from(new Map(merged.map((item) => [item.placeId, item])).values())
+        .sort((a, b) => spotRank(a.types) - spotRank(b.types) || a.originalRank - b.originalRank);
+      // Places named like the search first (up to three when the area has spots), then
+      // the area's spots in Google's order, then any other named matches.
+      const nearby = areaSpots.filter((spot) => !named.some((item) => item.placeId === spot.placeId));
+      const lead = nearby.length ? named.slice(0, 3) : named;
+      suggestions = [...lead, ...nearby, ...named.slice(lead.length)]
+        .slice(0, 8).map(({ touristRank, originalRank, ...suggestion }) => suggestion);
     }
     return sendJson(res, 200, { suggestions });
   } catch (error) {
@@ -7749,7 +9482,7 @@ app.post('/api/maps/place-name', requireAppAuth, limitPerUser('maps-place-name',
     const apiKey = getMapsApiKey();
     if (!apiKey) throw new Error('Google Maps is not configured on the backend.');
     const url = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&language=en&region=ph&key=${encodeURIComponent(apiKey)}`;
-    const data = await (await fetch(url)).json();
+    const data = await (await fetch(url, { signal: AbortSignal.timeout(GOOGLE_PLACES_TIMEOUT_MS), })).json();
     if (data?.status !== 'OK' || !Array.isArray(data.results) || !data.results.length) throw new Error(data?.status || 'No result');
     // Barangay or district, town or city, and province, from the most detailed result.
     const parts = data.results[0].address_components || [];
@@ -7786,6 +9519,7 @@ app.post('/api/maps/place-details', requireAppAuth, limitPerUser('maps-details',
     const detailsUrl = new URL(`https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}`);
     if (sessionToken) detailsUrl.searchParams.set('sessionToken', sessionToken);
     const response = await fetch(detailsUrl, {
+      signal: AbortSignal.timeout(GOOGLE_PLACES_TIMEOUT_MS),
       headers: {
         'X-Goog-Api-Key': apiKey,
         'X-Goog-FieldMask': 'id,formattedAddress,location,types,photos.name,photos.authorAttributions,photos.googleMapsUri',
@@ -7877,7 +9611,8 @@ app.get('/api/maps/photo', async (req, res) => {
       photoInFlight.set(resourceName, (async () => {
         const apiKey = getMapsApiKey();
         if (!apiKey) throw new Error('Google Maps is not configured on the backend.');
-        const response = await fetch(`https://places.googleapis.com/v1/${resourceName}/media?maxWidthPx=800&key=${apiKey}`);
+        // A stalled photo must not hold up everyone waiting on the same photo (photoInFlight).
+        const response = await fetch(`https://places.googleapis.com/v1/${resourceName}/media?maxWidthPx=800&key=${apiKey}`, { signal: AbortSignal.timeout(GOOGLE_PLACES_TIMEOUT_MS), });
         if (!response.ok) return null;
         const seconds = photoCacheSeconds(response.headers.get('cache-control'));
         const entry = {
@@ -8292,7 +10027,20 @@ app.get('/api/itinerary/build-limit', requireAppAuth, async (req, res) => {
   return sendJson(res, 200, limited ? { limited: true, code: 'build_limit', message: BUILD_LIMIT_MESSAGE } : { limited: false });
 });
 
-app.post('/api/itinerary/generate', requireAppAuth, limitPerUser('itinerary-generate', 20, HOUR_MS), async (req, res) => {
+// ---- Choosing stops before building -----------------------------------------------------
+// A plan (each stop's options) waits in memory for the traveler's picks for 30 minutes.
+const itineraryPlans = new Map();
+const ITINERARY_PLAN_TTL_MS = 30 * MINUTE_MS;
+function itineraryPlanKey(userId, planId) {
+  const id = String(planId || '');
+  return /^[A-Za-z0-9_-]{8,64}$/.test(id) ? `${userId}:${id}` : '';
+}
+setInterval(() => {
+  const cutoff = Date.now() - ITINERARY_PLAN_TTL_MS;
+  for (const [key, value] of itineraryPlans) if (value.at < cutoff) itineraryPlans.delete(key);
+}, MINUTE_MS).unref();
+
+async function handleItineraryRequest(req, res, { planOnly = false } = {}) {
   const { email, message = '', selectedDestination, profile = {}, origin = null } = req.body || {};
   const normalizedEmail = normalizeEmail(req.appUser.email);
   if (email && normalizeEmail(email) !== normalizedEmail) {
@@ -8349,6 +10097,12 @@ app.post('/api/itinerary/generate', requireAppAuth, limitPerUser('itinerary-gene
     };
 
     const progressKey = buildProgressKey(req.appUser.userId, req.body?.progressId);
+    // The stop picker shows distances from the starting location and to the ending one
+    // (the start again when none was given), looked up while the plan is made.
+    const endText = String(req.body?.endLocation?.address || req.body?.endLocation?.name || '').slice(0, 240);
+    const tripPoints = planOnly
+      ? Promise.all([resolveTripPoint(origin?.address || origin?.name), resolveTripPoint(endText)]).catch(() => [null, null])
+      : null;
     const generated = await generateVerifiedItineraryFromAi({
       email: normalizedEmail,
       message: userMessage,
@@ -8360,7 +10114,19 @@ app.post('/api/itinerary/generate', requireAppAuth, limitPerUser('itinerary-gene
         name: String(origin.name || '').slice(0, 120),
         address: String(origin.address || origin.name || '').slice(0, 240),
       } : null,
+      endLocation: endText ? { name: endText, address: endText } : null,
+      planOnly,
     });
+    if (generated.plan) {
+      const [startPoint, endPoint] = await tripPoints;
+      if (startPoint) generated.plan.startPoint = startPoint;
+      if (endPoint || startPoint) generated.plan.endPoint = endPoint || startPoint;
+      // Each stop's options: the traveler picks one per stop, then POST /api/itinerary/build.
+      const planId = crypto.randomBytes(12).toString('base64url');
+      if (itineraryPlans.size >= 1000) itineraryPlans.delete(itineraryPlans.keys().next().value);
+      itineraryPlans.set(itineraryPlanKey(req.appUser.userId, planId), { continueBuild: generated.continueBuild, at: Date.now() });
+      return sendJson(res, 200, { ok: true, planId, plan: generated.plan });
+    }
     await recordItineraryBuild(req.appUser.userId);
     // A generated itinerary is a draft until the traveler saves it in the app; only then
     // is it recorded (POST /api/app-itineraries/sync), with its reminders.
@@ -8371,6 +10137,54 @@ app.post('/api/itinerary/generate', requireAppAuth, limitPerUser('itinerary-gene
     });
   } catch (error) {
     console.error('Itinerary generation error:', error.message);
+    return sendJson(res, error.statusCode === 400 ? 400 : 503, { error: error.message || 'Verified itinerary generation is currently unavailable.' });
+  }
+}
+
+// Builds a whole itinerary in one step, the app's own choice for every stop (older app versions).
+app.post('/api/itinerary/generate', requireAppAuth, limitPerUser('itinerary-generate', 20, HOUR_MS), (req, res) => handleItineraryRequest(req, res));
+
+// The itinerary builder's first step in the app: each stop's three options (planOnly).
+// The traveler picks one per stop, then POST /api/itinerary/build makes the itinerary.
+app.post('/api/itinerary/options', requireAppAuth, limitPerUser('itinerary-generate', 20, HOUR_MS), (req, res) => handleItineraryRequest(req, res, { planOnly: true }));
+
+// Builds the itinerary from the picks: { planId, choices: { stopKey: placeId }, progressId }.
+// A stop without a pick gets the app's own choice, as before.
+app.post('/api/itinerary/build', requireAppAuth, limitPerUser('itinerary-build', 20, HOUR_MS), async (req, res) => {
+  const key = itineraryPlanKey(req.appUser.userId, req.body?.planId);
+  const saved = key ? itineraryPlans.get(key) : null;
+  if (!saved) {
+    return sendJson(res, 410, { error: 'These choices have expired. Please build your itinerary again.', code: 'plan_expired' });
+  }
+  if (await itineraryBuildLimitReached(req.appUser.userId)) {
+    return sendJson(res, 429, { error: BUILD_LIMIT_MESSAGE, code: 'build_limit' });
+  }
+  // Stops the traveler added in the picker: [{ day, placeId }], up to 10.
+  const extraStops = (Array.isArray(req.body?.extraStops) ? req.body.extraStops : [])
+    .filter((item) => Number.isInteger(item?.day) && item.day >= 1 && item.day <= 14 && /^[A-Za-z0-9_-]{4,200}$/.test(String(item?.placeId || '')))
+    .slice(0, 10)
+    .map((item) => ({ day: item.day, placeId: String(item.placeId) }));
+  // Places the traveler searched for and picked for a stop: [{ key, placeId }], one per stop.
+  const searchedStops = Array.from(new Map((Array.isArray(req.body?.searchedStops) ? req.body.searchedStops : [])
+    .filter((item) => /^d\d{1,2}(a\d{1,2}|home)$/.test(String(item?.key || '')) && /^[A-Za-z0-9_-]{4,200}$/.test(String(item?.placeId || '')))
+    .slice(0, 60)
+    .map((item) => [String(item.key), { key: String(item.key), placeId: String(item.placeId) }])).values());
+  const choices = {};
+  const picked = req.body?.choices;
+  if (picked && typeof picked === 'object') {
+    // A stop's chosen place id, or '' for a stop the traveler removed.
+    for (const [stopKey, placeId] of Object.entries(picked).slice(0, 200)) {
+      if (/^d\d{1,2}(a\d{1,2}|home)$/.test(stopKey) && typeof placeId === 'string' && placeId.length <= 200) choices[stopKey] = placeId;
+    }
+  }
+  try {
+    const progressKey = buildProgressKey(req.appUser.userId, req.body?.progressId);
+    const generated = await saved.continueBuild(choices, progressKey ? (percent, next, label) => setBuildProgress(progressKey, percent, next, label) : null, extraStops, searchedStops);
+    itineraryPlans.delete(key);
+    await recordItineraryBuild(req.appUser.userId);
+    return sendJson(res, 200, { ok: true, itinerary: generated.itinerary, meta: generated.meta });
+  } catch (error) {
+    console.error('Itinerary build error:', error.message);
     return sendJson(res, error.statusCode === 400 ? 400 : 503, { error: error.message || 'Verified itinerary generation is currently unavailable.' });
   }
 });
@@ -8408,8 +10222,12 @@ function coordinatesOrNull(lat, lng) {
     : null;
 }
 
-// Up to 12 well-rated hotels near the destination, from Google Places. The Places
-// requests are cached by callGooglePlacesApi, so repeated calls cost nothing extra.
+// Up to 16 places to stay near the destination, from Google Places: the 10 best-rated,
+// and up to 6 budget ones (inns, homestays, transient houses), so the cheapest real
+// options get priced too. Searched by the destination's name and, when its location is
+// known, around it: "hotels in <one resort>" finds only that resort, and the area's
+// cheaper places would never be seen. The Places requests are cached by
+// callGooglePlacesApi, so repeated calls cost nothing extra.
 async function findHotelCandidates(destination, lat, lng) {
   let center = coordinatesOrNull(lat, lng);
   if (!center) {
@@ -8417,18 +10235,29 @@ async function findHotelCandidates(destination, lat, lng) {
     const first = (located.places || []).map(mapPlace).find((place) => Number.isFinite(place.lat) && Number.isFinite(place.lng));
     if (first) center = { lat: first.lat, lng: first.lng };
   }
-  const bias = center ? { locationBias: { circle: { center: { latitude: center.lat, longitude: center.lng }, radius: 30000 } } } : {};
-  const searches = await Promise.all(['hotels', 'resorts', 'budget hotels and inns'].map((query) => (
-    callGooglePlacesApi('places:searchText', { textQuery: `${query} in ${destination}`, maxResultCount: 10, ...bias }).catch(() => ({ places: [] }))
-  )));
-  const candidates = Array.from(new Map(searches.flatMap((data) => data.places || []).map(mapPlace)
+  const circle = (radius) => (center ? { locationBias: { circle: { center: { latitude: center.lat, longitude: center.lng }, radius } } } : {});
+  const search = (textQuery, area) => callGooglePlacesApi('places:searchText', { textQuery, maxResultCount: 10, ...area }).catch(() => ({ places: [] }));
+  const none = Promise.resolve({ places: [] });
+  const [hotels, resorts, budget, around, aroundBudget] = await Promise.all([
+    search(`hotels in ${destination}`, circle(30000)),
+    search(`resorts in ${destination}`, circle(30000)),
+    search(`budget hotels and inns in ${destination}`, circle(30000)),
+    center ? search('hotels and resorts', circle(10000)) : none,
+    center ? search('budget inn homestay transient house', circle(10000)) : none,
+  ]);
+  const lodging = (data) => (data.places || []).map(mapPlace)
     .filter((place) => place.placeId && Number.isFinite(place.lat) && Number.isFinite(place.lng))
     .filter((place) => place.types.some((type) => HOTEL_TYPE_PATTERN.test(String(type).toLowerCase())))
-    .filter((place) => !center || haversineKm(center, place) <= 40)
-    .map((place) => [place.placeId, place])).values())
-    .sort((a, b) => (Number(b.rating) || 0) - (Number(a.rating) || 0) || (Number(b.ratingCount) || 0) - (Number(a.ratingCount) || 0))
-    .slice(0, 12);
-  return { center, candidates };
+    .filter((place) => !center || haversineKm(center, place) <= 40);
+  const unique = (places) => Array.from(new Map(places.map((place) => [place.placeId, place])).values());
+  // Places with ten or more reviews first (a 5-star homestay with two reviews rarely has an
+  // online price), then by rating.
+  const rank = (a, b) => Number(Number(b.ratingCount) >= 10) - Number(Number(a.ratingCount) >= 10)
+    || (Number(b.rating) || 0) - (Number(a.rating) || 0) || (Number(b.ratingCount) || 0) - (Number(a.ratingCount) || 0);
+  const best = unique([...lodging(hotels), ...lodging(resorts), ...lodging(around)]).sort(rank).slice(0, 10);
+  const cheap = unique([...lodging(budget), ...lodging(aroundBudget)])
+    .filter((place) => !best.some((item) => item.placeId === place.placeId)).sort(rank).slice(0, 6);
+  return { center, candidates: [...best, ...cheap] };
 }
 
 // Nightly rates for the candidate hotels from one grounded web search (the costly
@@ -8438,7 +10267,9 @@ async function researchHotelRates({ destination, startDate, endDate, nights, can
   const cacheKey = JSON.stringify([destination.toLowerCase(), startDate, endDate, candidates.map((place) => place.placeId)]);
   const cached = hotelRateCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return cached;
-  const grounded = await callGeminiSearchApi({
+  // Google sometimes turns this search down for a moment ("invalid argument") and takes the
+  // same one right after: tried a second time before giving up.
+  const search = () => callGeminiSearchApi({
     contextText: [
       `Destination: ${destination}, Philippines`,
       `Stay: ${startDate} to ${endDate} (${nights} night${nights === 1 ? '' : 's'})`,
@@ -8447,6 +10278,7 @@ async function researchHotelRates({ destination, startDate, endDate, nights, can
     message: 'Search the web now for the current price of a standard room for one night at each listed hotel, for stays around these dates. Prefer the hotel\'s official site and major booking sites. Return one JSON object only, without markdown, shaped as {"hotelRates":[{"placeId":"exact supplied placeId","lowPhp":null,"highPhp":null,"basis":"brief price basis","sourceUrls":[]}]}, one item per supplied hotel, preserving each exact placeId. Give a realistic low and high nightly rate in PHP (convert with a current rate if needed) only when a current source supports it, and include the URL(s) of the pages that support it. Use null for both bounds when you cannot find evidence. Never invent a price or a source URL.',
     responseSchema: hotelRateResponseSchema(),
   });
+  const grounded = await search().catch(() => search());
   const parsed = extractJsonObject(grounded.text);
   if (!parsed) throw new Error('Hotel price search returned data that could not be read.');
   const allowedSources = new Set(grounded.sources.map((source) => source.url));
@@ -8456,12 +10288,126 @@ async function researchHotelRates({ destination, startDate, endDate, nights, can
     const placeId = String(entry?.placeId || '');
     // A room under ₱300 a night is not a real hotel rate (usually a misread
     // fee or per-person figure), so it is treated as "no evidence".
-    if (placeId && band && band.lowPhp >= MIN_REALISTIC_ROOM_PHP) byPlaceId[placeId] = { ...band, basis: String(entry.basis || '').slice(0, 200) };
+    // citedUrls: the pages the search itself named for this price, which confirmPriceOnPage
+    // can open to check it.
+    if (placeId && band && band.lowPhp >= MIN_REALISTIC_ROOM_PHP) {
+      byPlaceId[placeId] = {
+        ...band,
+        basis: String(entry.basis || '').slice(0, 200),
+        citedUrls: (Array.isArray(entry.sourceUrls) ? entry.sourceUrls : []).map(String).filter((url) => /^https:\/\/[^\s"'<>]+$/i.test(url)).slice(0, 3),
+      };
+    }
   }
   const rates = { byPlaceId, expiresAt: Date.now() + 6 * 60 * 60 * 1000 };
   if (hotelRateCache.size >= 200) hotelRateCache.delete(hotelRateCache.keys().next().value);
   hotelRateCache.set(cacheKey, rates);
   return rates;
+}
+
+// ---- Checking a price on its own page ------------------------------------------------------
+// A price the web search found counts as checked only when the page it came from, opened
+// here, really shows that amount: the search's own word isn't proof (it can misread a
+// page or name one that doesn't exist). Only public https pages are opened, never a
+// private or local address, briefly and with a size limit. Booking sites that load their
+// prices by script can't be checked this way; their prices stay "not checked".
+const PRICE_PAGE_TIMEOUT_MS = 6000;
+const PRICE_PAGE_MAX_BYTES = 2500000;
+const pricePageChecks = new Map();
+
+function isPublicIpAddress(address) {
+  const ip = String(address || '').toLowerCase();
+  if (net.isIPv4(ip)) {
+    const [a, b] = ip.split('.').map(Number);
+    return !(a === 0 || a === 10 || a === 127 || a >= 224 || (a === 100 && b >= 64 && b <= 127)
+      || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && (b === 168 || b === 0)) || (a === 198 && (b === 18 || b === 19)));
+  }
+  if (net.isIPv6(ip)) {
+    const mapped = ip.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+    if (mapped) return isPublicIpAddress(mapped[1]);
+    return !(ip === '::' || ip === '::1' || /^f[cd]/.test(ip) || /^fe[89ab]/.test(ip) || /^ff/.test(ip));
+  }
+  return false;
+}
+
+// A public https page's text (tags removed), or '' when it can't be read. Redirects are
+// followed one at a time (at most three), each checked like the first address.
+async function readPublicPageText(url) {
+  let current = String(url || '');
+  for (let hop = 0; hop < 4; hop += 1) {
+    let parsed;
+    try { parsed = new URL(current); } catch (error) { return ''; }
+    const host = parsed.hostname.toLowerCase();
+    if (parsed.protocol !== 'https:' || parsed.username || parsed.password || (parsed.port && parsed.port !== '443')
+      || net.isIP(host.replace(/^\[|\]$/g, '')) || !host.includes('.') || /(^|\.)(localhost|local|internal)$/.test(host)) return '';
+    const addresses = await withTimeout(dns.promises.lookup(host, { all: true }), 3000, 'DNS lookup').catch(() => []);
+    if (!addresses.length || !addresses.every(({ address }) => isPublicIpAddress(address))) return '';
+    const response = await fetch(parsed.href, {
+      redirect: 'manual',
+      signal: AbortSignal.timeout(PRICE_PAGE_TIMEOUT_MS),
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130 Safari/537.36', Accept: 'text/html,application/xhtml+xml' },
+    }).catch(() => null);
+    if (!response) return '';
+    const location = response.headers.get('location');
+    if (response.status >= 300 && response.status < 400 && location) {
+      try { current = new URL(location, parsed).href; } catch (error) { return ''; }
+      continue;
+    }
+    if (!response.ok || !/text\/html|application\/xhtml/i.test(response.headers.get('content-type') || '') || !response.body) return '';
+    const reader = response.body.getReader();
+    const chunks = [];
+    let size = 0;
+    try {
+      while (size < PRICE_PAGE_MAX_BYTES) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(Buffer.from(value));
+        size += value.byteLength;
+      }
+    } catch (error) {
+      if (!chunks.length) return '';
+    } finally {
+      reader.cancel().catch(() => {});
+    }
+    return Buffer.concat(chunks).toString('utf8')
+      .replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;|&#160;|&#xa0;/gi, ' ')
+      .replace(/\s+/g, ' ');
+  }
+  return '';
+}
+
+// Whether text shows this peso amount: "9,225", "9225", "9 225" or "9,225.00", not as part
+// of a bigger number.
+function textShowsAmount(text, amountPhp) {
+  const amount = Math.round(Number(amountPhp));
+  if (!Number.isFinite(amount) || amount < 100 || amount >= 10000000) return false;
+  const digits = String(amount);
+  const grouped = digits.length > 3 ? `${digits.slice(0, -3)}[,.\\s]?${digits.slice(-3)}` : digits;
+  return new RegExp(`(?<![\\d.,])${grouped}(?:\\.\\d{2})?(?!,?\\d)`).test(String(text || ''));
+}
+
+// The site (as "palmbeachlaiya.com") of the first of these pages that shows the amount,
+// or '' when none does. Each check is remembered for 6 hours.
+async function confirmPriceOnPage(urls, amountPhp) {
+  const checks = (urls || []).slice(0, 2).map((url) => {
+    const key = `${url}|${Math.round(Number(amountPhp))}`;
+    const saved = pricePageChecks.get(key);
+    if (saved && saved.expiresAt > Date.now()) return saved.found;
+    const found = readPublicPageText(url).then((text) => textShowsAmount(text, amountPhp)).catch(() => false);
+    if (pricePageChecks.size >= 500) pricePageChecks.delete(pricePageChecks.keys().next().value);
+    pricePageChecks.set(key, { found, expiresAt: Date.now() + 6 * 60 * 60 * 1000 });
+    return found;
+  });
+  const results = await Promise.all(checks);
+  const index = results.findIndex(Boolean);
+  if (index < 0) return '';
+  try { return new URL(urls[index]).hostname.replace(/^www\./, ''); } catch (error) { return ''; }
+}
+
+// The site a price came from, as "agoda.com" (the first page the search named).
+function priceSourceSite(urls) {
+  try { return urls?.length ? new URL(urls[0]).hostname.replace(/^www\./, '') : ''; } catch (error) { return ''; }
 }
 
 // ---- Group trips ------------------------------------------------------------------------
@@ -8495,11 +10441,38 @@ function mealPricePhp(place) {
   return PRICE_LEVEL_MEAL_PHP[place.priceLevel] || null;
 }
 
-// Checks whether a trip budget is realistic before an itinerary is built: the
-// cheapest priced restaurant for two meals a day, plus the cheapest priced hotel
-// for every night. To save credits, the hotel price web search runs only when the
-// answer depends on it; clearly-enough and clearly-too-small budgets are decided
-// from cheap Google Places data alone. Its results are shared with the hotel picker.
+// Restaurants and eateries within 12 km of the destination that Google lists a price for,
+// cheapest first ({ place, perMealPhp }), and how many nearby ones have no price listed.
+// Searched by the destination's name and around it ("restaurants in <one resort>" finds
+// only that resort's area restaurants); places to stay that also serve food are left out.
+async function findMealPrices(destination, center) {
+  const circle = (radius) => (center ? { locationBias: { circle: { center: { latitude: center.lat, longitude: center.lng }, radius } } } : {});
+  const searches = await Promise.all([
+    callGooglePlacesApi('places:searchText', { textQuery: `restaurants in ${destination}`, maxResultCount: 20, ...circle(20000) }),
+    ...(center ? [callGooglePlacesApi('places:searchText', { textQuery: 'restaurants and local eateries', maxResultCount: 20, ...circle(8000) })] : []),
+  ].map((request) => request.catch(() => ({ places: [] }))));
+  const places = Array.from(new Map(searches.flatMap((data) => (data.places || []).map(mapPlace))
+    .filter((place) => place.placeId && place.types.some((type) => FOOD_TYPE_PATTERN.test(String(type).toLowerCase())))
+    .filter((place) => !place.types.some((type) => HOTEL_TYPE_PATTERN.test(String(type).toLowerCase())))
+    .filter((place) => !center || haversineKm(center, place) <= 12)
+    .map((place) => [place.placeId, place])).values());
+  const priced = places.map((place) => ({ place, perMealPhp: mealPricePhp(place) }))
+    .filter((item) => item.perMealPhp)
+    .sort((a, b) => a.perMealPhp - b.perMealPhp);
+  return { priced, unpricedCount: places.length - priced.length };
+}
+
+// Checks a trip budget before an itinerary is built, in two steps:
+// - Not realistic (realistic: false, floor: true): the budget can't cover the trip even at
+//   the lowest possible prices, a basic ₱80 meal (two a day) and a ₱300 room each night.
+//   Nothing found by a search or an AI goes into this verdict, so it is never wrong about
+//   a trip that a cheaper room or meal than the ones found would make possible.
+// - Tight (realistic: true, tight: true): the cheapest prices found cost more than the
+//   budget: Google Maps' price data for meals, and the cheapest nightly rate the web
+//   search found for rooms (checked on its own page when possible). The app shows these,
+//   with where they come from, and the traveler may still go on.
+// To save credits, the hotel price web search runs only when the answer depends on it.
+// Its results are shared with the hotel picker.
 app.post('/api/trip/budget-check', requireAppAuth, async (req, res) => {
   const destination = String(req.body?.destination || '').trim().slice(0, 180);
   const startDate = String(req.body?.startDate || '').slice(0, 10);
@@ -8542,61 +10515,96 @@ app.post('/api/trip/budget-check', requireAppAuth, async (req, res) => {
       return sendJson(res, 200, { checked: true, realistic: false, outOfScope: true, message: error.message, budgetAmountPhp, days, nights });
     }
   }
+  // The longest trip (1 to 14 days) a budget covers at these prices.
+  const daysCovered = (perMealPhp, nightlyPhp) => {
+    let covered = 0;
+    for (let d = 1; d <= 14; d += 1) {
+      if (perMealPhp * MEALS_PER_DAY * d * travelers + nightlyPhp * (d - 1) * rooms <= budgetAmountPhp) covered = d;
+    }
+    return covered;
+  };
+  // The lowest possible cost (fixed floors, no search needed): below it, no trip of this
+  // length could fit the budget.
+  const floorPhp = MIN_MEAL_PHP * meals + MIN_REALISTIC_ROOM_PHP * nights * rooms;
+  if (budgetAmountPhp < floorPhp) {
+    return sendJson(res, 200, {
+      checked: true, realistic: false, floor: true, budgetAmountPhp, days, nights, travelers, rooms,
+      minimumPhp: floorPhp,
+      maxAffordableDays: daysCovered(MIN_MEAL_PHP, MIN_REALISTIC_ROOM_PHP),
+      meals: { name: '', perMealPhp: MIN_MEAL_PHP, mealsPerDay: MEALS_PER_DAY, travelers, totalPhp: MIN_MEAL_PHP * meals, estimated: true },
+      lodging: {
+        needed: nights > 0, nights, rooms,
+        nightlyLowPhp: nights > 0 ? MIN_REALISTIC_ROOM_PHP : 0,
+        totalPhp: MIN_REALISTIC_ROOM_PHP * nights * rooms,
+        name: '', source: nights > 0 ? 'minimum-rate' : 'not-needed',
+      },
+    });
+  }
   try {
     const { center, candidates } = await findHotelCandidates(destination, req.body?.lat, req.body?.lng);
 
-    // Cheapest restaurant near the destination (one cached Places search, no web search).
-    const bias = center ? { locationBias: { circle: { center: { latitude: center.lat, longitude: center.lng }, radius: 20000 } } } : {};
-    const food = await callGooglePlacesApi('places:searchText', { textQuery: `restaurants in ${destination}`, maxResultCount: 20, ...bias }).catch(() => ({ places: [] }));
-    const pricedFood = (food.places || []).map(mapPlace)
-      .filter((place) => place.types.some((type) => FOOD_TYPE_PATTERN.test(String(type).toLowerCase())))
-      .map((place) => ({ place, perMealPhp: mealPricePhp(place) }))
-      .filter((item) => item.perMealPhp)
-      .sort((a, b) => a.perMealPhp - b.perMealPhp);
-    const cheapestFood = pricedFood[0] || null;
+    // Meals at the cheapest restaurant near the destination with Google's price data.
+    const food = await findMealPrices(destination, center);
+    const cheapestFood = food.priced[0] || null;
     const perMealPhp = cheapestFood ? cheapestFood.perMealPhp : FALLBACK_MEAL_PHP;
     const mealsTotal = perMealPhp * meals;
-    const mealsInfo = { name: cheapestFood?.place.name || '', perMealPhp, mealsPerDay: MEALS_PER_DAY, travelers, totalPhp: mealsTotal, estimated: !cheapestFood };
+    const mealsInfo = {
+      name: cheapestFood?.place.name || '', perMealPhp, mealsPerDay: MEALS_PER_DAY, travelers, totalPhp: mealsTotal, estimated: !cheapestFood,
+      // Google's own price band for that place ({ lowPhp, highPhp }; a low of 0 is "under").
+      priceRange: cheapestFood?.place.priceRange || null,
+    };
 
     let lodging = { needed: nights > 0, nights, rooms, nightlyLowPhp: 0, totalPhp: 0, name: '', source: 'not-needed' };
     if (nights > 0) {
       const leftForRooms = budgetAmountPhp - mealsTotal;
       if (leftForRooms < MIN_REALISTIC_ROOM_PHP * nights * rooms) {
-        // Below even the cheapest real room rate: no need to search hotel prices.
+        // Not even the lowest room rate is left: tight whatever the hotels cost.
         lodging = { ...lodging, nightlyLowPhp: MIN_REALISTIC_ROOM_PHP, totalPhp: MIN_REALISTIC_ROOM_PHP * nights * rooms, source: 'minimum-rate' };
       } else if (leftForRooms >= COMFORTABLE_ROOM_PHP * nights * rooms || !candidates.length) {
         // Plenty left for rooms (or no hotels listed to price): no search needed.
         lodging = { ...lodging, source: candidates.length ? 'comfortable' : 'unpriced' };
       } else {
-        // The answer depends on real prices: research them (shared, cached result).
+        // The answer depends on real prices: research them (shared, cached result), and
+        // check the cheapest one on the page it came from.
         const rates = await researchHotelRates({ destination, startDate, endDate, nights, candidates });
-        const cheapest = candidates
+        const priced = candidates
           .map((place) => ({ place, rate: rates.byPlaceId[place.placeId] }))
           .filter((item) => item.rate)
-          .sort((a, b) => a.rate.lowPhp - b.rate.lowPhp)[0];
+          .sort((a, b) => a.rate.lowPhp - b.rate.lowPhp);
+        const cheapest = priced[0];
         lodging = cheapest
-          ? { ...lodging, name: cheapest.place.name, nightlyLowPhp: cheapest.rate.lowPhp, totalPhp: cheapest.rate.lowPhp * nights * rooms, source: 'researched' }
-          : { ...lodging, source: 'unpriced' };
+          ? {
+            ...lodging,
+            name: cheapest.place.name,
+            nightlyLowPhp: cheapest.rate.lowPhp,
+            totalPhp: cheapest.rate.lowPhp * nights * rooms,
+            source: 'researched',
+            sourceSite: priceSourceSite(cheapest.rate.citedUrls),
+            checkedOn: await confirmPriceOnPage(cheapest.rate.citedUrls, cheapest.rate.lowPhp),
+            // Places to stay nearby without a price online (they may cost less).
+            unpricedCount: candidates.length - priced.length,
+          }
+          : { ...lodging, source: 'unpriced', unpricedCount: candidates.length };
       }
     }
 
-    const minimumPhp = mealsTotal + lodging.totalPhp;
-    const realistic = budgetAmountPhp >= minimumPhp;
-    // Longest trip this budget covers at the cheapest prices found.
-    let maxAffordableDays = 0;
-    for (let d = 1; d <= 14; d += 1) {
-      if (perMealPhp * MEALS_PER_DAY * d * travelers + lodging.nightlyLowPhp * (d - 1) * rooms <= budgetAmountPhp) maxAffordableDays = d;
-    }
+    const estimatePhp = mealsTotal + (lodging.source === 'comfortable' || lodging.source === 'unpriced'
+      ? MIN_REALISTIC_ROOM_PHP * nights * rooms
+      : lodging.totalPhp);
+    const tight = budgetAmountPhp < estimatePhp;
     return sendJson(res, 200, {
       checked: true,
-      realistic,
+      realistic: true,
+      tight,
       budgetAmountPhp,
       days,
       nights,
       travelers,
       rooms,
-      minimumPhp,
-      maxAffordableDays,
+      minimumPhp: floorPhp,
+      estimatePhp,
+      // When tight: the longest trip the budget covers at the prices found.
+      maxAffordableDays: tight ? daysCovered(perMealPhp, lodging.nightlyLowPhp || MIN_REALISTIC_ROOM_PHP) : days,
       meals: mealsInfo,
       lodging,
     });
@@ -8653,6 +10661,11 @@ app.post('/api/hotels/budget-options', requireAppAuth, async (req, res) => {
     const affordable = priced.filter(({ rate }) => rate.lowPhp <= nightlyCapPhp);
     // Best-rated hotels the budget can cover come first; cheaper wins a tie.
     affordable.sort((a, b) => (Number(b.place.rating) || 0) - (Number(a.place.rating) || 0) || a.rate.lowPhp - b.rate.lowPhp);
+    // Each price shown, checked on the page it came from (all at once and briefly; each
+    // check is remembered for 6 hours), so the app can say which prices were checked.
+    const checkedOn = new Map(await Promise.all(affordable.map(async ({ place, rate }) => (
+      [place.placeId, await confirmPriceOnPage(rate.citedUrls, rate.lowPhp)]
+    ))));
     const toHotel = ({ place, rate }) => ({
       placeId: place.placeId,
       name: place.name,
@@ -8672,6 +10685,9 @@ app.post('/api/hotels/budget-options', requireAppAuth, async (req, res) => {
       fullyWithinBudget: rate.highPhp <= nightlyCapPhp,
       basis: rate.basis,
       sourceUrls: rate.sourceUrls.slice(0, 3),
+      // The site the price came from, and that site again when its page shows the price.
+      priceSite: priceSourceSite(rate.citedUrls),
+      priceCheckedOn: checkedOn.get(place.placeId) || '',
     });
     const hotels = affordable.map(toHotel);
     // Priced hotels above the nightly cap, cheapest first, so the app can show them last.
@@ -8718,10 +10734,11 @@ async function sendPlaceDetails(req, res) {
     const apiKey = getMapsApiKey();
     if (!apiKey) throw new Error('Google Maps is not configured on the backend.');
     const response = await fetch(`https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}`, {
+      signal: AbortSignal.timeout(GOOGLE_PLACES_TIMEOUT_MS),
       headers: {
         'X-Goog-Api-Key': apiKey,
         'X-Goog-FieldMask': [
-          'id', 'displayName', 'formattedAddress', 'rating', 'userRatingCount', 'types', 'businessStatus',
+          'id', 'displayName', 'formattedAddress', 'location', 'rating', 'userRatingCount', 'types', 'businessStatus',
           'photos.name', 'photos.authorAttributions', 'websiteUri', 'nationalPhoneNumber', 'googleMapsUri',
           'editorialSummary', 'regularOpeningHours.weekdayDescriptions',
           'reviews.rating', 'reviews.text', 'reviews.relativePublishTimeDescription', 'reviews.authorAttribution',
@@ -8738,6 +10755,8 @@ async function sendPlaceDetails(req, res) {
       placeId: String(data.id || placeId),
       name: String(data.displayName?.text || '').slice(0, 200),
       address: String(data.formattedAddress || '').slice(0, 300),
+      lat: finiteOrNull(data.location?.latitude),
+      lng: finiteOrNull(data.location?.longitude),
       rating: finiteOrNull(data.rating),
       ratingCount: finiteOrNull(data.userRatingCount),
       types: Array.isArray(data.types) ? data.types.slice(0, 8).map((type) => String(type).slice(0, 60)) : [],
@@ -8837,7 +10856,7 @@ app.use((req, res) => {
     if (isProduction) {
       return res.status(404).type('html').send('<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">'
         + '<meta name="viewport" content="width=device-width, initial-scale=1"><title>Page not found · Sidekick</title></head>'
-        + '<body><h1>Page not found</h1><p><a href="/">Go to Sidekick Admin</a></p></body></html>');
+        + '<body><h1>Page not found</h1><p><a href="/">Go to Sidekick</a></p></body></html>');
     }
     return res.status(404).sendFile(path.join(mobileAppDir, '404.html'));
   }
@@ -8886,6 +10905,9 @@ if (isProduction) {
 
 const httpServer = app.listen(port, () => {
   console.log(`Sidekick backend listening on http://localhost:${port}`);
+  // Only people who can read the server log (or backend/.env) learn the admin link.
+  const siteOrigin = String(process.env.PUBLIC_ORIGIN || '').trim().replace(/\/+$/, '') || `http://localhost:${port}`;
+  console.log(`Admin sign-in link: ${siteOrigin}${ADMIN_ENTRY_PATH}/`);
 });
 // The AWS load balancer keeps idle connections open for up to 300 seconds. Node closes
 // them after 5 seconds by default, and a request sent on a connection Node had just

@@ -151,8 +151,8 @@ async function restorePreferencesFromAccount() {
     const saved = await apiRequest(`/api/preferences/${encodeURIComponent(session.email)}`);
     const list = (value) => (Array.isArray(value) ? value.map((item) => String(item || "").trim()).filter(Boolean) : []);
     const prefs = {
-      travelTypes: list(saved?.travelTypes),
-      interests: list(saved?.interests),
+      travelTypes: renamePreferenceList(list(saved?.travelTypes)),
+      interests: renamePreferenceList(list(saved?.interests)),
       preferredPlaces: list(saved?.preferredPlaces),
     };
     // Onboarding always saves travel styles and interests; without them it runs again.
@@ -234,11 +234,20 @@ function forgetAccountForEmail(email) {
   try { deleteEmailEntries(ACCOUNT_ID_KEY, email); } catch (error) {}
 }
 
+// Preference names that were merged: "Cultural" (travel style) and "Historical Sites"
+// (interest) are now "Pilgrimage". Answers saved before read as the new name.
+const RENAMED_PREFERENCES = { Cultural: "Pilgrimage", "Historical Sites": "Pilgrimage", Mountains: "Hiking" };
+const renamePreferenceList = (list) => (Array.isArray(list)
+  ? Array.from(new Set(list.map((item) => RENAMED_PREFERENCES[item] || item)))
+  : list);
+
 function getPreferences() {
   const session = getAuthSession();
   if (!session?.email) return null;
   const all = getPreferencesByEmail();
-  return all[session.email] ?? null;
+  const prefs = all[session.email] ?? null;
+  if (!prefs || typeof prefs !== "object") return prefs;
+  return { ...prefs, travelTypes: renamePreferenceList(prefs.travelTypes), interests: renamePreferenceList(prefs.interests) };
 }
 
 function escapeHtml(text) {
@@ -757,19 +766,25 @@ function scheduleItinerarySync(email, itineraryData, delay = 500) {
       });
       state.lastSynced = latestSnapshot;
       state.attempts = 0;
+      state.failedSnapshot = "";
     } catch (error) {
       state.attempts += 1;
       if (state.attempts < 3) {
         state.timer = window.setTimeout(() => scheduleItinerarySync(email, current, 1000 * state.attempts), 1000 * state.attempts);
       } else {
+        // Three tries failed: stop until the trip changes again (or the app is reopened),
+        // instead of retrying every few seconds while offline or while the server refuses it.
         state.attempts = 0;
+        state.failedSnapshot = latestSnapshot;
         reportItinerarySyncError(error, tripId);
       }
     } finally {
       state.inFlight = false;
       const latest = findTripByServerId(email, tripId);
+      const latestNow = latest ? JSON.stringify(getItinerarySyncPayload(latest)) : "";
       if (latest
-        && JSON.stringify(getItinerarySyncPayload(latest)) !== state.lastSynced
+        && latestNow !== state.lastSynced
+        && latestNow !== state.failedSnapshot
         && !state.timer) {
         scheduleItinerarySync(email, latest);
       }
@@ -837,10 +852,18 @@ function tripDateRange(data) {
   return { start, end: end || start };
 }
 
+// A place's own name without its address ("Isla Verde Tropical Friendly Resort, San
+// Agustin Kanluran, Isla Verde, Batangas City…" -> "Isla Verde Tropical Friendly Resort").
+function shortPlaceName(text) {
+  const parts = String(text || "").split(",").map((part) => part.trim()).filter(Boolean);
+  return parts[0] || "";
+}
+
+// A trip's name: the one the traveler gave it, or its destination's short name.
 function tripDisplayName(data) {
   const title = String(data?.meta?.title || "").trim();
   if (title) return title;
-  const destination = String(data?.meta?.destination || data?.meta?.focusedPlace || "").trim();
+  const destination = shortPlaceName(data?.meta?.destination || data?.meta?.focusedPlace);
   return destination ? `${destination} trip` : "My trip";
 }
 
@@ -1286,7 +1309,8 @@ const INTEREST_KEYWORDS = [
   { interest: "Island Hopping", words: ["hop", "hopping", "cruise", "tour"] },
   { interest: "Mountains", words: ["mountain", "hike", "hiking", "batulao", "maculot", "taal volcano", "scenery"] },
   { interest: "Hiking", words: ["trail", "hiking", "trek", "walk"] },
-  { interest: "Historical Sites", words: ["history", "museum", "taal", "heritage", "church", "basilica", "lighthouse"] },
+  { interest: "Pilgrimage", words: ["pilgrim", "history", "taal", "heritage", "church", "basilica", "shrine"] },
+  { interest: "Museums", words: ["museum", "gallery", "exhibit"] },
   { interest: "Local Cuisine", words: ["food", "eat", "cuisine", "street food", "restaurant"] },
   { interest: "Nightlife", words: ["night", "bar", "music", "nightlife", "party"] },
   { interest: "Shopping", words: ["shop", "mall", "market", "souvenir"] },
@@ -1320,9 +1344,9 @@ const PLACES = [
   { name: "Masasa Beach, Tingloy", region: "Batangas", lat: 13.6550, lng: 120.8960, tags: ["Beaches", "Island Hopping", "Water Sports"] },
   { name: "Mount Batulao, Nasugbu", region: "Batangas", lat: 14.0400, lng: 120.8000, tags: ["Mountains", "Hiking", "Photography", "Nature & Wildlife"] },
   { name: "Mount Maculot, Cuenca", region: "Batangas", lat: 13.9200, lng: 121.0450, tags: ["Mountains", "Hiking", "Photography"] },
-  { name: "Taal Heritage Town", region: "Batangas", lat: 13.8800, lng: 120.9230, tags: ["Historical Sites", "Photography", "Local Cuisine", "Shopping"] },
-  { name: "Basilica of St. Martin de Tours, Taal", region: "Batangas", lat: 13.8817, lng: 120.9236, tags: ["Historical Sites", "Photography"] },
-  { name: "Cape Santiago Lighthouse, Calatagan", region: "Batangas", lat: 13.7660, lng: 120.6560, tags: ["Historical Sites", "Photography", "Beaches"] },
+  { name: "Taal Heritage Town", region: "Batangas", lat: 13.8800, lng: 120.9230, tags: ["Pilgrimage", "Museums", "Photography", "Local Cuisine", "Shopping"] },
+  { name: "Basilica of St. Martin de Tours, Taal", region: "Batangas", lat: 13.8817, lng: 120.9236, tags: ["Pilgrimage", "Photography"] },
+  { name: "Cape Santiago Lighthouse, Calatagan", region: "Batangas", lat: 13.7660, lng: 120.6560, tags: ["Photography", "Beaches"] },
   { name: "Lipa City Food Trip", region: "Batangas", lat: 13.9411, lng: 121.1631, tags: ["Local Cuisine", "Shopping", "Nightlife"] },
   { name: "Batangas City Lomi Houses", region: "Batangas", lat: 13.7565, lng: 121.0583, tags: ["Local Cuisine"] },
 ];
@@ -1349,18 +1373,18 @@ const POPULAR_PH_SPOTS = [
   { name: "Laiya Beach, San Juan", region: "Batangas", lat: 13.6697, lng: 121.4022, interests: ["Beaches", "Water Sports", "Nightlife"] },
   { name: "Fortune Island, Nasugbu", region: "Batangas", lat: 14.0581, lng: 120.4956, interests: ["Island Hopping", "Beaches", "Photography", "Water Sports"] },
   { name: "Masasa Beach, Tingloy", region: "Batangas", lat: 13.6550, lng: 120.8960, interests: ["Beaches", "Island Hopping"] },
-  { name: "Taal Heritage Town", region: "Batangas", lat: 13.8800, lng: 120.9230, interests: ["Historical Sites", "Local Cuisine", "Photography", "Shopping"] },
+  { name: "Taal Heritage Town", region: "Batangas", lat: 13.8800, lng: 120.9230, interests: ["Pilgrimage", "Museums", "Local Cuisine", "Photography", "Shopping"] },
   { name: "Mount Batulao, Nasugbu", region: "Batangas", lat: 14.0400, lng: 120.8000, interests: ["Hiking", "Mountains"] },
   { name: "Mount Maculot, Cuenca", region: "Batangas", lat: 13.9200, lng: 121.0450, interests: ["Hiking", "Mountains", "Photography"] },
-  { name: "Cape Santiago Lighthouse, Calatagan", region: "Batangas", lat: 13.7660, lng: 120.6560, interests: ["Historical Sites", "Photography", "Beaches"] },
-  { name: "Malabrigo Lighthouse, Lobo", region: "Batangas", lat: 13.5960, lng: 121.2610, interests: ["Historical Sites", "Photography", "Beaches"] },
-  { name: "San Sebastian Cathedral, Lipa", region: "Batangas", lat: 13.9411, lng: 121.1631, interests: ["Historical Sites", "Photography"] },
+  { name: "Cape Santiago Lighthouse, Calatagan", region: "Batangas", lat: 13.7660, lng: 120.6560, interests: ["Photography", "Beaches"] },
+  { name: "Malabrigo Lighthouse, Lobo", region: "Batangas", lat: 13.5960, lng: 121.2610, interests: ["Photography", "Beaches"] },
+  { name: "San Sebastian Cathedral, Lipa", region: "Batangas", lat: 13.9411, lng: 121.1631, interests: ["Pilgrimage", "Photography"] },
   { name: "Nasugbu Beaches", region: "Batangas", lat: 14.0670, lng: 120.6330, interests: ["Beaches", "Water Sports"] },
   { name: "Pico de Loro, Nasugbu", region: "Batangas", lat: 14.2140, lng: 120.6400, interests: ["Hiking", "Mountains", "Photography"] },
   { name: "Mount Gulugod Baboy, Mabini", region: "Batangas", lat: 13.7180, lng: 120.9130, interests: ["Hiking", "Mountains", "Photography"] },
   { name: "Verde Island, Batangas City", region: "Batangas", lat: 13.5500, lng: 121.0700, interests: ["Water Sports", "Island Hopping", "Beaches"] },
   { name: "Calatagan Beaches", region: "Batangas", lat: 13.8320, lng: 120.6300, interests: ["Beaches", "Photography"] },
-  { name: "Lipa City", region: "Batangas", lat: 13.9411, lng: 121.1631, interests: ["Local Cuisine", "Shopping", "Historical Sites"], town: true },
+  { name: "Lipa City", region: "Batangas", lat: 13.9411, lng: 121.1631, interests: ["Local Cuisine", "Shopping", "Pilgrimage", "Museums"], town: true },
   { name: "Batangas City", region: "Batangas", lat: 13.7565, lng: 121.0583, interests: ["Local Cuisine", "Nightlife", "Shopping"], town: true },
 ];
 
@@ -1369,21 +1393,21 @@ const POPULAR_PH_SPOTS = [
 // spots above. Onboarding shows only what follows from the earlier answers, and Home
 // recommends places from the same answers.
 const TRAVEL_STYLE_OPTIONS = [
-  { name: "Adventure", detail: "Hikes, volcano treks and water sports", interests: ["Hiking", "Mountains", "Water Sports", "Island Hopping", "Photography"] },
+  { name: "Adventure", detail: "Hikes, volcano treks and water sports", interests: ["Hiking", "Water Sports", "Island Hopping", "Photography"] },
   { name: "Beach & Relaxation", detail: "White sand, clear water, slow days", interests: ["Beaches", "Island Hopping", "Water Sports", "Photography"] },
-  { name: "Cultural", detail: "Heritage towns, churches and history", interests: ["Historical Sites", "Local Cuisine", "Photography", "Shopping"] },
+  { name: "Pilgrimage", detail: "Churches, shrines and heritage towns", interests: ["Pilgrimage", "Museums", "Local Cuisine", "Photography", "Shopping"] },
   { name: "Food Tour", detail: "Lomi, bulalo, kapeng barako and more", interests: ["Local Cuisine", "Nightlife", "Shopping"] },
-  { name: "Nature & Wildlife", detail: "Mountains, reefs, islands and views", interests: ["Mountains", "Hiking", "Beaches", "Island Hopping", "Photography"] },
-  { name: "City Exploration", detail: "Town centers, shops and night spots", interests: ["Shopping", "Nightlife", "Local Cuisine", "Historical Sites"] },
+  { name: "Nature & Wildlife", detail: "Mountains, reefs, islands and views", interests: ["Hiking", "Beaches", "Island Hopping", "Photography"] },
+  { name: "City Exploration", detail: "Town centers, shops and night spots", interests: ["Shopping", "Nightlife", "Local Cuisine", "Museums"] },
 ];
 
 const INTEREST_OPTIONS = [
   { name: "Beaches", detail: "Laiya, Nasugbu, Calatagan, Masasa" },
   { name: "Island Hopping", detail: "Fortune Island, Verde Island, Tingloy" },
   { name: "Water Sports", detail: "Diving and snorkeling in Anilao" },
-  { name: "Hiking", detail: "Trails to Batulao, Maculot, Pico de Loro" },
-  { name: "Mountains", detail: "Taal Volcano and ridge views" },
-  { name: "Historical Sites", detail: "Taal Heritage Town, old churches, lighthouses" },
+  { name: "Hiking", detail: "Mountain trails and views: Batulao, Maculot, Taal Volcano" },
+  { name: "Pilgrimage", detail: "Old churches, shrines and Taal Heritage Town" },
+  { name: "Museums", detail: "Museums and galleries in Taal and Lipa" },
   { name: "Photography", detail: "Lighthouses, sunsets and viewpoints" },
   { name: "Local Cuisine", detail: "Batangas lomi, bulalo, kapeng barako" },
   { name: "Shopping", detail: "Pasalubong, embroidery and local crafts" },
@@ -1777,7 +1801,7 @@ function generateItinerary(prefs, { startDate = new Date() } = {}) {
   );
   if (travelTypes.includes("Beach & Relaxation")) typeBoost.add("Beaches");
   if (travelTypes.includes("Adventure")) typeBoost.add("Hiking");
-  if (travelTypes.includes("Cultural")) typeBoost.add("Historical Sites");
+  if (travelTypes.includes("Pilgrimage")) typeBoost.add("Pilgrimage");
   if (travelTypes.includes("Nature & Wildlife")) typeBoost.add("Nature & Wildlife");
   if (travelTypes.includes("City Exploration")) typeBoost.add("Shopping");
 
@@ -1810,7 +1834,7 @@ function generateItinerary(prefs, { startDate = new Date() } = {}) {
       const activityTitle = (() => {
         const tags = new Set(place.tags || []);
         if (tags.has("Local Cuisine")) return `Taste local favorites in ${place.region}`;
-        if (tags.has("Historical Sites")) return `Explore history around ${place.name}`;
+        if (tags.has("Pilgrimage")) return `Explore history around ${place.name}`;
         if (tags.has("Water Sports")) return `Try a water experience near ${place.name}`;
         if (tags.has("Hiking") || tags.has("Mountains")) return `A scenic walk with views of ${place.name}`;
         if (tags.has("Nightlife")) return `Evening vibes and relaxed stops near ${place.name}`;
@@ -1887,7 +1911,7 @@ function buildAssistantReply(userText, prefs) {
   const styleLine = (() => {
     if (travelTypes.includes("Food Tour")) return "For food, we can build a day around signature local spots and street bites.";
     if (travelTypes.includes("Adventure")) return "For adventure, I’ll focus on outdoor time and scenic routes.";
-    if (travelTypes.includes("Cultural")) return "For culture, we’ll prioritize neighborhoods, museums, and heritage walks.";
+    if (travelTypes.includes("Pilgrimage")) return "For a pilgrimage, we’ll prioritize old churches, shrines and heritage walks.";
     if (travelTypes.includes("Beach & Relaxation")) return "For beach mode, we’ll keep the plan flexible around water time and viewpoints.";
     return "We’ll tailor the plan to your vibe and keep it easy to follow.";
   })();
@@ -2002,6 +2026,7 @@ window.SidekickCore = {
   tripOverlapMessage,
   tripDateRange,
   tripDisplayName,
+  shortPlaceName,
   shortDateRangeText,
   getFinishedTripCopy,
   forgetFinishedTripCopies,
@@ -2011,6 +2036,7 @@ window.SidekickCore = {
   firstDayStartMinute,
   localDateValue,
   describeUnrealisticBudget,
+  describeTightBudget,
   tripBudgetKey,
 };
 
@@ -2081,9 +2107,11 @@ async function checkTripBudget({ destination, placeId = "", lat = null, lng = nu
     return { checked: true, realistic: false, tooHigh: true, budgetAmountPhp: amount, days, travelers: people, maximumPhp: MAX_BUDGET_PER_DAY_PHP * days * people };
   }
   try {
+    // v: the kind of answer (2: "not realistic" only below the lowest possible cost, and
+    // "tight" with the prices found), so answers saved on the phone before it aren't reused.
     const result = await apiRequest("/api/trip/budget-check", {
       method: "POST",
-      body: JSON.stringify({ destination, placeId, lat, lng, startDate, endDate, budgetAmountPhp, travelers: people }),
+      body: JSON.stringify({ destination, placeId, lat, lng, startDate, endDate, budgetAmountPhp, travelers: people, v: 2 }),
     });
     if (result && result.checked) tripBudgetResults.set(key, result);
     return result || null;
@@ -2180,21 +2208,82 @@ function describeUnrealisticBudget(result, destination) {
   }
   const meals = result.meals || {};
   const lodging = result.lodging || {};
-  const details = [["Your budget", peso(result.budgetAmountPhp)]];
-  if (lodging.needed && lodging.totalPhp > 0) {
-    const label = lodging.source === "researched" && lodging.name ? `Cheapest hotel found (${lodging.name})` : "Cheapest rooms";
-    const rooms = Number(lodging.rooms) || 1;
-    details.push([label, `${peso(lodging.nightlyLowPhp)} a night × ${lodging.nights} night${lodging.nights === 1 ? "" : "s"}${rooms > 1 ? ` × ${rooms} rooms` : ""}`]);
-  }
-  const mealLabel = meals.estimated ? "Basic meals" : `Cheapest meals found${meals.name ? ` (${meals.name})` : ""}`;
-  details.push([mealLabel, `${peso(meals.perMealPhp)} × ${meals.mealsPerDay || 2} a day × ${days} day${days === 1 ? "" : "s"}${people > 1 ? ` × ${people} people` : ""}`]);
-  details.push(["Lowest realistic cost", peso(result.minimumPhp)]);
+  const rooms = Number(lodging.rooms) || 1;
+  const nightsText = `${lodging.nights} night${lodging.nights === 1 ? "" : "s"}${rooms > 1 ? ` × ${rooms} rooms` : ""}`;
+  const mealsText = `${peso(meals.perMealPhp)} × ${meals.mealsPerDay || 2} a day × ${days} day${days === 1 ? "" : "s"}${people > 1 ? ` × ${people} people` : ""}`;
   const shorter = result.maxAffordableDays >= 1 && result.maxAffordableDays < days
     ? ` or shorten the trip to ${result.maxAffordableDays} day${result.maxAffordableDays === 1 ? "" : "s"}`
     : "";
+  // Below the lowest possible cost (the server's fixed floors for a basic meal and the
+  // cheapest room anywhere): no trip of this length fits, whatever is found nearby.
+  if (result.floor) {
+    const floorDetails = [["Your budget", peso(result.budgetAmountPhp)]];
+    if (lodging.needed && lodging.totalPhp > 0) floorDetails.push(["Cheapest possible room", `${peso(lodging.nightlyLowPhp)} a night × ${nightsText}`]);
+    floorDetails.push(["Basic meals", mealsText]);
+    floorDetails.push(["Lowest possible cost", peso(result.minimumPhp)]);
+    return {
+      title: "This budget isn't realistic",
+      message: `${peso(result.budgetAmountPhp)} can't cover ${days} day${days === 1 ? "" : "s"} in ${destination}${group}, even at the lowest possible prices (${peso(meals.perMealPhp)} for a basic meal${lodging.needed ? ` and ${peso(lodging.nightlyLowPhp)} a night for the cheapest room` : ""}). Raise your budget to at least ${peso(result.minimumPhp)}${shorter}.`,
+      details: floorDetails,
+    };
+  }
+  const details = [["Your budget", peso(result.budgetAmountPhp)]];
+  if (lodging.needed && lodging.totalPhp > 0) {
+    const label = lodging.source === "researched" && lodging.name ? `Cheapest hotel found (${lodging.name})` : "Cheapest rooms";
+    details.push([label, `${peso(lodging.nightlyLowPhp)} a night × ${nightsText}`]);
+  }
+  const mealLabel = meals.estimated ? "Basic meals" : `Cheapest meals found${meals.name ? ` (${meals.name})` : ""}`;
+  details.push([mealLabel, mealsText]);
+  details.push(["Lowest realistic cost", peso(result.minimumPhp)]);
   return {
     title: "This budget isn't realistic",
     message: `${peso(result.budgetAmountPhp)} isn't enough for ${days} day${days === 1 ? "" : "s"} in ${destination}${group}, even at the cheapest prices we found. Raise your budget to at least ${peso(result.minimumPhp)}${shorter}.`,
+    details,
+  };
+}
+
+// A budget the cheapest prices found don't cover, though a trip could cost less (the
+// server's result.tight): what was found and where each price comes from, for a notice the
+// traveler can go past ("Continue anyway").
+function describeTightBudget(result, destination) {
+  const peso = (amount) => `₱${Math.round(Number(amount) || 0).toLocaleString()}`;
+  const days = Number(result.days) || 1;
+  const people = normalizeTravelers(result.travelers);
+  const group = people > 1 ? ` for ${people} travelers` : "";
+  const meals = result.meals || {};
+  const lodging = result.lodging || {};
+  const rooms = Number(lodging.rooms) || 1;
+  const nightsText = `${lodging.nights} night${lodging.nights === 1 ? "" : "s"}${rooms > 1 ? ` × ${rooms} rooms` : ""}`;
+  const details = [["Your budget", peso(result.budgetAmountPhp)]];
+  if (lodging.needed && lodging.source === "researched" && lodging.name) {
+    details.push([`Cheapest room found (${lodging.name})`, `${peso(lodging.nightlyLowPhp)} a night × ${nightsText}`]);
+    // Checked: the page the price came from was opened and shows that amount.
+    details.push(["Room price from", lodging.checkedOn
+      ? `${lodging.checkedOn} (checked on the page)`
+      : `${lodging.sourceSite || "a web search"} (not checked)`]);
+  } else if (lodging.needed) {
+    details.push(["Cheapest possible room", `${peso(lodging.nightlyLowPhp)} a night × ${nightsText}`]);
+  }
+  // Google Maps lists a price band per person; "under ₱500" is counted as ₱250.
+  const band = meals.priceRange;
+  const bandText = band && Number(band.highPhp) > 0
+    ? (Number(band.lowPhp) > 0 ? `${peso(band.lowPhp)}–${peso(band.highPhp)}` : `under ${peso(band.highPhp)}`)
+    : "";
+  details.push([
+    meals.estimated ? "Basic meals (estimate)" : `Cheapest meals on Google Maps (${meals.name})`,
+    `${peso(meals.perMealPhp)} × ${meals.mealsPerDay || 2} a day × ${days} day${days === 1 ? "" : "s"}${people > 1 ? ` × ${people} people` : ""}${bandText ? ` (listed ${bandText} a person)` : ""}`,
+  ]);
+  details.push(["Estimated lowest cost", peso(result.estimatePhp)]);
+  const unpriced = Number(lodging.unpricedCount) || 0;
+  const cheaper = unpriced
+    ? ` ${unpriced} place${unpriced === 1 ? "" : "s"} to stay nearby ${unpriced === 1 ? "has" : "have"} no price online and may cost less.`
+    : "";
+  const covers = result.maxAffordableDays >= 1 && result.maxAffordableDays < days
+    ? ` At these prices your budget covers about ${result.maxAffordableDays} day${result.maxAffordableDays === 1 ? "" : "s"}.`
+    : "";
+  return {
+    title: "Your budget looks tight",
+    message: `The cheapest prices we found for ${days} day${days === 1 ? "" : "s"} in ${destination}${group} add up to about ${peso(result.estimatePhp)}, more than your ${peso(result.budgetAmountPhp)}.${covers}${cheaper} You can still build this trip, or change your budget.`,
     details,
   };
 }
@@ -2854,6 +2943,147 @@ if (document.readyState === "loading") {
     } catch (e) {}
   }
 
+  // ---- In-app reminder panel ------------------------------------------------------
+  // Reminders that go off while the app is open show in one themed panel (theme.css,
+  // .sk-popup-*): each with the activity's name, when it happens and where, its own
+  // "Turn off" and ×, and "Dismiss all". More reminders join the same list (soonest
+  // first), which scrolls when long; the panel closes when the last one is dismissed.
+  // Text is set with textContent (never as HTML).
+  const reminderStack = { root: null, list: null, count: null };
+
+  function reminderWhenText(reminder) {
+    const at = Number(reminder.parentDueAt || reminder.dueAt || 0);
+    if (!at) return '';
+    const date = new Date(at);
+    const day = date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+    const time = date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+    return `${day} · ${time}`;
+  }
+
+  // The place for a trip activity (its note is "place • budget"); a reminder the
+  // traveler wrote keeps its own note.
+  function reminderPlaceText(reminder) {
+    const note = String(reminder.note || '').trim();
+    if (reminder.type === 'Itinerary') return note.split(' • ')[0].replace(/\s*•\s*$/, '').trim();
+    return note;
+  }
+
+  function closeReminderStack() {
+    if (!reminderStack.root) return;
+    document.removeEventListener('keydown', onReminderStackKey, true);
+    reminderStack.root.remove();
+    reminderStack.root = null;
+    reminderStack.list = null;
+    reminderStack.count = null;
+  }
+
+  function onReminderStackKey(event) {
+    if (event.key === 'Escape' && reminderStack.root) {
+      event.preventDefault();
+      closeReminderStack();
+    }
+  }
+
+  function updateReminderStackCount() {
+    const total = reminderStack.list ? reminderStack.list.children.length : 0;
+    if (!total) { closeReminderStack(); return; }
+    if (reminderStack.count) reminderStack.count.textContent = total > 1 ? String(total) : '';
+    const all = reminderStack.root?.querySelector('[data-reminder-dismiss-all]');
+    if (all) all.textContent = total > 1 ? 'Dismiss all' : 'Dismiss';
+  }
+
+  function ensureReminderStack() {
+    if (reminderStack.root && reminderStack.root.isConnected) return reminderStack;
+    const root = document.createElement('div');
+    root.className = 'sk-dialog sk-popup-stack';
+    root.innerHTML = `
+      <div class="sk-dialog-backdrop"></div>
+      <div class="sk-dialog-panel sk-popup-panel" role="dialog" aria-modal="true" aria-labelledby="sk-popup-title">
+        <div class="sk-popup-head">
+          <h2 class="sk-dialog-title" id="sk-popup-title">Reminders</h2>
+          <span class="sk-popup-count" aria-label="Number of reminders"></span>
+        </div>
+        <ul class="sk-popup-list" aria-live="polite"></ul>
+        <div class="sk-dialog-actions">
+          <button type="button" class="btn btn-primary" data-reminder-dismiss-all>Dismiss</button>
+        </div>
+      </div>`;
+    root.querySelector('[data-reminder-dismiss-all]').addEventListener('click', closeReminderStack);
+    document.body.appendChild(root);
+    document.addEventListener('keydown', onReminderStackKey, true);
+    reminderStack.root = root;
+    reminderStack.list = root.querySelector('.sk-popup-list');
+    reminderStack.count = root.querySelector('.sk-popup-count');
+    return reminderStack;
+  }
+
+  function showReminderInStack(reminder, email) {
+    if (!reminder || !document.body) return;
+    const stack = ensureReminderStack();
+    const id = String(reminder.id || '');
+    // The same reminder twice (scheduled again) shows once.
+    if (id && Array.from(stack.list.children).some((item) => item.dataset.reminderId === id)) return;
+
+    const item = document.createElement('li');
+    item.className = 'sk-popup-item';
+    item.dataset.reminderId = id;
+    item.dataset.at = String(Number(reminder.parentDueAt || reminder.dueAt || 0));
+
+    const text = document.createElement('div');
+    text.className = 'sk-popup-text';
+    const name = document.createElement('strong');
+    name.className = 'sk-popup-name';
+    name.textContent = reminder.title || 'Sidekick reminder';
+    text.appendChild(name);
+    const when = reminderWhenText(reminder);
+    if (when) {
+      const whenEl = document.createElement('span');
+      whenEl.className = 'sk-popup-when';
+      whenEl.textContent = when;
+      text.appendChild(whenEl);
+    }
+    const details = [reminder.offsetLabel ? String(reminder.offsetLabel) : '', reminderPlaceText(reminder)].filter(Boolean).join(' · ');
+    if (details) {
+      const detailEl = document.createElement('span');
+      detailEl.className = 'sk-popup-detail';
+      detailEl.textContent = details;
+      text.appendChild(detailEl);
+    }
+
+    const actions = document.createElement('div');
+    actions.className = 'sk-popup-actions';
+    const offBtn = document.createElement('button');
+    offBtn.type = 'button';
+    offBtn.className = 'sk-popup-off';
+    offBtn.textContent = 'Turn off';
+    offBtn.setAttribute('aria-label', `Turn off reminders for ${name.textContent}`);
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'sk-popup-close';
+    closeBtn.textContent = '×';
+    closeBtn.setAttribute('aria-label', `Dismiss ${name.textContent}`);
+    offBtn.addEventListener('click', () => {
+      try { setReminderSuppressed(email, reminder.id, true); } catch (e) {}
+      item.remove();
+      updateReminderStackCount();
+    });
+    closeBtn.addEventListener('click', () => {
+      item.remove();
+      updateReminderStackCount();
+    });
+    actions.appendChild(offBtn);
+    actions.appendChild(closeBtn);
+
+    item.appendChild(text);
+    item.appendChild(actions);
+    // Soonest activity first.
+    const at = Number(item.dataset.at);
+    const after = Array.from(stack.list.children).find((other) => Number(other.dataset.at) > at);
+    stack.list.insertBefore(item, after || null);
+    updateReminderStackCount();
+    stack.root.querySelector('[data-reminder-dismiss-all]')?.focus({ preventScroll: true });
+  }
+
   // Enhanced trigger function with Capacitor LocalNotifications support
   function triggerReminder(reminder, email) {
     try {
@@ -2875,74 +3105,8 @@ if (document.readyState === "loading") {
       if (prefs.soundEnabled) playNotificationTone();
     } catch (e) {}
 
-    // Show in-app overlay
-    try {
-      const overlay = document.createElement('div');
-      overlay.style.position = 'fixed';
-      overlay.style.left = '0';
-      overlay.style.top = '0';
-      overlay.style.width = '100%';
-      overlay.style.height = '100%';
-      overlay.style.zIndex = 99999;
-      overlay.style.display = 'flex';
-      overlay.style.alignItems = 'center';
-      overlay.style.justifyContent = 'center';
-      overlay.style.background = 'rgba(0,0,0,0.45)';
-
-      const card = document.createElement('div');
-      card.style.background = '#fff';
-      card.style.padding = '20px';
-      card.style.borderRadius = '12px';
-      card.style.maxWidth = '420px';
-      card.style.width = '90%';
-      card.style.boxShadow = '0 8px 32px rgba(0,0,0,0.2)';
-
-      const h = document.createElement('div');
-      h.style.fontSize = '18px';
-      h.style.fontWeight = 600;
-      h.style.marginBottom = '6px';
-      h.style.color = '#2C3E50';
-      h.textContent = reminder.title || 'Sidekick Alert';
-      
-      const p = document.createElement('div');
-      p.style.color = '#374151';
-      p.style.marginBottom = '12px';
-      p.style.fontSize = '14px';
-      p.textContent = reminder.note || reminder.type || '';
-
-      const btnRow = document.createElement('div');
-      btnRow.style.display = 'flex';
-      btnRow.style.gap = '8px';
-      btnRow.style.justifyContent = 'flex-end';
-      
-      const offBtn = document.createElement('button');
-      offBtn.textContent = 'Turn off';
-      offBtn.className = 'btn btn-outline';
-      offBtn.style.padding = '8px 12px';
-      offBtn.style.fontSize = '14px';
-      
-      const okBtn = document.createElement('button');
-      okBtn.textContent = 'Dismiss';
-      okBtn.className = 'btn btn-primary';
-      okBtn.style.padding = '8px 12px';
-      okBtn.style.fontSize = '14px';
-
-      offBtn.onclick = () => {
-        try { setReminderSuppressed(email, reminder.id, true); } catch (e) {}
-        try { document.body.removeChild(overlay); } catch (e) {}
-      };
-      okBtn.onclick = () => {
-        try { document.body.removeChild(overlay); } catch (e) {}
-      };
-
-      btnRow.appendChild(offBtn);
-      btnRow.appendChild(okBtn);
-      card.appendChild(h);
-      card.appendChild(p);
-      card.appendChild(btnRow);
-      overlay.appendChild(card);
-      document.body.appendChild(overlay);
-    } catch (e) {}
+    // Show it in the in-app reminder panel (one panel; several reminders stack in it).
+    try { showReminderInStack(reminder, email); } catch (e) {}
 
     // Mark as fired
     try {

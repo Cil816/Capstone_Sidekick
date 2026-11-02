@@ -1,7 +1,3 @@
-# Builds deploy\sidekick.zip, the file you upload to S3 for the servers.
-# Leaves out secrets (backend\.env), local-only configs, and node_modules.
-# Run from anywhere:  powershell -ExecutionPolicy Bypass -File deploy\package.ps1
-
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $stage = Join-Path $env:TEMP 'sidekick-package'

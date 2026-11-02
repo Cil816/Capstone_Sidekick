@@ -101,7 +101,8 @@ function buildPreferenceKeywords(prefs, searchQuery = "") {
   const byInterest = {
     Beaches: "famous beaches",
     Hiking: "hiking trails and peaks",
-    "Historical Sites": "historical landmarks",
+    Pilgrimage: "historic churches and heritage landmarks",
+    Museums: "museums and galleries",
     "Local Cuisine": "food heritage towns and night food markets",
     Nightlife: "night markets and sunset viewpoints",
     Shopping: "heritage towns and local crafts",
@@ -115,7 +116,7 @@ function buildPreferenceKeywords(prefs, searchQuery = "") {
   const byTravelType = {
     "Food Tour": "cultural heritage attractions",
     Adventure: "adventure attractions",
-    Cultural: "heritage sites",
+    Pilgrimage: "heritage churches and shrines",
     "Beach & Relaxation": "famous beaches",
     "Nature & Wildlife": "nature attractions",
     "City Exploration": "city landmarks",
@@ -146,10 +147,10 @@ function normalizeRegion(rawAddress) {
 function extractTags(types) {
   const map = {
     tourist_attraction: "Tourist Attraction",
-    landmark: "Historical Sites",
-    museum: "Historical Sites",
-    church: "Historical Sites",
-    historical_landmark: "Historical Sites",
+    landmark: "Pilgrimage",
+    museum: "Museums",
+    church: "Pilgrimage",
+    historical_landmark: "Pilgrimage",
     park: "Nature & Wildlife",
     natural_feature: "Nature & Wildlife",
     beach: "Beaches",
@@ -236,7 +237,8 @@ function preferenceScore(place, prefs) {
   const interestSignals = {
     "beaches": { words: ["beach", "island", "coast", "surf", "snorkel", "diving"], types: ["beach", "island", "surfing_school"] },
     "hiking": { words: ["hiking", "trail", "mountain", "falls", "volcano", "trek"], types: ["hiking_area", "mountain_peak", "national_park", "waterfall"] },
-    "historical sites": { words: ["historical", "history", "heritage", "museum", "landmark", "church", "fort"], types: ["museum", "church", "historical_landmark", "landmark"] },
+    "pilgrimage": { words: ["historical", "history", "heritage", "landmark", "church", "basilica", "shrine", "cathedral", "fort"], types: ["church", "place_of_worship", "historical_landmark", "landmark"] },
+    "museums": { words: ["museum", "gallery", "exhibit"], types: ["museum", "art_gallery"] },
     "local cuisine": { words: ["food", "restaurant", "market", "cuisine", "food walk"], types: ["restaurant", "food", "market", "meal_takeaway"] },
     "nightlife": { words: ["nightlife", "bar", "club", "entertainment", "night market"], types: ["bar", "night_club"] },
     "shopping": { words: ["shopping", "market", "mall", "souvenir"], types: ["shopping_mall", "market"] },
@@ -248,10 +250,10 @@ function preferenceScore(place, prefs) {
   const typeSignals = {
     "food tour": ["local cuisine"],
     adventure: ["hiking", "water sports", "mountains"],
-    cultural: ["historical sites"],
+    pilgrimage: ["pilgrimage", "museums"],
     "beach & relaxation": ["beaches", "nature & wildlife"],
     "nature & wildlife": ["nature & wildlife", "hiking", "mountains"],
-    "city exploration": ["historical sites", "shopping", "local cuisine"],
+    "city exploration": ["museums", "shopping", "local cuisine"],
   };
   const matchesSignal = (key) => {
     const signal = interestSignals[key];
@@ -1041,6 +1043,16 @@ async function generateFocusedItinerary(place, prefs, session) {
     budgetInput?.focus();
     return;
   }
+  // Possible but tight at the cheapest prices found: they are shown with where they come
+  // from, and the traveler decides.
+  if (budgetCheck?.checked && budgetCheck.tight && window.SidekickCore.describeTightBudget) {
+    const notice = window.SidekickCore.describeTightBudget(budgetCheck, place.name);
+    const goOn = await window.SidekickUI.confirm(notice.message, { title: notice.title, details: notice.details, confirmText: "Continue anyway", cancelText: "Edit my trip" });
+    if (!goOn) {
+      budgetInput?.focus();
+      return;
+    }
+  }
 
   try {
     sessionStorage.setItem(PENDING_BUILD_KEY, JSON.stringify({
@@ -1441,10 +1453,10 @@ document.addEventListener("DOMContentLoaded", async () => {
       suggestionTimer = setTimeout(async () => {
         try {
           const data = await window.SidekickCore.apiRequest("/api/maps/place-suggestions", {
-            method: "POST", body: JSON.stringify({ input: query, sessionToken }),
+            method: "POST", body: JSON.stringify({ input: query, sessionToken, v: 3 }),
           });
           if (requestId !== suggestionRequestId || searchInput.value.trim() !== query) return;
-          const suggestions = (data.suggestions || []).filter((item) => item?.placeId && item?.name).slice(0, 6);
+          const suggestions = (data.suggestions || []).filter((item) => item?.placeId && item?.name).slice(0, 8);
           suggestions.forEach((suggestion, index) => {
             const option = document.createElement("button");
             option.type = "button";

@@ -41,11 +41,12 @@
     padding: 24px;
 }
 
-/* Ensure content sections have enough bottom space on smaller screens */
+/* The page (.app-container) already keeps clear of the bottom nav; this is only a small gap. */
 @media (max-width: 420px) {
-    /* use runtime-measured bottom overlay height when available */
-    .itinerary-content { padding-bottom: calc(var(--bottom-overlay-height, var(--nav-height)) + var(--sk-safe-bottom, env(safe-area-inset-bottom)) + 22px); }
+    .itinerary-content { padding-bottom: 16px; }
 }
+/* No extra gap after the last card (the trip route or the last day). */
+.itinerary-content > .day-section:last-child { margin-bottom: 0; }
 
 .day-section {
     margin-bottom: 32px;
@@ -218,22 +219,26 @@
     line-height: 1.35;
 }
 
-/* Ensure final action buttons are visible above fixed bottom navs */
+/* The page already keeps clear of the bottom nav (.app-container). */
 .itinerary-content > .add-activity-btn {
-    margin-bottom: calc(var(--bottom-overlay-height, var(--nav-height)) + var(--sk-safe-bottom, env(safe-area-inset-bottom)) + 14px);
+    margin-bottom: 14px;
 }
 
 /* Place search and interactive Google map */
 .itinerary-builder-fields {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    align-items: end;
+    /* Top-aligned: a hint under one field (Travelers) doesn't push its pair out of line. */
+    align-items: start;
     gap: 10px 12px;
 }
 
 .itinerary-field { display: grid; min-width: 0; gap: 5px; }
 .itinerary-field input { width: 100%; min-width: 0; box-sizing: border-box; }
 .itinerary-field-destination { position: relative; z-index: 5; }
+/* Starting and ending locations: their suggestions open over the fields below. */
+.itinerary-field-location { position: relative; }
+.itinerary-field-location:focus-within { z-index: 6; }
 .destination-suggestions { position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 20; overflow: hidden; border: 1px solid #d6e2ee; border-radius: 12px; background: #fff; box-shadow: 0 14px 32px rgba(28, 55, 83, .18); }
 .destination-suggestions[hidden], .destination-suggestions-attribution[hidden] { display: none; }
 .destination-suggestion { display: flex; align-items: flex-start; gap: 10px; width: 100%; padding: 10px 12px; border: 0; border-bottom: 1px solid #eef2f6; background: #fff; color: var(--itinerary-ink, #163457); text-align: left; cursor: pointer; }
@@ -424,6 +429,23 @@
 .itinerary-budget-summary h2 { margin: 0 0 6px; color: var(--itinerary-ink); font-size: 17px; }
 .itinerary-budget-total { margin: 0 0 8px; color: #0f766e; font-size: 19px; font-weight: 750; }
 .itinerary-budget-note { margin: 4px 0; color: var(--itinerary-muted); font-size: 12px; line-height: 1.5; }
+.itinerary-budget-fit { margin: 4px 0; color: var(--itinerary-ink); font-size: 13px; line-height: 1.45; }
+.itinerary-budget-details { margin-top: 8px; }
+/* Whole-trip cost lines (trip-cost.js): amount, where it comes from, and the traveler's own amount. */
+.itinerary-budget-fit.is-over { font-weight: 700; }
+.itinerary-budget-suggestions { margin: 6px 0 0; padding-left: 18px; color: var(--itinerary-ink); font-size: 13px; line-height: 1.45; }
+.itinerary-cost-rows { display: grid; gap: 10px; margin: 8px 0 12px; padding: 0; list-style: none; }
+.itinerary-cost-row { display: grid; gap: 3px; }
+.itinerary-cost-row small { color: var(--itinerary-muted); font-size: 12px; line-height: 1.45; }
+.itinerary-cost-line { display: flex; justify-content: space-between; gap: 12px; color: var(--itinerary-ink); font-size: 13px; }
+.itinerary-cost-line strong { text-align: right; white-space: nowrap; }
+.itinerary-cost-basis { font-weight: 700; }
+.itinerary-cost-row.is-unknown .itinerary-cost-line strong { color: var(--itinerary-muted); font-weight: 600; }
+.itinerary-cost-edit { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 2px; }
+.itinerary-cost-edit input { width: 9.5em; min-height: 36px; padding: 6px 10px; border: 1px solid currentColor; border-radius: 10px; background: transparent; color: var(--itinerary-ink); font: inherit; font-size: 13px; opacity: 0.85; }
+.itinerary-cost-edit .btn-sm { min-height: 36px; padding: 6px 12px; font-size: 13px; }
+.itinerary-budget-details > summary { padding: 6px 0; color: var(--itinerary-blue); font-size: 13px; font-weight: 700; cursor: pointer; list-style-position: inside; }
+.itinerary-budget-details > summary:focus-visible { outline: 2px solid var(--itinerary-blue); outline-offset: 3px; border-radius: 4px; }
 .itinerary-budget-categories { display: grid; gap: 7px; margin: 12px 0; }
 .itinerary-budget-category { display: flex; justify-content: space-between; gap: 12px; color: var(--itinerary-ink); font-size: 13px; }
 .itinerary-budget-category strong { text-align: right; }
@@ -451,12 +473,12 @@
 .add-activity-btn { border-color: #b9cbe0; background: rgba(255, 255, 255, .5); color: var(--itinerary-blue); }
 .add-activity-btn:hover { background: linear-gradient(135deg, rgba(107, 140, 174, .08), rgba(154, 155, 210, .1)); }
 #place-search { border-color: #d7e2ee !important; background: #fff; color: var(--itinerary-ink); outline: none; transition: border-color .2s ease; }
-#place-search:focus, #itinerary-destination:focus, #itinerary-name:focus, #itinerary-origin:focus, #itinerary-start:focus, #itinerary-end:focus, #itinerary-budget:focus, #itinerary-travelers:focus { border-color: var(--itinerary-blue) !important; box-shadow: 0 0 0 4px rgba(67, 191, 208, .14); outline: none; }
+#place-search:focus, #itinerary-destination:focus, #itinerary-name:focus, #itinerary-origin:focus, #itinerary-end-location:focus, #itinerary-start:focus, #itinerary-end:focus, #itinerary-budget:focus, #itinerary-travelers:focus { border-color: var(--itinerary-blue) !important; box-shadow: 0 0 0 4px rgba(67, 191, 208, .14); outline: none; }
 #map { border-radius: 16px !important; background: linear-gradient(135deg, #edf3fa, #f8f7ff); box-shadow: inset 0 0 0 1px rgba(211, 222, 235, .8), 0 8px 18px rgba(52, 76, 104, .06); }
 
 #itinerary-builder { border-bottom: 0 !important; padding: 18px 0 12px !important; background: linear-gradient(135deg, rgba(238, 245, 252, .95), rgba(247, 245, 253, .95)); border: 1px solid #dfe8f1; border-radius: 18px; margin-bottom: 8px; }
 #itinerary-builder > div:first-child { padding-left: 16px; padding-right: 16px; }
-#itinerary-destination, #itinerary-name, #itinerary-origin, #itinerary-start, #itinerary-end, #itinerary-budget, #itinerary-travelers { min-height: 42px; width: 100%; box-sizing: border-box; padding: 0 11px; border: 1px solid #d7e2ee; border-radius: 11px; background: #fff; color: var(--itinerary-ink); }
+#itinerary-destination, #itinerary-name, #itinerary-origin, #itinerary-end-location, #itinerary-start, #itinerary-end, #itinerary-budget, #itinerary-travelers { min-height: 42px; width: 100%; box-sizing: border-box; padding: 0 11px; border: 1px solid #d7e2ee; border-radius: 11px; background: #fff; color: var(--itinerary-ink); }
 #no-itinerary-message { margin: 12px 0 22px; padding: 28px 22px !important; border: 1px solid #e0e8f1; border-radius: 18px; background: linear-gradient(135deg, #f7faff, #fbf9ff); color: var(--itinerary-muted) !important; text-align: center; }
 
 @media (max-width: 420px) {
@@ -539,12 +561,23 @@
 .itinerary-edit-bar { display: flex; flex-direction: column; gap: 8px; margin: 10px 0 4px; padding-left: 34px; }
 .itinerary-edit-bar[hidden] { display: none; }
 .itinerary-title-text { font-size: 15px; color: var(--itinerary-ink, #163457); overflow-wrap: anywhere; }
+/* Under its own row in Planned trips, which already shows the trip’s name. */
+.active-trip-view.is-in-list .itinerary-title-text { display: none; }
 .itinerary-edit-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .itinerary-edit-chip { padding: 7px 12px; border: 1px solid #d7e2ee; border-radius: 999px; background: #fff; color: var(--itinerary-blue, #2c91b0); font-size: 12px; font-weight: 650; cursor: pointer; }
 .itinerary-edit-chip.primary { background: var(--itinerary-blue, #2c91b0); border-color: var(--itinerary-blue, #2c91b0); color: #fff; }
 .itinerary-edit-link { border: none; background: none; padding: 4px 0; color: var(--itinerary-blue, #2c91b0); font-size: 12px; font-weight: 650; cursor: pointer; }
 .itinerary-edit-link.danger { color: #b15e6d; }
 .day-edit-actions { margin-top: 2px; }
+/* A day whose times no longer work (itinerary-edit.js dayProblems). */
+/* A development-mode trip: test data, said at the top (itinerary.js renderItinerary). */
+.itinerary-sample-notice { margin: 0 0 12px; padding: 10px 12px; border-left: 4px solid #c0392b; border-radius: 10px; background: rgba(192, 57, 43, .08); color: var(--itinerary-ink); font-size: 13px; line-height: 1.45; }
+/* What to confirm before a stop (trip-cost.js stopChecks). */
+.activity-checks { margin-top: 8px; padding: 8px 10px; border-radius: 10px; background: rgba(208, 138, 30, .08); color: var(--itinerary-ink); font-size: 12px; line-height: 1.45; }
+.activity-checks ul { margin: 4px 0 0; padding-left: 16px; }
+.activity-checks li + li { margin-top: 2px; }
+.day-schedule-warning .itinerary-edit-link { margin-left: 4px; font-weight: 700; }
+.day-schedule-warning { margin: 8px 0; padding: 10px 12px; border-left: 4px solid #d08a1e; border-radius: 10px; background: rgba(208, 138, 30, .1); color: var(--itinerary-ink); font-size: 13px; line-height: 1.45; }
 .activity-edit-actions { display: flex; gap: 16px; margin-top: 8px; padding-top: 6px; border-top: 1px dashed #e4ecf2; }
 .day-add-row { margin-top: 4px; }
 
@@ -591,7 +624,53 @@
 .budget-picker-actions.is-pair { flex-wrap: nowrap; }
 .budget-picker-actions.is-pair .btn { flex: 1 1 0; }
 .budget-picker-actions .btn:disabled { opacity: .5; cursor: not-allowed; }
-.day-add-row { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* Choosing stops before building: one of up to three places per stop */
+.stop-day-label { margin: 10px 0 0; font-size: 15px; font-weight: 800; color: var(--itinerary-ink, #163457); }
+.stop-choice { margin: 12px 0 4px; }
+.stop-choice h4 { margin: 0 0 6px; font-size: 13px; font-weight: 700; color: var(--itinerary-muted, #668096); }
+.stop-option { align-items: center; gap: 10px; }
+.stop-option:disabled { opacity: .55; cursor: not-allowed; }
+/* Each option with its Details button (budget-pickers.js): the card picks, Details compares. */
+.stop-option-row { position: relative; }
+.stop-option-row .stop-option { padding-bottom: 30px; }
+.stop-option-info { position: absolute; right: 10px; bottom: 8px; padding: 4px 10px; border: 1px solid #cfe6ec; border-radius: 999px; background: #fff; color: var(--itinerary-blue, #2c91b0); font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
+.stop-option-info:hover { border-color: var(--itinerary-blue, #2c91b0); }
+.stop-option-info:focus-visible { outline: 2px solid var(--itinerary-blue, #2c91b0); outline-offset: 2px; }
+.stop-option-area { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stop-option-photo { width: 52px; height: 52px; flex: none; border-radius: 10px; object-fit: cover; background: #eef4f8; }
+/* Removing, restoring and adding stops */
+.stop-choice-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 0 6px; }
+.stop-choice-head h4 { margin: 0; }
+.stop-choice-toggle { flex: none; padding: 4px 10px; border: 1px solid #d7e2ee; border-radius: 999px; background: #fff; color: var(--itinerary-blue, #2c91b0); font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
+.stop-choice-toggle:hover { border-color: #9bdde2; }
+.stop-choice.removed .stop-choice-head h4 { text-decoration: line-through; }
+.stop-choice-removed { margin: 0; padding: 10px 12px; border: 1px dashed #d7e2ee; border-radius: 12px; font-size: 13px; color: var(--itinerary-muted, #668096); }
+.stop-add-open { display: block; width: 100%; margin: 14px 0 4px; padding: 11px 12px; border: 1px dashed #9bdde2; border-radius: 12px; background: #f6fcfc; color: var(--itinerary-blue, #2c91b0); font: inherit; font-size: 14px; font-weight: 700; cursor: pointer; }
+.stop-add-input { width: 100%; min-height: 42px; box-sizing: border-box; padding: 0 11px; border: 1px solid #d7e2ee; border-radius: 11px; background: #fff; color: var(--itinerary-ink, #163457); font: inherit; }
+.stop-add-input:focus { border-color: var(--itinerary-blue, #2c91b0); outline: none; box-shadow: 0 0 0 4px rgba(67, 191, 208, .14); }
+.stop-add-status { margin: 6px 0; font-size: 12px; color: var(--itinerary-muted, #668096); }
+.stop-add-status:empty { display: none; }
+#stop-add-results { display: flex; flex-direction: column; gap: 6px; }
+/* Searching for another place for one stop */
+.stop-search-open { display: inline-flex; align-items: center; margin: 8px 0 0; padding: 6px 12px; border: 1px dashed #9bdde2; border-radius: 999px; background: #f6fcfc; color: var(--itinerary-blue, #2c91b0); font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; }
+.stop-search { margin: 8px 0 0; padding: 10px; border: 1px solid #d7e2ee; border-radius: 12px; background: #fbfdfe; }
+.stop-search-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 0 8px; font-size: 13px; font-weight: 700; color: var(--itinerary-muted, #668096); }
+#stop-search-results { display: flex; flex-direction: column; gap: 6px; }
+.stop-option-tag { align-self: flex-start; padding: 1px 8px; border-radius: 999px; background: #e7f6f8; color: var(--itinerary-blue, #2c91b0); font-size: 11px; font-weight: 800; }
+
+/* Day tabs: on the itinerary (pinned while scrolling) and in the stop picker */
+.day-tabs { display: flex; gap: 8px; overflow-x: auto; padding: 8px 2px; margin: 0 0 12px; scrollbar-width: none; }
+.day-tabs::-webkit-scrollbar { display: none; }
+.itinerary-content > .day-tabs { position: sticky; top: 0; z-index: 6; background: rgba(247, 251, 252, .94); backdrop-filter: blur(6px); border-radius: 14px; }
+.day-tab { flex: none; padding: 8px 16px; border: 1px solid #d7e2ee; border-radius: 999px; background: #fff; color: #668096; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; }
+.day-tab.active { background: var(--itinerary-blue, #2c91b0); border-color: var(--itinerary-blue, #2c91b0); color: #fff; }
+.day-section { scroll-margin-top: 64px; }
+.day-add-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 6px; }
+/* A stop's Edit and Remove: buttons with room around them, not text on the card's edge */
+.activity-edit-actions { gap: 8px; margin-top: 12px; padding-top: 12px; }
+.activity-edit-actions .itinerary-edit-link { display: inline-flex; align-items: center; min-height: 32px; padding: 0 16px; border: 1px solid #d7e2ee; border-radius: 999px; background: #fff; }
+.activity-edit-actions .itinerary-edit-link.danger { border-color: #f1c7cd; }
 
 /* Budget-ranked hotels and restaurants */
 .stay-eat-text small.stay-eat-meta { white-space: normal; }

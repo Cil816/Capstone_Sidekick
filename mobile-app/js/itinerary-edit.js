@@ -10,7 +10,7 @@
   const MAX_PER_DAY = 30;
   const DAY_MS = 86400000;
   const SLOT_HOURS = { Morning: 9, Afternoon: 14, Evening: 18, Night: 21 };
-  const ROUTE_FIELDS = ["travelDistanceKm", "travelMinutes", "transportMode", "routeStatus", "routeNoneKey", "routeRetryKey", "routeRetryAfter"];
+  const ROUTE_FIELDS = ["travelDistanceKm", "travelMinutes", "transportMode", "routeStatus", "routeSource", "routeNoneKey", "routeRetryKey", "routeRetryAfter"];
 
   let current = null;
   let activeForm = null;
@@ -190,12 +190,23 @@
   }
 
   function finish() {
+    current.itinerary.forEach((day, dayIndex) => repairBreaks(dayIndex));
     const owner = email();
     try {
       setItineraryForEmail(owner, current);
     } catch (error) {
+      // Nothing was saved, so the trip goes back to its last saved state (in place: the
+      // itinerary screen shares this object), matching what the screen still shows.
+      try {
+        const saved = typeof getItineraryForEmail === "function" ? getItineraryForEmail(owner) : null;
+        if (saved && Array.isArray(saved.itinerary) && saved !== current) {
+          const copy = JSON.parse(JSON.stringify(saved));
+          current.itinerary = copy.itinerary;
+          current.meta = copy.meta;
+        }
+      } catch (restoreError) { /* keeps the unsaved copy; the alert still says it isn't saved */ }
       window.SidekickUI.alert("Your changes could not be saved on this device. Free up some storage and try again.", { title: "Not saved" });
-      return;
+      return false;
     }
     try { updateHeaderDate(null, current); } catch (error) {}
     if (typeof setActiveTravelers === "function") setActiveTravelers(current.meta);
@@ -210,7 +221,9 @@
   }
 
   // ---- title / action bar -----------------------------------------------------
+  // The same name as in the Planned trips list (core's tripDisplayName).
   function displayTitle() {
+    if (core().tripDisplayName) return core().tripDisplayName(current);
     const custom = String(current?.meta?.title || "").trim();
     if (custom) return custom;
     const destination = String(current?.meta?.destination || current?.meta?.focusedPlace || "").trim();
@@ -395,7 +408,7 @@
           body: JSON.stringify({ input: text, sessionToken, scope: "activity", ...(near ? { near } : {}) }),
         });
         if (id !== requestId) return; // a newer search is on its way
-        const suggestions = Array.isArray(data?.suggestions) ? data.suggestions.slice(0, 5) : [];
+        const suggestions = Array.isArray(data?.suggestions) ? data.suggestions.slice(0, 3) : [];
         status.textContent = suggestions.length ? "" : "No places found. You can keep the name you typed.";
         results.replaceChildren(...suggestions.map((suggestion) => {
           const button = document.createElement("button");
@@ -612,10 +625,18 @@
         if (planError) return planError;
         if (!(await confirmSamePlace(activity))) return null;
         ensureIds();
+        activity.fixedTime = true;
+        const snapshot = JSON.stringify(current);
         const before = previousMap();
         current.itinerary[safeDay].activities = [...(current.itinerary[safeDay].activities || []), activity];
-        if (!normalizeAndReset(before, new Set([activity.id]))) return "Could not add this activity.";
-        finish();
+        if (!normalizeAndReset(before, new Set([activity.id]))) {
+          const saved = JSON.parse(snapshot);
+          current.itinerary = saved.itinerary;
+          current.meta = saved.meta;
+          return "Could not add this activity. Nothing was changed.";
+        }
+        if (finish() === false) return "";
+        await reportDayProblems(activity);
         return "";
       },
     });
@@ -626,12 +647,18 @@
     if (!activity) return;
     const originalDueAt = activityDueAt(activity, dayIndex);
     const originalLocation = String(activity.location || "");
+    const originalDuration = Number(activity.durationMinutes) > 0 ? Number(activity.durationMinutes) : null;
     openForm({
       title: "Edit activity",
       fields: [
         { name: "title", label: "Activity", type: "text", required: true, maxLength: 200, value: activity.title || "" },
         { name: "date", label: "Date", type: "date", required: true, value: dateValue(originalDueAt), min: [tripDateLimits().min, dateValue(originalDueAt)].sort()[0], max: tripDateLimits().max },
         { name: "time", label: "Time", type: "time", required: true, value: timeValue(originalDueAt) },
+        {
+          name: "duration", label: "How long (minutes)", type: "number", min: "15", max: "720",
+          value: Number(activity.durationMinutes) > 0 ? String(Math.round(Number(activity.durationMinutes))) : "",
+          hint: "Later stops that day can move to make room.",
+        },
         {
           name: "location", label: "Where is it?", type: "place", required: true, maxLength: 500, value: originalLocation,
           // The stop's current place stays attached unless a different one is searched.
@@ -643,6 +670,13 @@
       onSubmit: async (values) => {
         const dueAt = buildDueAt(values.date, values.time);
         if (dueAt === null) return "Enter a valid date and time.";
+        const durationText = String(values.duration || "").trim();
+        let durationMinutes = Number(activity.durationMinutes) > 0 ? Number(activity.durationMinutes) : null;
+        if (durationText) {
+          const parsed = Number(durationText);
+          if (!Number.isInteger(parsed) || parsed < 15 || parsed > 720) return "Enter how long you’ll stay, from 15 to 720 minutes.";
+          durationMinutes = parsed;
+        }
         // Moving this stop to a place that is already planned elsewhere: ask first.
         const newPlace = values.locationPlace;
         if (newPlace ? newPlace.placeId !== activity.placeId : values.location !== originalLocation) {
@@ -651,33 +685,371 @@
         }
         // An activity whose time isn't changed can always be edited (even one that has
         // already happened); a new time must be ahead and within the trip.
-        if (dueAt !== originalDueAt) {
+        const timeChanged = dueAt !== originalDueAt;
+        if (timeChanged) {
           const problem = scheduleProblem(dueAt);
           if (problem) return problem;
         }
-        const planError = checkPlan(allDueAts(new Map([[activity, dueAt]])));
-        if (planError) return planError;
+        const length = durationMinutes || DEFAULT_STOP_MINUTES;
         ensureIds();
-        const before = previousMap();
-        const reset = new Set();
-        activity.title = values.title.slice(0, 200);
-        activity.note = values.note.slice(0, 300);
-        activity.dueAt = dueAt;
-        activity.iso = new Date(dueAt).toISOString();
-        const pickedPlace = values.locationPlace;
-        const placeChanged = pickedPlace ? pickedPlace.placeId !== activity.placeId : values.location !== originalLocation;
-        if (placeChanged) {
-          // A different place replaces the saved coordinates, photo and travel estimates.
-          ["locationCoords", "locationAddress", "placeId", "photoResource", "photoAttribution", "photoAttributions", "photoGoogleMapsUri"].forEach((field) => { delete activity[field]; });
-          if (pickedPlace) attachPlace(activity, pickedPlace);
-          else activity.location = values.location.slice(0, 500);
-          reset.add(activity.id);
+        const ids = previousMap();
+        // 1. Opening hours at the new time (Google's, when saved with the stop).
+        if ((timeChanged || durationMinutes !== originalDuration) && openForVisit(activity, dueAt, length) === false) {
+          const keep = await window.SidekickUI.confirm(`“${nameOf(activity)}” isn’t open for the whole visit then (${hoursText(activity, dueAt)}). Keep this time anyway?`, {
+            title: "Closed then", confirmText: "Keep this time", cancelText: "Go back",
+          });
+          if (!keep) return null;
         }
-        if (!normalizeAndReset(before, reset)) return "Could not save this activity.";
-        finish();
+        // 2. The stop before it that day: can the traveler get here in time?
+        let startAt = dueAt;
+        let shortenPrevious = null;
+        const earlier = sameDayStops(dueAt, activity).filter(({ at }) => at < dueAt).pop();
+        if (earlier) {
+          const travel = travelBetween(earlier.item, activity, ids);
+          const ready = earlier.at + (lengthOf(earlier.item) + travel) * 60000;
+          if (dueAt < ready) {
+            const readyAt = Math.ceil(ready / 300000) * 300000;
+            const shortTo = Math.floor(((dueAt - earlier.at) / 60000 - travel) / 5) * 5;
+            const options = [["later", `Start this at ${clockOf(minuteOf(readyAt))} instead`]];
+            if (!earlier.item.fixedTime && shortTo >= 15) options.push(["shorten", `Shorten “${nameOf(earlier.item)}” to ${shortTo} min`]);
+            options.push(["keep", "Keep my time (the stops overlap)"]);
+            const choice = await window.SidekickUI.form({
+              title: "Overlaps the stop before",
+              message: `“${nameOf(earlier.item)}” runs until ${clockOf(minuteOf(earlier.at) + lengthOf(earlier.item))}, and getting here takes about ${travel} min.`,
+              fields: [{ name: "fix", label: "What should change?", type: "select", value: options[0][0], options }],
+              confirmText: "Continue", cancelText: "Go back",
+            });
+            if (!choice) return null;
+            if (choice.fix === "later") startAt = readyAt;
+            else if (choice.fix === "shorten") shortenPrevious = { item: earlier.item, minutes: shortTo };
+          }
+        }
+        // 3. The stops after it that day: moved later to make room (never one whose time
+        // the traveler set, and never past midnight), or kept as they are.
+        let shifts = new Map();
+        let removals = [];
+        const { shifts: laterShifts, blockedBy } = laterStopShifts(activity, startAt, length);
+        const moved = Array.from(laterShifts.keys());
+        if (moved.length) {
+          const names = moved.length === 1 ? `“${nameOf(moved[0])}”` : `${moved.length} later stops`;
+          const dayEnd = localMidnight(startAt) + DAY_MS;
+          const pastMidnight = moved.some((item) => laterShifts.get(item) + lengthOf(item) * 60000 > dayEnd);
+          const closedAfter = moved.filter((item) => openForVisit(item, laterShifts.get(item), lengthOf(item)) === false);
+          if (pastMidnight) {
+            await window.SidekickUI.alert(`This now runs into ${names}, and moving ${moved.length === 1 ? "it" : "them"} would go past midnight. Their times stay as they are; consider removing a stop that day.`, { title: "Stops overlap" });
+          } else if (!closedAfter.length && !blockedBy) {
+            if (await window.SidekickUI.confirm(`This now runs into ${names}. Move ${moved.length === 1 ? "it" : "them"} later so nothing overlaps?`, {
+              title: "Make room?", confirmText: "Move later", cancelText: "Keep times",
+            })) shifts = laterShifts;
+          } else {
+            const closedNames = closedAfter.map((item) => `“${nameOf(item)}”`).join(", ");
+            const notes = [`This now runs into ${names}.`];
+            if (closedAfter.length) notes.push(`Moved later, ${closedNames} would be outside ${closedAfter.length === 1 ? "its" : "their"} opening hours.`);
+            if (blockedBy) notes.push(`“${nameOf(blockedBy)}” has a time you set, so it isn’t moved and will overlap.`);
+            const options = [["move", `Move ${moved.length === 1 ? "it" : "them"} later`]];
+            if (closedAfter.length) options.push(["move-remove", `Move later, and remove ${closedNames}`]);
+            options.push(["keep", "Keep their times (the stops overlap)"]);
+            const choice = await window.SidekickUI.form({
+              title: "Make room?", message: notes.join(" "),
+              fields: [{ name: "fix", label: "What should change?", type: "select", value: "move", options }],
+              confirmText: "Continue", cancelText: "Go back",
+            });
+            if (!choice) return null;
+            if (choice.fix === "move" || choice.fix === "move-remove") shifts = laterShifts;
+            if (choice.fix === "move-remove") removals = closedAfter;
+          }
+        } else if (blockedBy) {
+          const keep = await window.SidekickUI.confirm(`This now runs into “${nameOf(blockedBy)}”, which has a time you set. Keep both times (they overlap)?`, {
+            title: "Stops overlap", confirmText: "Keep both", cancelText: "Go back",
+          });
+          if (!keep) return null;
+        }
+        removals.forEach((item) => shifts.delete(item));
+        const planError = checkPlan(allDueAts(new Map([[activity, startAt], ...shifts])));
+        if (planError) return planError;
+        // Changed together, or not at all: a failed save leaves the trip as it was.
+        const snapshot = JSON.stringify(current);
+        const restore = () => {
+          const saved = JSON.parse(snapshot);
+          current.itinerary = saved.itinerary;
+          current.meta = saved.meta;
+        };
+        try {
+          const before = previousMap();
+          const reset = new Set();
+          activity.title = values.title.slice(0, 200);
+          activity.note = values.note.slice(0, 300);
+          activity.dueAt = startAt;
+          activity.iso = new Date(startAt).toISOString();
+          if (durationMinutes) activity.durationMinutes = durationMinutes;
+          // A time the traveler set stays put when other stops are moved to make room.
+          if (timeChanged) activity.fixedTime = true;
+          if (shortenPrevious) shortenPrevious.item.durationMinutes = shortenPrevious.minutes;
+          shifts.forEach((at, item) => {
+            item.dueAt = at;
+            item.iso = new Date(at).toISOString();
+          });
+          removals.forEach((item) => current.itinerary.forEach((day) => {
+            const index = (day.activities || []).indexOf(item);
+            if (index >= 0) day.activities.splice(index, 1);
+          }));
+          const pickedPlace = values.locationPlace;
+          const placeChanged = pickedPlace ? pickedPlace.placeId !== activity.placeId : values.location !== originalLocation;
+          if (placeChanged) {
+            // A different place replaces the saved coordinates, photo, hours and travel estimates.
+            ["locationCoords", "locationAddress", "placeId", "photoResource", "photoAttribution", "photoAttributions", "photoGoogleMapsUri", "openPeriods"].forEach((field) => { delete activity[field]; });
+            if (pickedPlace) attachPlace(activity, pickedPlace);
+            else activity.location = values.location.slice(0, 500);
+            reset.add(activity.id);
+          }
+          if (!normalizeAndReset(before, reset)) {
+            restore();
+            return "Could not save this activity. Nothing was changed.";
+          }
+        } catch (error) {
+          restore();
+          return "Could not save this activity. Nothing was changed.";
+        }
+        if (finish() === false) return "";
+        // 4. The whole day again, after the changes.
+        await reportDayProblems(activity);
         return "";
       },
     });
+  }
+
+  // ---- Whole-day check ------------------------------------------------------------
+  const minuteOf = (ts) => { const date = new Date(Number(ts)); return date.getHours() * 60 + date.getMinutes(); };
+  const lengthOf = (activity) => (Number(activity?.durationMinutes) > 0 ? Number(activity.durationMinutes) : DEFAULT_STOP_MINUTES);
+  const nameOf = (activity) => String(activity?.title || "this stop");
+  const clockOf = (minutes) => {
+    const hour = Math.floor(minutes / 60) % 24;
+    return `${hour % 12 || 12}:${String(Math.round(minutes) % 60).padStart(2, "0")} ${hour >= 12 ? "PM" : "AM"}`;
+  };
+  const hasValue = (value) => value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value));
+
+  function kmBetween(a, b) {
+    if (!a || !b || !hasValue(a.lat) || !hasValue(b.lat)) return NaN;
+    const r = (deg) => (deg * Math.PI) / 180;
+    const h = Math.sin(r(b.lat - a.lat) / 2) ** 2 + Math.cos(r(a.lat)) * Math.cos(r(b.lat)) * Math.sin(r(b.lng - a.lng) / 2) ** 2;
+    return 6371 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+  }
+
+  // Minutes from one stop to the next: the saved route time when it is for this pair of
+  // stops; otherwise an estimate from the map pins (the road about 1.3 × the straight
+  // line, at 28 km/h, plus 5 minutes); 0 when a stop has no pin.
+  function travelBetween(from, to, previousIds = previousMap()) {
+    if (!from || !to) return 0;
+    if (hasValue(to.travelMinutes) && previousIds.get(to.id) === from.id) return Math.max(0, Math.round(Number(to.travelMinutes)));
+    const km = kmBetween(from.locationCoords, to.locationCoords);
+    return Number.isFinite(km) ? Math.round(((km * 1.3) / 28) * 60) + 5 : 0;
+  }
+
+  // Whether a stop is open for a whole visit (Google's hours saved with the stop):
+  // true, false, or null when its hours aren't known.
+  function openForVisit(activity, startTs, minutes) {
+    const periods = Array.isArray(activity?.openPeriods) ? activity.openPeriods : [];
+    if (!periods.length) return null;
+    if (periods.some((period) => period.allDay)) return true;
+    const weekday = new Date(Number(startTs)).getDay();
+    const start = minuteOf(startTs);
+    return periods.some((period) => period.day === weekday && period.open <= start && start + minutes <= period.close);
+  }
+
+  function hoursText(activity, startTs) {
+    const weekday = new Date(Number(startTs)).getDay();
+    const today = (activity?.openPeriods || []).filter((period) => period.day === weekday).sort((a, b) => a.open - b.open);
+    if (!today.length) return "closed that day";
+    return today.map((period) => `${clockOf(period.open)} – ${clockOf(period.close)}`).join(", ");
+  }
+
+  // The other stops on the same day as a time, in time order: [{ item, at }].
+  function sameDayStops(dueAt, skip = null) {
+    const day = localMidnight(dueAt);
+    const list = [];
+    current.itinerary.forEach((d, dayIndex) => (d.activities || []).forEach((item) => {
+      if (item === skip) return;
+      const at = activityDueAt(item, dayIndex);
+      if (localMidnight(at) === day) list.push({ item, at });
+    }));
+    return list.sort((a, b) => a.at - b.at);
+  }
+
+  // The later stops on the same day that a stop (starting at dueAt, lasting minutes)
+  // would run into, with the start each needs: after the stop before it ends plus the
+  // travel to it (rounded up to 5 minutes). Stops that still fit keep their times, and so
+  // does a stop whose time the traveler set (blockedBy: the first one in the way).
+  function laterStopShifts(changed, dueAt, minutes) {
+    const ids = previousMap();
+    const shifts = new Map();
+    let blockedBy = null;
+    let end = dueAt + minutes * 60000;
+    let previous = changed;
+    for (const { item, at } of sameDayStops(dueAt, changed).filter((stop) => stop.at >= dueAt)) {
+      const earliest = Math.ceil((end + travelBetween(previous, item, ids) * 60000) / 300000) * 300000;
+      if (at >= earliest) break;
+      if (item.fixedTime) { blockedBy = item; break; }
+      shifts.set(item, earliest);
+      end = earliest + lengthOf(item) * 60000;
+      previous = item;
+    }
+    return { shifts, blockedBy };
+  }
+
+  // What would trip the traveler up on a day: a stop that can't be reached in time from
+  // the one before (travel included), a stop outside its opening hours, a meal with no
+  // free time left, and the drive home starting before the last stop ends or arriving
+  // after midnight. [{ type, text }]
+  function dayProblems(dayIndex) {
+    const day = current?.itinerary?.[dayIndex];
+    if (!day) return [];
+    const ids = previousMap();
+    const stops = (day.activities || []).map((item) => ({ item, at: activityDueAt(item, dayIndex) })).sort((a, b) => a.at - b.at);
+    const problems = [];
+    stops.forEach(({ item, at }, index) => {
+      const before = stops[index - 1];
+      if (before) {
+        const ready = before.at + (lengthOf(before.item) + travelBetween(before.item, item, ids)) * 60000;
+        if (at < ready) problems.push({ type: "overlap", text: `“${nameOf(item)}” starts at ${clockOf(minuteOf(at))}, but you can’t get there from “${nameOf(before.item)}” until about ${clockOf(minuteOf(ready))}.` });
+      }
+      if (openForVisit(item, at, lengthOf(item)) === false) problems.push({ type: "closed", text: `“${nameOf(item)}” isn’t open for the whole visit (${hoursText(item, at)}).` });
+    });
+    const spans = stops.map(({ item, at }) => [minuteOf(at), minuteOf(at) + lengthOf(item)]);
+    for (const item of Array.isArray(day.breaks) ? day.breaks : []) {
+      if (!["breakfast", "lunch", "dinner"].includes(item.kind) || !hasValue(item.endMinute)) continue;
+      if (spans.some(([start, end]) => item.startMinute < end && item.endMinute > start)) problems.push({ type: "meal", text: `No free time is left for ${item.kind}.` });
+    }
+    const drive = (Array.isArray(day.breaks) ? day.breaks : []).find((item) => item.kind === "drive");
+    const lastEnd = spans.length ? Math.max(...spans.map((span) => span[1])) : null;
+    if (drive && lastEnd !== null && drive.startMinute < lastEnd) problems.push({ type: "drive", text: "The drive home starts before your last stop ends." });
+    if (drive && hasValue(drive.endMinute) && drive.endMinute > 24 * 60) problems.push({ type: "drive", text: `You’d get home around ${clockOf(drive.endMinute)}, after midnight.` });
+    return problems;
+  }
+
+  // After an edit, the day's breaks follow its stops: a meal that a stop now covers
+  // moves to the nearest free time within two hours of when it was planned (or stays,
+  // and dayProblems says there's no time for it); the drive home and the night's rest
+  // start after the last stop (after a meal already under way).
+  function repairBreaks(dayIndex) {
+    const day = current?.itinerary?.[dayIndex];
+    if (!Array.isArray(day?.breaks) || !day.breaks.length || !(day.activities || []).length) return;
+    const spans = (day.activities || []).map((item) => {
+      const start = minuteOf(activityDueAt(item, dayIndex));
+      return [start, start + lengthOf(item)];
+    });
+    const busy = (start, end) => spans.some(([a, b]) => start < b && end > a);
+    const lastEnd = Math.max(...spans.map((span) => span[1]));
+    const setBreak = (item, start, end) => {
+      item.startMinute = start;
+      item.endMinute = end;
+      item.timeLabel = end === null ? `From ${clockOf(start)}` : `${clockOf(start)} – ${clockOf(end)}`;
+    };
+    const meals = day.breaks.filter((item) => ["breakfast", "lunch", "dinner"].includes(item.kind) && hasValue(item.endMinute));
+    meals.forEach((item) => {
+      if (!busy(item.startMinute, item.endMinute)) return;
+      const length = item.endMinute - item.startMinute;
+      const planned = hasValue(item.plannedStartMinute) ? item.plannedStartMinute : item.startMinute;
+      item.plannedStartMinute = planned;
+      for (let offset = 0; offset <= 120; offset += 5) {
+        const start = [planned + offset, planned - offset].find((at) => at >= 0 && !busy(at - 10, at + length));
+        if (start !== undefined) { setBreak(item, start, start + length); return; }
+      }
+    });
+    const afterMeals = (at) => meals.reduce((time, meal) => (meal.startMinute < time && meal.endMinute > time ? meal.endMinute : time), at);
+    const leave = afterMeals(Math.ceil((lastEnd + 15) / 5) * 5);
+    day.breaks.forEach((item) => {
+      if (item.kind === "drive" && hasValue(item.endMinute) && item.startMinute !== leave) {
+        setBreak(item, leave, leave + (item.endMinute - item.startMinute));
+      } else if (item.kind === "rest") {
+        const lastMeal = meals.reduce((latest, meal) => Math.max(latest, meal.endMinute), 0);
+        const start = Math.ceil((Math.max(lastEnd, lastMeal) + 15) / 5) * 5;
+        if (item.startMinute !== start) setBreak(item, start, null);
+      }
+    });
+    day.breaks.sort((a, b) => a.startMinute - b.startMinute);
+  }
+
+  // "Fix times" on a day that no longer works (often once real travel times are in): each
+  // stop moves later, as little as needed, so it can be reached from the one before. A
+  // time the traveler set never moves. The traveler sees what would move first, and a stop
+  // that would end after midnight or outside its opening hours is only removed if they
+  // choose that.
+  async function repairDay(dayIndex) {
+    const day = current?.itinerary?.[dayIndex];
+    if (!day || !(day.activities || []).length) return;
+    ensureIds();
+    const ids = previousMap();
+    const stops = day.activities.map((item) => ({ item, at: activityDueAt(item, dayIndex) })).sort((a, b) => a.at - b.at);
+    const shifts = new Map();
+    let blocked = null;
+    let end = null;
+    let previous = null;
+    for (const { item, at } of stops) {
+      if (previous) {
+        const ready = Math.ceil((end + travelBetween(previous, item, ids) * 60000) / 300000) * 300000;
+        if (ready > at) {
+          if (item.fixedTime) blocked = blocked || item;
+          else shifts.set(item, ready);
+        }
+      }
+      end = (shifts.get(item) ?? at) + lengthOf(item) * 60000;
+      previous = item;
+    }
+    if (!shifts.size) {
+      await window.SidekickUI.alert(blocked
+        ? `“${nameOf(blocked)}” has a time you set, so it isn’t moved. Edit its time, shorten the stop before it, or remove a stop.`
+        : "Nothing needs to move: each stop can already be reached in time.", { title: "Fix times" });
+      return;
+    }
+    const moved = Array.from(shifts.keys());
+    const dayEnd = localMidnight(stops[0].at) + DAY_MS;
+    const late = moved.filter((item) => shifts.get(item) + lengthOf(item) * 60000 > dayEnd);
+    const closed = moved.filter((item) => !late.includes(item) && openForVisit(item, shifts.get(item), lengthOf(item)) === false);
+    const list = (items) => items.map((item) => `“${nameOf(item)}”`).join(", ");
+    const notes = [`${moved.map((item) => `${list([item])} to ${clockOf(minuteOf(shifts.get(item)))}`).join(", ")}.`];
+    if (late.length) notes.push(`${list(late)} would then end after midnight.`);
+    if (closed.length) notes.push(`${list(closed)} would then be outside ${closed.length === 1 ? "its" : "their"} opening hours.`);
+    if (blocked) notes.push(`“${nameOf(blocked)}” has a time you set, so it stays.`);
+    const options = [];
+    if (!late.length) options.push(["move", "Move them"]);
+    if (late.length || closed.length) options.push(["move-remove", `Move them, and remove ${list([...late, ...closed])}`]);
+    options.push(["keep", "Keep the times"]);
+    const choice = await window.SidekickUI.form({
+      title: "Fix times", message: `Move these stops so each can be reached in time: ${notes.join(" ")}`,
+      fields: [{ name: "fix", label: "What should change?", type: "select", value: options[0][0], options }],
+      confirmText: "Apply", cancelText: "Cancel",
+    });
+    if (!choice || choice.fix === "keep") return;
+    const removals = choice.fix === "move-remove" ? [...late, ...closed] : [];
+    if (day.activities.length - removals.length < 1 && current.itinerary.reduce((sum, d) => sum + (d.activities || []).length, 0) - removals.length < 1) return;
+    const snapshot = JSON.stringify(current);
+    const before = previousMap();
+    shifts.forEach((at, item) => {
+      if (removals.includes(item)) return;
+      item.dueAt = at;
+      item.iso = new Date(at).toISOString();
+    });
+    removals.forEach((item) => day.activities.splice(day.activities.indexOf(item), 1));
+    if (!normalizeAndReset(before)) {
+      const saved = JSON.parse(snapshot);
+      current.itinerary = saved.itinerary;
+      current.meta = saved.meta;
+      await window.SidekickUI.alert("The times couldn’t be changed. Nothing was changed.", { title: "Fix times" });
+      return;
+    }
+    if (finish() === false) return;
+    const kept = stops.map(({ item }) => item).find((item) => !removals.includes(item));
+    if (kept) await reportDayProblems(kept);
+  }
+
+  // Tells the traveler what still doesn't work on the day of a stop they just changed.
+  async function reportDayProblems(activity) {
+    // (By id: saving regroups the days into new activity objects.)
+    const dayIndex = current?.itinerary?.findIndex((day) => (day.activities || []).some((item) => item === activity || (activity?.id && item.id === activity.id)));
+    if (!(dayIndex >= 0)) return;
+    const problems = dayProblems(dayIndex);
+    if (!problems.length) return;
+    await window.SidekickUI.alert(`Saved, but check Day ${dayIndex + 1}: ${problems.map((problem) => problem.text).join(" ")}`, { title: "Check this day" });
   }
 
   async function remove(dayIndex, activityIndex) {
@@ -948,6 +1320,30 @@
         actions.append(makeButton("Edit", "edit", "itinerary-edit-link"), makeButton("Remove", "remove", "itinerary-edit-link danger"));
         card.appendChild(actions);
       });
+      // What doesn't work on this day (after edits, or once real travel times are in).
+      let warning = section.querySelector(".day-schedule-warning");
+      const problems = dayProblems(dayIndex);
+      if (problems.length) {
+        if (!warning) {
+          warning = document.createElement("div");
+          warning.className = "day-schedule-warning";
+          warning.setAttribute("role", "status");
+          list.before(warning);
+        }
+        const text = `Check this day: ${problems.map((problem) => problem.text).join(" ")}`;
+        if (warning.dataset.text !== text) {
+          warning.dataset.text = text;
+          const message = document.createElement("span");
+          message.textContent = text;
+          warning.replaceChildren(message);
+          // Stops that can't be reached in time can be moved later (the traveler decides).
+          if (problems.some((problem) => problem.type === "overlap")) {
+            warning.append(" ", makeButton("Fix times", "day-repair", "itinerary-edit-link"));
+          }
+        }
+      } else if (warning) {
+        warning.remove();
+      }
       if (!list.querySelector(":scope > .day-add-row")) {
         const row = document.createElement("div");
         row.className = "day-add-row";
@@ -971,6 +1367,7 @@
     if (action === "day-date") return changeDayDate(dayIndex);
     if (action === "day-add") return openAdd({ dayIndex });
     if (action === "day-eat") return openEat(dayIndex);
+    if (action === "day-repair") return repairDay(dayIndex);
     const card = button.closest(".activity-card");
     const cards = Array.from(section.querySelectorAll(".activities-list > .activity-card"));
     const activityIndex = cards.indexOf(card);

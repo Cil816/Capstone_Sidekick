@@ -40,7 +40,8 @@
                             <div class="destination-suggestions-attribution" hidden><img src="https://maps.gstatic.com/mapfiles/api-3/images/google4.png" alt="Google" /></div>
                         </div>
                         <div class="itinerary-field"><label for="itinerary-name">Trip name</label><input id="itinerary-name" type="text" maxlength="100" placeholder="Optional" autocomplete="off" /></div>
-                        <div class="itinerary-field"><label for="itinerary-origin">Starting location (optional)</label><input id="itinerary-origin" type="text" maxlength="180" placeholder="City or address" autocomplete="street-address" /></div>
+                        <div class="itinerary-field itinerary-field-location"><label for="itinerary-origin">Starting location</label><input id="itinerary-origin" type="text" maxlength="180" placeholder="City or address" autocomplete="off" required /></div>
+                        <div class="itinerary-field itinerary-field-location"><label for="itinerary-end-location">Ending location (optional)</label><input id="itinerary-end-location" type="text" maxlength="180" placeholder="City or address" autocomplete="off" /></div>
                         <div class="itinerary-field"><label for="itinerary-start">Start date</label><input id="itinerary-start" type="date" required /></div>
                         <div class="itinerary-field"><label for="itinerary-end">End date</label><input id="itinerary-end" type="date" required /></div>
                         <div class="itinerary-field"><label for="itinerary-budget">Total budget (PHP)</label><input id="itinerary-budget" type="number" min="1" step="1" inputmode="numeric" aria-label="Total trip budget in Philippine pesos" /></div>
@@ -157,6 +158,7 @@
     <script src="js/core.js"></script>
     <script src="js/ui.js"></script>
     <script src="js/app-rating.js"></script>
+    <script src="js/trip-cost.js"></script>
     <script src="js/itinerary.js"></script>
     <script src="js/budget-pickers.js"></script>
     <script src="js/trip-style.js"></script>

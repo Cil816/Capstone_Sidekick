@@ -217,6 +217,8 @@
     }
     try { localStorage.setItem(STAY_KEY, JSON.stringify(all)); } catch (error) {}
     renderStayBanner();
+    // ("Near …" shows only while no stay is chosen.)
+    renderSubtitle();
   }
 
   function isChosenStay(place) {
@@ -474,19 +476,18 @@
     if (!subtitle || !state.area) return;
     const trip = readTrip();
     const kind = state.kind;
-    let text = `Near ${state.area.name}`;
+    // Short: the budget limit and the order. "Near …" only when no stay is chosen (the
+    // header already says where the traveler stays), with the place's short name.
+    const parts = getChosenStay() ? [] : [`Near ${window.SidekickCore?.shortPlaceName?.(state.area.name) || state.area.name}`];
     if (trip.budget && trip.days) {
       const cap = kind === "hotels" ? trip.hotelCap : trip.mealCap;
-      text += kind === "hotels"
-        ? ` • Up to ${peso(cap)} a night (40% of your budget over ${trip.nights} night${trip.nights === 1 ? "" : "s"})`
-        : ` • Up to ${peso(cap)} a meal per person (20% of your budget, 2 meals a day)`;
-      text += " • Fits your budget first, then best rated";
+      parts.push(kind === "hotels" ? `Up to ${peso(cap)} a night` : `Up to ${peso(cap)} a meal per person`, "Within budget first");
     } else if (trip.budget) {
-      text += " • Add trip dates to rank by your budget • Best rated first";
+      parts.push("Add trip dates to see what fits", "Best rated first");
     } else {
-      text += " • Enter a budget to see what fits • Best rated first";
+      parts.push("Add a budget to see what fits", "Best rated first");
     }
-    subtitle.textContent = text;
+    subtitle.textContent = parts.join(" · ");
     const note = $("stay-eat-rates-note");
     if (note) {
       note.textContent = kind === "hotels" ? state.ratesNote : "";

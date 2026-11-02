@@ -167,24 +167,14 @@
     return promptPromise;
   }
 
-  function afterItineraryGenerated(options = {}) {
-    if (options.deferUntilItineraryPage) {
-      try { localStorage.setItem(PENDING_ITINERARY_KEY, String(Date.now())); } catch (error) {}
-      return;
-    }
-    window.setTimeout(() => { void attemptPrompt(); }, 1200);
-  }
+  // No pop-up after building an itinerary: it interrupted the moment the traveler wants to
+  // see their plan. They rate the app from "Rate Sidekick" on the Profile screen instead.
+  // (Kept as a no-op so callers don't break.)
+  function afterItineraryGenerated() {}
 
+  // A pending prompt saved by an older version of the app is cleared, not shown.
   function consumeItineraryOpportunity() {
-    if (!/itinerary\.html$/i.test(window.location.pathname)) return;
-    let createdAt = 0;
-    try {
-      createdAt = Number(localStorage.getItem(PENDING_ITINERARY_KEY) || 0);
-      localStorage.removeItem(PENDING_ITINERARY_KEY);
-    } catch (error) {}
-    if (createdAt && Date.now() - createdAt <= PENDING_TTL_MS) {
-      window.setTimeout(() => { void attemptPrompt(); }, 1400);
-    }
+    try { localStorage.removeItem(PENDING_ITINERARY_KEY); } catch (error) {}
   }
 
   window.SidekickAppRating = { afterItineraryGenerated };

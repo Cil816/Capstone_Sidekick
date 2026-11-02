@@ -225,10 +225,13 @@
     if (budget) plan.budget = budget;
     var origin = parseOrigin(text);
     if (origin) { plan.originInput = origin; plan.originAsked = true; }
+    // The starting point is required (it starts the trip's route): "skip" asks again.
     if (asked === 'origin' && !origin) {
       var answer = String(text).trim();
-      plan.originAsked = true;
-      if (!/^(skip|no|none|nope|not sure|idk|wala|later|n\/a)$/i.test(answer) && answer.length <= 80) plan.originInput = answer;
+      if (!/^(skip|no|none|nope|not sure|idk|wala|later|n\/a)$/i.test(answer) && answer.length <= 80) {
+        plan.originInput = answer;
+        plan.originAsked = true;
+      }
     }
   }
 
@@ -283,7 +286,7 @@
         plan.origin = '';
         plan.originAsked = false;
         plan.asked = 'origin';
-        return 'I couldn’t find “' + from + '”. Please type a town, city, or full address (for example, Lipa City), or say **skip**.';
+        return 'I couldn’t find “' + from + '”. Please type a town, city, or full address (for example, Lipa City).';
       }
     }
     return '';
@@ -345,7 +348,7 @@
     try {
       data = await core().apiRequest('/api/trip/budget-check', { method: 'POST', body: JSON.stringify({
         destination: plan.destination, startDate: iso(start), endDate: iso(addDays(start, plan.days - 1)),
-        budgetAmountPhp: plan.budget, travelers: plan.travelers || 1,
+        budgetAmountPhp: plan.budget, travelers: plan.travelers || 1, v: 2,
       }) });
     } catch (error) { return ''; } // can't check now: the Itinerary tab checks it again
     if (!data || !data.checked || data.realistic) return '';
@@ -393,6 +396,7 @@
     days: 'How many days will you stay? Please type a number, for example “2”.',
     travelers: 'How many travelers, including you? Please type a number, for example “2” or “barkada of 4”.',
     budget: 'What is your total budget? Please type an amount in pesos, for example “5000” or “20k”.',
+    origin: 'Where will you start your trip from? A town or an address, for example “Lipa City”. It starts your trip’s route.',
   };
 
   // The next question, or null when the plan is complete.
@@ -402,7 +406,7 @@
     if (!plan.days) return { key: 'days', text: 'How many days will you stay?' };
     if (!plan.travelers) return { key: 'travelers', text: 'How many travelers, including you?' };
     if (!plan.budget) return { key: 'budget', text: 'What is your total budget for the whole group?' };
-    if (!plan.originAsked) return { key: 'origin', text: 'What is the address that you will start from?' };
+    if (!plan.originAsked || !plan.origin && !plan.originInput) return { key: 'origin', text: 'Where will you start your trip from? A town or an address works.' };
     return null;
   }
 

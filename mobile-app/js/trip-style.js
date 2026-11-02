@@ -17,18 +17,28 @@
   ];
 
   const PACES = [
-    { value: "packed", title: "Packed", detail: "As many stops as fit" },
-    { value: "balanced", title: "Balanced", detail: "Full, with breathing room" },
-    { value: "relaxed", title: "Relaxed", detail: "Fewer, longer visits" },
+    { value: "packed", title: "Packed", detail: "Up to 5 stops a day" },
+    { value: "balanced", title: "Balanced", detail: "Up to 4, with breathing room" },
+    { value: "relaxed", title: "Relaxed", detail: "Up to 3 longer visits" },
   ];
 
-  // Same choices as onboarding, plus a few ideas onboarding doesn't ask about.
-  const ONBOARDING_CHOICES = [
-    "Adventure", "Beach & Relaxation", "Cultural", "Food Tour", "Nature & Wildlife", "City Exploration",
-    "Beaches", "Mountains", "Historical Sites", "Local Cuisine", "Nightlife", "Shopping",
-    "Photography", "Water Sports", "Hiking", "Island Hopping",
+  // How the traveler gets there and around: the trip's cost (fuel and tolls for a car,
+  // fares for a bus or van) and how much time the plan leaves between stops.
+  const TRANSPORTS = [
+    { value: "car", title: "Own car", detail: "Fuel and tolls are estimated" },
+    { value: "commute", title: "Bus, van or commute", detail: "More time between stops" },
+    { value: "unsure", title: "Not sure yet", detail: "Travel costs stay unpriced" },
   ];
-  const EXTRA_CHOICES = ["Hidden gems", "Sunset spots", "Family-friendly", "Wellness & spa"];
+
+  // Onboarding's choices with the overlapping ones merged (hiking and mountains, food tours
+  // and local cuisine, photography and sunsets), plus two ideas onboarding doesn't ask about.
+  // The planner reads each by its words (server.js TRIP_FOCUS_GUIDE).
+  const ONBOARDING_CHOICES = [
+    "Beaches", "Island Hopping", "Water Sports", "Hiking & Mountains", "Nature & Wildlife", "Adventure",
+    "Pilgrimage", "Museums", "City Exploration", "Food & Local Cuisine", "Shopping", "Nightlife",
+    "Photography & Sunsets",
+  ];
+  const EXTRA_CHOICES = ["Family-friendly", "Wellness & spa"];
 
   const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
 
@@ -57,8 +67,17 @@
 
   function ask({ destination = "", days = 1, preferences = {}, firstDayStartMinute = null } = {}) {
     return new Promise((resolve) => {
+      // Saved onboarding styles that aren't trip-style choices any more show as the one that
+      // replaced them ("Beach & Relaxation" is covered by "Beaches"; "Cultural" and
+      // "Historical Sites" by "Pilgrimage": churches, shrines and heritage sites).
+      const RENAMED = {
+        "Beach & Relaxation": "Beaches", Cultural: "Pilgrimage", "Historical Sites": "Pilgrimage",
+        Hiking: "Hiking & Mountains", Mountains: "Hiking & Mountains",
+        "Food Tour": "Food & Local Cuisine", "Local Cuisine": "Food & Local Cuisine",
+        Photography: "Photography & Sunsets", "Sunset spots": "Photography & Sunsets",
+      };
       const mine = Array.from(new Set([...(preferences.travelTypes || []), ...(preferences.interests || [])]
-        .map((item) => String(item || "").trim()).filter(Boolean)));
+        .map((item) => String(item || "").trim()).filter(Boolean).map((item) => RENAMED[item] || item)));
       const others = [...ONBOARDING_CHOICES, ...EXTRA_CHOICES].filter((item) => !mine.includes(item));
       const last = lastChoice();
       // Only a one-day trip is limited to what is left of today.
@@ -72,7 +91,8 @@
           ? (TIMES.some((item) => !fitsToday(item, firstDayStartMinute)) ? " If you pick a time that’s over for today, day 1 becomes an evening plan and your choice starts on day 2." : "")
           : (usable.length < TIMES.length ? " Times of day that are over for today can’t be picked." : "")}`
         : "";
-      let pace = PACES.some((item) => item.value === last?.pace) ? last.pace : "packed";
+      let pace = PACES.some((item) => item.value === last?.pace) ? last.pace : "balanced";
+      let transport = TRANSPORTS.some((item) => item.value === last?.transport) ? last.transport : "unsure";
       // The traveler's own preferences start selected; extra picks from last time stay picked.
       const picked = new Set([...mine, ...(Array.isArray(last?.extraFocus) ? last.extraFocus.filter((item) => others.includes(item)) : [])]);
 
@@ -106,18 +126,42 @@
               </div>
             </fieldset>
             <fieldset class="sk-style-group">
+              <legend>How are you getting there?</legend>
+              <div class="sk-style-paces" role="radiogroup" aria-label="How are you getting there?">
+                ${TRANSPORTS.map((item) => `
+                  <button type="button" class="sk-style-pace" role="radio" data-transport="${item.value}" aria-checked="${item.value === transport}">
+                    <strong>${esc(item.title)}</strong><small>${esc(item.detail)}</small>
+                  </button>`).join("")}
+              </div>
+            </fieldset>
+            <fieldset class="sk-style-group">
               <legend>What should this trip focus on?</legend>
               ${mine.length ? `<p class="sk-style-sub">From your preferences</p><div class="sk-style-chips">${mine.map(chip).join("")}</div>` : ""}
               <p class="sk-style-sub">${mine.length ? "Try something different" : "Pick what you’d like more of"}</p>
               <div class="sk-style-chips">${others.map(chip).join("")}</div>
+              <p class="sk-style-late-note" data-style-conflict hidden></p>
             </fieldset>
           </div>
-          <p class="sk-style-note">Meal times and nights stay free in your plan.</p>
+          <p class="sk-style-note">Meal times and nights stay free in your plan. With Food &amp; Local Cuisine, lunch and dinner are at local favorites.</p>
           <div class="sk-dialog-actions">
             <button type="button" class="btn btn-outline" data-style-cancel>Back</button>
             <button type="button" class="btn btn-primary" data-style-ok>Build itinerary</button>
           </div>
         </div>`;
+
+      // What the chosen time of day leaves out of the plan, said up front (the planner
+      // only plans what fits each day's hours).
+      const conflictNote = root.querySelector("[data-style-conflict]");
+      function showConflicts() {
+        const has = (pattern) => [...picked].some((item) => pattern.test(item));
+        const notes = [];
+        if ((timeOfDay === "afternoon" || timeOfDay === "night") && has(/hik|mountain|island/i)) notes.push("Hikes and island hopping start in the morning, so this time of day leaves them out.");
+        if (timeOfDay === "night" && has(/museum/i)) notes.push("Museums close before a night out starts, so they’re left out.");
+        if (timeOfDay === "morning" && has(/nightlife/i)) notes.push("Nightlife needs a plan that runs into the night, so a morning plan leaves it out.");
+        conflictNote.textContent = notes.join(" ");
+        conflictNote.hidden = !notes.length;
+      }
+      showConflicts();
 
       const previousFocus = document.activeElement;
       let done = false;
@@ -142,21 +186,24 @@
       root.addEventListener("click", (event) => {
         const time = event.target.closest("[data-time]");
         const paceButton = event.target.closest("[data-pace]");
+        const transportButton = event.target.closest("[data-transport]");
         const focusButton = event.target.closest("[data-focus]");
-        if (time) { timeOfDay = time.dataset.time; selectRadio("[data-time]", "time", timeOfDay); return; }
+        if (time) { timeOfDay = time.dataset.time; selectRadio("[data-time]", "time", timeOfDay); showConflicts(); return; }
         if (paceButton) { pace = paceButton.dataset.pace; selectRadio("[data-pace]", "pace", pace); return; }
+        if (transportButton) { transport = transportButton.dataset.transport; selectRadio("[data-transport]", "transport", transport); return; }
         if (focusButton) {
           const item = focusButton.dataset.focus;
           if (picked.has(item)) picked.delete(item); else picked.add(item);
           focusButton.setAttribute("aria-pressed", String(picked.has(item)));
+          showConflicts();
           return;
         }
         if (event.target.closest("[data-style-ok]")) {
           const focus = [...mine, ...others].filter((item) => picked.has(item));
           try {
-            localStorage.setItem(LAST_KEY, JSON.stringify({ timeOfDay, pace, extraFocus: focus.filter((item) => others.includes(item)) }));
+            localStorage.setItem(LAST_KEY, JSON.stringify({ timeOfDay, pace, transport, extraFocus: focus.filter((item) => others.includes(item)) }));
           } catch (error) {}
-          close({ timeOfDay, pace, focus });
+          close({ timeOfDay, pace, focus, transport });
           return;
         }
         if (event.target.closest("[data-style-cancel]")) close(null);

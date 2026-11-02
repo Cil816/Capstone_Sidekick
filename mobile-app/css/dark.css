@@ -1107,6 +1107,9 @@ html[data-theme="dark"]:where([data-page="itinerary"]) .itinerary-budget-summary
 html[data-theme="dark"]:where([data-page="itinerary"]) .itinerary-budget-total {
   color: hsl(175, 32%, 82%);
 }
+html[data-theme="dark"]:where([data-page="itinerary"]) .itinerary-cost-edit input {
+  background: transparent;
+}
 html[data-theme="dark"]:where([data-page="itinerary"]) .itinerary-sources-toggle {
   background: transparent;
 }
@@ -1150,6 +1153,7 @@ html[data-theme="dark"]:where([data-page="itinerary"]) #itinerary-builder {
 html[data-theme="dark"]:where([data-page="itinerary"]) #itinerary-destination,
 html[data-theme="dark"]:where([data-page="itinerary"]) #itinerary-name,
 html[data-theme="dark"]:where([data-page="itinerary"]) #itinerary-origin,
+html[data-theme="dark"]:where([data-page="itinerary"]) #itinerary-end-location,
 html[data-theme="dark"]:where([data-page="itinerary"]) #itinerary-start,
 html[data-theme="dark"]:where([data-page="itinerary"]) #itinerary-end,
 html[data-theme="dark"]:where([data-page="itinerary"]) #itinerary-budget,
@@ -1287,6 +1291,17 @@ html[data-theme="dark"]:where([data-page="itinerary"]) .itinerary-edit-link {
 html[data-theme="dark"]:where([data-page="itinerary"]) .itinerary-edit-link.danger {
   color: hsl(349, 32%, 71%);
 }
+html[data-theme="dark"]:where([data-page="itinerary"]) .itinerary-sample-notice {
+  border-left: 4px solid #c0392b;
+  background: rgba(192, 57, 43, .08);
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .activity-checks {
+  background: rgba(208, 138, 30, .08);
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .day-schedule-warning {
+  border-left: 4px solid #d08a1e;
+  background: rgba(208, 138, 30, .1);
+}
 html[data-theme="dark"]:where([data-page="itinerary"]) .activity-edit-actions {
   border-top: 1px dashed hsl(206, 30%, 23%);
 }
@@ -1369,6 +1384,90 @@ html[data-theme="dark"]:where([data-page="itinerary"]) .budget-picker-meta {
 }
 html[data-theme="dark"]:where([data-page="itinerary"]) .budget-picker-warn {
   color: hsl(26, 32%, 77%) !important;
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .stop-day-label {
+  color: var(--itinerary-ink, hsl(212, 32%, 84%));
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .stop-choice h4 {
+  color: var(--itinerary-muted, hsl(208, 19%, 72%));
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .stop-option-info {
+  border: 1px solid hsl(192, 30%, 25%);
+  background: hsl(208, 32%, 11%);
+  color: var(--itinerary-blue, hsl(194, 32%, 75%));
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .stop-option-info:hover {
+  border-color: var(--itinerary-blue, #2c91b0);
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .stop-option-info:focus-visible {
+  outline: 2px solid var(--itinerary-blue, #2c91b0);
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .stop-option-photo {
+  background: hsl(204, 38%, 13%);
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .stop-choice-toggle {
+  border: 1px solid hsl(211, 30%, 24%);
+  background: hsl(208, 32%, 11%);
+  color: var(--itinerary-blue, hsl(194, 32%, 75%));
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .stop-choice-toggle:hover {
+  border-color: hsl(184, 30%, 29%);
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .stop-choice-removed {
+  border: 1px dashed hsl(211, 30%, 24%);
+  color: var(--itinerary-muted, hsl(208, 19%, 72%));
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .stop-add-open {
+  border: 1px dashed hsl(184, 30%, 29%);
+  background: hsl(180, 38%, 12%);
+  color: var(--itinerary-blue, hsl(194, 32%, 75%));
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .stop-add-input {
+  border: 1px solid hsl(211, 30%, 24%);
+  background: hsl(208, 32%, 11%);
+  color: var(--itinerary-ink, hsl(212, 32%, 84%));
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .stop-add-input:focus {
+  border-color: var(--itinerary-blue, #2c91b0);
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .stop-add-status {
+  color: var(--itinerary-muted, hsl(208, 19%, 72%));
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .stop-search-open {
+  border: 1px dashed hsl(184, 30%, 29%);
+  background: hsl(180, 38%, 12%);
+  color: var(--itinerary-blue, hsl(194, 32%, 75%));
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .stop-search {
+  border: 1px solid hsl(211, 30%, 24%);
+  background: hsl(200, 38%, 11%);
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .stop-search-head {
+  color: var(--itinerary-muted, hsl(208, 19%, 72%));
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .stop-option-tag {
+  background: hsl(187, 38%, 14%);
+  color: var(--itinerary-blue, hsl(194, 32%, 75%));
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .itinerary-content > .day-tabs {
+  background: hsla(192, 38%, 12%, 0.94);
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .day-tab {
+  border: 1px solid hsl(211, 30%, 24%);
+  background: hsl(208, 32%, 11%);
+  color: hsl(208, 19%, 72%);
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .day-tab.active {
+  background: var(--itinerary-blue, #2c91b0);
+  border-color: var(--itinerary-blue, #2c91b0);
+  color: #fff;
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .activity-edit-actions .itinerary-edit-link {
+  border: 1px solid hsl(211, 30%, 24%);
+  background: hsl(208, 32%, 11%);
+}
+html[data-theme="dark"]:where([data-page="itinerary"]) .activity-edit-actions .itinerary-edit-link.danger {
+  border-color: hsl(351, 30%, 25%);
 }
 html[data-theme="dark"]:where([data-page="itinerary"]) .stay-eat-fit.fit-within {
   background: hsl(148, 38%, 15%);
@@ -2260,6 +2359,16 @@ html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-pa
 }
 html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-dialog-details li {
   border-bottom: 1px solid rgba(44, 145, 176, .12);
+}
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-popup-item {
+  border: 1px solid hsl(201, 30%, 23%);
+  background: hsl(200, 38%, 12%);
+}
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-popup-off {
+  background: transparent;
+}
+html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-popup-close {
+  background: transparent;
 }
 html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-dialog-field input,
 html[data-theme="dark"]:where([data-page="alerts"], [data-page="chat"], [data-page="cookies"], [data-page="dashboard"], [data-page="index"], [data-page="itinerary"], [data-page="login"], [data-page="onboarding"], [data-page="past-trips"], [data-page="privacy"], [data-page="profile"], [data-page="register"], [data-page="settings"], [data-page="terms"], [data-page="verify"]) .sk-dialog-field select {

@@ -25,14 +25,29 @@ let _itineraryMap = null;
 let _itineraryMapMarkers = [];
 let _itineraryMapLoadPromise = null;
 let _liveTripBudget = null;
+// Highlights the day tab of the day being read (see attachDayTabs).
+let _dayTabsObserver = null;
+// The day shown under the day tabs (its dayNumber), and which trip that was for.
+let _shownDay = null;
+let _shownDayTrip = '';
 let _liveActivityCostsByPlaceId = new Map();
 let _activeBudgetTargetPhp = null;
 // People on the open trip (1–10). Entrance fees are per person; day and trip totals
 // are for the whole group.
 let _activeTravelers = 1;
+// How the open trip's travelers get around, and whether its stops were saved with their
+// opening hours (trips built since hours were kept; older ones say they weren't saved).
+let _activeTransport = 'unsure';
+let _activeTripHasHours = false;
 function setActiveTravelers(meta) {
   _activeTravelers = window.SidekickCore?.normalizeTravelers?.(meta?.travelers) || 1;
+  _activeTransport = ['car', 'commute', 'unsure'].includes(meta?.tripStyle?.transport) ? meta.tripStyle.transport : 'unsure';
+  _activeTripHasHours = Array.isArray(meta?.tripLegs);
+  // Where the shown trip's route starts and ends (it ends at the start unless an end is set).
+  const placeText = (place) => String(place?.address || place?.name || '').trim();
+  _activeRoute = { start: placeText(meta?.origin), end: placeText(meta?.endLocation) || placeText(meta?.origin) };
 }
+let _activeRoute = { start: '', end: '' };
 let _activeActivityBudgetTargetPhp = null;
 let _activeActivityDailyBudgetTargetPhp = null;
 const TRIP_BUDGET_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -446,10 +461,17 @@ function svgPin() {
 function renderActivity(activity) {
   const timeText = activity?.dueAt ? new Date(Number(activity.dueAt)).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) : window.SidekickCore.escapeHtml(activity.timeLabel || '');
   const distance = typeof activity?.travelDistanceKm === 'number' ? `${activity.travelDistanceKm.toFixed(1)} km from the last stop` : '';
-  const mins = typeof activity?.travelMinutes === 'number' ? `about ${Math.round(activity.travelMinutes)} min travel` : '';
+  // Google's times are by car; commuters see the planner's allowance, labelled as an estimate.
+  const mins = typeof activity?.travelMinutes !== 'number' ? ''
+    : _activeTransport === 'commute' && window.SidekickTripCost?.commuteMinutes
+      ? `about ${Math.round(activity.travelMinutes)} min by car; allow about ${window.SidekickTripCost.commuteMinutes(activity.travelMinutes)} min by bus, van or jeepney (estimate, not a timetable)`
+      : `about ${Math.round(activity.travelMinutes)} min travel`;
+  // A sample time in development mode says so; "unavailable" only when there's no time.
+  const isSampleRoute = activity?.routeSource === 'development-estimate' || /development route estimate/i.test(String(activity?.routeStatus || ''));
   const routeSummary = [distance, mins, activity.routeNoneKey
     ? 'No road or public-transport route from the last stop; you may need a boat or a walk'
-    : activity.routeStatus ? 'Travel time unavailable' : '']
+    : isSampleRoute ? 'sample time (development mode), not a real route'
+      : activity.routeStatus && typeof activity?.travelMinutes !== 'number' ? 'Travel time unavailable' : '']
     .filter(Boolean)
     .join(' · ');
   const costEstimate = _liveActivityCostsByPlaceId.get(priceKey(activity));
@@ -458,10 +480,20 @@ function renderActivity(activity) {
     && Number.isFinite(costEstimate.highPhp);
   const activityCostText = hasActivityCostEstimate
     ? (costEstimate.lowPhp === 0 && costEstimate.highPhp === 0
-      ? (/restaurant|cafe|hotel/i.test(String(activity?.category || '')) ? 'No entry fee' : 'Free entry')
+      ? (/restaurant|cafe|hotel|food|shopping/i.test(String(activity?.category || '')) ? 'No entry fee' : 'Free entry')
       : costEstimate.lowPhp === 0
         ? `Entry: ${formatPriceRange(0, costEstimate.highPhp)} (free entry; optional fees or tours cost more)`
         : `Entry fee: ${formatPriceRange(costEstimate.lowPhp, costEstimate.highPhp)}${_activeTravelers > 1 ? ' per person' : ''}`)
+    : '';
+  // What the traveler should confirm for this stop (hours, boat, booking, price).
+  const checks = window.SidekickTripCost?.stopChecks?.(activity, {
+    tripHasHours: _activeTripHasHours,
+    entryResearched: Boolean(_liveTripBudget),
+    entryPriced: Boolean(hasActivityCostEstimate),
+    transport: _activeTransport,
+  }) || [];
+  const checksHtml = checks.length
+    ? `<div class="activity-checks"><strong>Before you go</strong><ul>${checks.map((check) => `<li>${window.SidekickCore.escapeHtml(check.text)}</li>`).join('')}</ul></div>`
     : '';
   const durationMinutes = Math.round(Number(activity.durationMinutes));
   const durationText = durationMinutes >= 60
@@ -488,6 +520,7 @@ function renderActivity(activity) {
       ${Number.isFinite(durationMinutes) && durationMinutes > 0 ? `<div class="activity-note">Plan about ${durationText} here.</div>` : ''}
       ${activityCostText ? `<div class="activity-cost-estimate">${window.SidekickCore.escapeHtml(activityCostText)}</div>` : ''}
       ${activity.note ? `<div class="activity-note">${window.SidekickCore.escapeHtml(activity.note)}</div>` : ''}
+      ${checksHtml}
       ${placeMapsLink(activity)}
     </div>
   `;
@@ -525,10 +558,16 @@ function activityStartMinute(activity) {
 function renderBreak(item) {
   const esc = window.SidekickCore.escapeHtml;
   const rest = item.kind === 'rest';
+  // The last day's drive to the trip's end point.
+  const drive = item.kind === 'drive';
   const icon = rest
     ? '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>'
-    : '<path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2"/><path d="M7 2v20"/><path d="M21 15V2a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7"/>';
-  const hint = rest ? 'Free time and a good night’s rest' : 'Free time to eat · find a spot under Hotels & restaurants';
+    : drive
+      ? '<path d="M19 17h2c.6 0 1-.4 1-1v-3c0-.9-.7-1.7-1.5-1.9C18.7 10.6 16 10 16 10s-1.3-1.4-2.2-2.3c-.5-.4-1.1-.7-1.8-.7H5c-.6 0-1.1.4-1.4.9l-1.4 2.9A3.7 3.7 0 0 0 2 12v4c0 .6.4 1 1 1h2"/><circle cx="7" cy="17" r="2"/><path d="M9 17h6"/><circle cx="17" cy="17" r="2"/>'
+      : '<path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2"/><path d="M7 2v20"/><path d="M21 15V2a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7"/>';
+  const hint = rest ? 'Free time and a good night’s rest'
+    : drive ? 'Estimated drive · traffic may change this'
+      : 'Free time to eat · find a spot under Hotels & restaurants';
   return `
     <div class="activity-break${rest ? ' is-rest' : ''}" role="note">
       <span class="activity-break-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${icon}</svg></span>
@@ -619,66 +658,135 @@ function formatPriceRange(low, high) {
   return `${low ? peso(low) : 'Free'} – ${peso(high)}`;
 }
 
-function renderTripBudget(budget) {
+// The open trip and its owner (the cost card saves amounts the traveler enters on it).
+let _activeTripData = null;
+let _activeTripEmail = '';
+
+const COST_BASIS_LABELS = {
+  researched: 'Price found online',
+  yours: 'Your amount',
+  estimate: 'Estimate',
+  unknown: 'Not priced',
+  'not-needed': 'Not needed',
+};
+
+// The trip's cost card: the whole trip (stay, meals, entry fees, travel, a 10% reserve),
+// whether it fits the budget, and in "Details" each line with where its amount comes
+// from. budget: the entry-fee research (null when it couldn't run; failedText says why).
+function renderTripBudget(budget, { failedText = '' } = {}) {
   const summary = document.getElementById('itinerary-budget-summary');
   if (!summary) return;
-  if (!budget || !hasStoredItinerary()) {
+  if ((!budget && !failedText) || !hasStoredItinerary()) {
     summary.hidden = true;
     summary.replaceChildren();
     return;
   }
-  const hasActivityEstimate = Number.isFinite(budget.totalLowPhp) && Number.isFinite(budget.totalHighPhp);
-  // Prices are per person; the total is for everyone on the trip.
-  const people = _activeTravelers;
-  const groupLow = Number(budget.totalLowPhp) * people;
-  const groupHigh = Number(budget.totalHighPhp) * people;
-  const total = hasActivityEstimate
-    ? formatPriceRange(groupLow, groupHigh)
-    : 'No price estimate found';
-  const groupNote = hasActivityEstimate && people > 1
-    ? `<p class="itinerary-budget-note">For ${people} travelers: ${window.SidekickCore.escapeHtml(formatPriceRange(Number(budget.totalLowPhp), Number(budget.totalHighPhp)))} per person.</p>`
+  const esc = window.SidekickCore.escapeHtml;
+  const peso = (amount) => `₱${Math.round(Number(amount)).toLocaleString()}`;
+  const range = (low, high) => (low === high ? peso(low) : `${peso(low)} – ${peso(high)}`);
+  const data = _activeTripData || { meta: {}, itinerary: [] };
+  const trip = window.SidekickTripCost?.breakdown({
+    meta: data.meta || {}, itinerary: data.itinerary || [], activityBudget: budget,
+    activityCosts: _liveActivityCostsByPlaceId, priceKey,
+  });
+  if (!trip) return;
+  const unknownNames = trip.unknown.map((item) => item.label.toLowerCase());
+  const fitText = {
+    within: `Within your ${peso(trip.budgetPhp)} budget, with about ${peso(trip.remainingPhp)} to spare at the higher estimates.`,
+    over: `About ${peso(trip.overrunPhp)} over your ${peso(trip.budgetPhp)} budget, even at the lower estimates.`,
+    uncertain: trip.reason === 'unknown'
+      ? `Can’t tell yet if this fits your ${peso(trip.budgetPhp)} budget: ${unknownNames.length === 1 ? `${unknownNames[0]} isn’t` : `${unknownNames.slice(0, -1).join(', ')} and ${unknownNames.slice(-1)} aren’t`} priced. Enter ${unknownNames.length === 1 ? 'it' : 'them'} in Details.`
+      : `Fits your ${peso(trip.budgetPhp)} budget at the lower estimates but not the higher ones.`,
+    'no-budget': '',
+  }[trip.status];
+  const hasKnown = trip.totalHighPhp > 0;
+  const totalText = hasKnown
+    ? `${range(trip.totalLowPhp, trip.totalHighPhp)}${trip.unknown.length ? ' + unpriced costs' : ''}`
+    : 'Not enough prices yet';
+  const perTraveler = hasKnown && trip.travelers > 1
+    ? `About ${range(trip.perTravelerLowPhp, trip.perTravelerHighPhp)} per traveler (${trip.travelers} travelers). `
     : '';
-  // A range starting at "Free" means some places are free to enter and the higher
-  // figure includes optional fees (tours, rentals, environmental fees).
-  const rangeNote = hasActivityEstimate && Number(budget.totalLowPhp) < Number(budget.totalHighPhp)
-    ? '<p class="itinerary-budget-note">Lower figure: free places and basic entry only. Higher: includes optional tours and rentals.</p>'
+  const suggestions = trip.suggestions.length
+    ? `<ul class="itinerary-budget-suggestions">${trip.suggestions.map((text) => `<li>${esc(text)}</li>`).join('')}</ul>`
     : '';
-  const targetNote = Number.isFinite(_activeBudgetTargetPhp)
-    ? `<p class="itinerary-budget-note">Your trip budget: PHP ${Number(_activeBudgetTargetPhp).toLocaleString()}${people > 1 ? ` for ${people} travelers` : ''}.</p>`
-    : '';
-  const activityTargetNote = Number.isFinite(_activeActivityBudgetTargetPhp)
-    ? `<p class="itinerary-budget-note">About PHP ${Number(_activeActivityBudgetTargetPhp).toLocaleString()} is for entry fees${Number.isFinite(_activeActivityDailyBudgetTargetPhp) ? ` (about PHP ${Number(_activeActivityDailyBudgetTargetPhp).toLocaleString()} a day)` : ''}; the rest covers travel, rooms, food and extras.</p>`
-    : '';
-  const activityOverTargetNote = hasActivityEstimate && Number.isFinite(_activeActivityBudgetTargetPhp)
-    && groupHigh > _activeActivityBudgetTargetPhp
-    ? '<p class="itinerary-budget-note">Entry fees are over the planned amount. Try cheaper places or raise your budget.</p>'
-    : '';
-  const sourceHtml = (budget.sources || []).map((source) => {
-    const url = String(source.url || '');
-    if (!/^https?:\/\//i.test(url)) return '';
-    return `<a href="${window.SidekickCore.escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${window.SidekickCore.escapeHtml(source.title || 'Price source')}</a>`;
+
+  // Each line, with an "Enter amount" box for anything the traveler knows better.
+  const rows = trip.items.map((item) => {
+    const amount = item.basis === 'unknown' ? 'Not priced' : item.basis === 'not-needed' ? '—' : range(item.lowPhp, item.highPhp);
+    const editor = item.editable
+      ? `<span class="itinerary-cost-edit"><input type="number" inputmode="numeric" min="0" step="1" aria-label="Your amount for ${esc(item.label)} (₱, whole trip)" placeholder="${item.basis === 'yours' ? esc(String(item.lowPhp)) : 'Your amount ₱'}" data-cost-input="${esc(item.key)}"><button type="button" class="btn btn-outline btn-sm" data-cost-save="${esc(item.key)}">Save</button>${item.basis === 'yours' ? `<button type="button" class="btn btn-outline btn-sm" data-cost-clear="${esc(item.key)}">Use estimate</button>` : ''}</span>`
+      : '';
+    return `<li class="itinerary-cost-row is-${esc(item.basis)}"><div class="itinerary-cost-line"><span>${esc(item.label)}</span><strong>${esc(amount)}</strong></div>`
+      + `<small><span class="itinerary-cost-basis">${esc(COST_BASIS_LABELS[item.basis] || item.basis)}</span> · ${esc(item.note || '')}</small>${editor}</li>`;
   }).join('');
-  const sourceCount = (budget.sources || []).filter((source) => /^https?:\/\//i.test(String(source.url || ''))).length;
-  const searchedDate = budget.searchedAt ? new Date(budget.searchedAt).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }) : '';
-  // One line: how many stops have prices, and when they were checked.
-  const missing = Number(budget.missingActivityPriceCount || 0);
-  const notes = `<p class="itinerary-budget-note">${window.SidekickCore.escapeHtml([
-    `Prices found for ${Number(budget.pricedActivityCount || 0)} of ${Number(budget.totalActivityCount || 0)} activities${missing ? ` (${missing} without a price aren’t in the total)` : ''}.`,
-    `Prices may change${searchedDate ? `; last checked ${searchedDate}` : ''}.`,
-  ].join(' '))}</p>`;
-  const suggestionHtml = typeof budget.searchSuggestionHtml === 'string' ? budget.searchSuggestionHtml : '';
-  const sourcesToggle = sourceHtml
-    ? `<button class="itinerary-sources-toggle" type="button" aria-expanded="false" aria-controls="itinerary-budget-sources">Show sources (${sourceCount})</button><div class="itinerary-budget-sources" id="itinerary-budget-sources" hidden>${sourceHtml}</div>`
-    : '<p class="itinerary-budget-note">No source links found.</p>';
-  summary.innerHTML = `<h2>Activity costs (estimate)</h2><p class="itinerary-budget-total">${window.SidekickCore.escapeHtml(total)}</p>${groupNote}${rangeNote}${targetNote}${activityTargetNote}${activityOverTargetNote}${notes}${sourcesToggle}${suggestionHtml ? `<div class="itinerary-search-suggestions">${suggestionHtml}</div>` : ''}`;
+  const reserveRow = hasKnown
+    ? `<li class="itinerary-cost-row"><div class="itinerary-cost-line"><span>Reserve (10%)</span><strong>${esc(range(trip.contingencyLowPhp, trip.contingencyHighPhp))}</strong></div><small>For parking, tips, price changes and surprises.</small></li>`
+    : '';
+
+  // The entry-fee research's own notes and sources, as before.
+  let researchHtml = '';
+  if (budget) {
+    const sourceHtml = (budget.sources || []).map((source) => {
+      const url = String(source.url || '');
+      if (!/^https?:\/\//i.test(url)) return '';
+      return `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(source.title || 'Price source')}</a>`;
+    }).join('');
+    const sourceCount = (budget.sources || []).filter((source) => /^https?:\/\//i.test(String(source.url || ''))).length;
+    const searchedDate = budget.searchedAt ? new Date(budget.searchedAt).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }) : '';
+    const missing = Number(budget.missingActivityPriceCount || 0);
+    const suggestionHtml = typeof budget.searchSuggestionHtml === 'string' ? budget.searchSuggestionHtml : '';
+    researchHtml = `<p class="itinerary-budget-note">${esc([
+      `Entry fees found for ${Number(budget.pricedActivityCount || 0)} of ${Number(budget.totalActivityCount || 0)} stops${missing ? ` (${missing} without a price aren’t counted as free)` : ''}.`,
+      `Prices may change${searchedDate ? `; last checked ${searchedDate}` : ''}.`,
+    ].join(' '))}</p>`
+      + (sourceHtml
+        ? `<button class="itinerary-sources-toggle" type="button" aria-expanded="false" aria-controls="itinerary-budget-sources">Show sources (${sourceCount})</button><div class="itinerary-budget-sources" id="itinerary-budget-sources" hidden>${sourceHtml}</div>`
+        : '<p class="itinerary-budget-note">No source links found.</p>')
+      + (suggestionHtml ? `<div class="itinerary-search-suggestions">${suggestionHtml}</div>` : '');
+  } else if (failedText) {
+    researchHtml = `<p class="itinerary-budget-note">Entry fees couldn’t be looked up right now. ${esc(failedText)}</p>`;
+  }
+
+  summary.innerHTML = `<h2>Trip cost (estimate)</h2><p class="itinerary-budget-total">${esc(totalText)}</p>`
+    + `${fitText ? `<p class="itinerary-budget-fit is-${esc(trip.status)}">${esc(fitText)}</p>` : ''}`
+    + `${perTraveler || hasKnown ? `<p class="itinerary-budget-note">${esc(perTraveler)}${hasKnown ? 'Includes a 10% reserve.' : ''}</p>` : ''}`
+    + suggestions
+    + `<details class="itinerary-budget-details"${summary.querySelector('details[open]') ? ' open' : ''}><summary>Details</summary>`
+    + `<ul class="itinerary-cost-rows">${rows}${reserveRow}</ul>${researchHtml}</details>`;
+
   const sourceToggle = summary.querySelector('.itinerary-sources-toggle');
   const sourcePanel = summary.querySelector('.itinerary-budget-sources');
   sourceToggle?.addEventListener('click', () => {
     const expanded = sourceToggle.getAttribute('aria-expanded') === 'true';
     sourceToggle.setAttribute('aria-expanded', String(!expanded));
-    sourceToggle.textContent = `${expanded ? 'Show' : 'Hide'} sources (${sourceCount})`;
+    sourceToggle.textContent = `${expanded ? 'Show' : 'Hide'} sources (${(budget?.sources || []).length})`;
     sourcePanel.hidden = expanded;
   });
+  // Saving or clearing an amount the traveler entered (kept with the trip on this phone).
+  summary.onclick = (event) => {
+    const save = event.target.closest('[data-cost-save]');
+    const clear = event.target.closest('[data-cost-clear]');
+    if ((!save && !clear) || !_activeTripData) return;
+    const key = save ? save.dataset.costSave : clear.dataset.costClear;
+    const meta = _activeTripData.meta || (_activeTripData.meta = {});
+    const inputs = { ...(meta.costInputs && typeof meta.costInputs === 'object' ? meta.costInputs : {}) };
+    if (save) {
+      const field = Array.from(summary.querySelectorAll('[data-cost-input]')).find((input) => input.dataset.costInput === key);
+      const text = String(field?.value || '').trim();
+      const value = Number(text);
+      if (!text || !Number.isInteger(value) || value < 0 || value > 10000000) {
+        window.SidekickUI?.toast?.('Enter a whole amount in pesos, like 1500.');
+        field?.focus();
+        return;
+      }
+      inputs[key] = value;
+    } else {
+      delete inputs[key];
+    }
+    meta.costInputs = inputs;
+    try { setItineraryForEmail(_activeTripEmail, _activeTripData); } catch (error) { /* still shown for this visit */ }
+    renderTripBudget(budget, { failedText });
+  };
   summary.hidden = false;
 }
 
@@ -728,7 +836,23 @@ function normalizeTripBudgetCounts(budget, itinerary, activityCosts) {
   };
 }
 
+// Two quick edits start two price lookups: the same search (same places) is sent once,
+// and only the newest lookup's answer is shown (an older one can arrive last).
+let _tripBudgetLoadSeq = 0;
+const _pricingInFlight = new Map();
+function requestTripPrices(body) {
+  const key = JSON.stringify(body);
+  if (!_pricingInFlight.has(key)) {
+    _pricingInFlight.set(key, window.SidekickCore.apiRequest('/api/itinerary/estimate-budget', { method: 'POST', body: key })
+      .finally(() => _pricingInFlight.delete(key)));
+  }
+  return _pricingInFlight.get(key);
+}
+
 async function loadLiveTripBudget(itineraryData, email) {
+  const loadSeq = ++_tripBudgetLoadSeq;
+  _activeTripData = itineraryData;
+  _activeTripEmail = email;
   _liveTripBudget = null;
   _liveActivityCostsByPlaceId = new Map();
   renderTripBudget(null);
@@ -779,15 +903,12 @@ async function loadLiveTripBudget(itineraryData, email) {
       // Prices already researched for this trip are kept; only new places are searched.
       let response = null;
       if (unpricedPlaceIds.size) {
-        response = await window.SidekickCore.apiRequest('/api/itinerary/estimate-budget', {
-          method: 'POST',
-          body: JSON.stringify({
-            email,
-            itinerary: itineraryForPricing(itineraryData.itinerary, (activity) => unpricedPlaceIds.has(priceKey(activity))),
-            destination: meta.destination || meta.focusedPlace || '',
-            startDate: normalizedDates?.startDate || meta.startDate,
-            endDate: normalizedDates?.endDate || meta.endDate,
-          }),
+        response = await requestTripPrices({
+          email,
+          itinerary: itineraryForPricing(itineraryData.itinerary, (activity) => unpricedPlaceIds.has(priceKey(activity))),
+          destination: meta.destination || meta.focusedPlace || '',
+          startDate: normalizedDates?.startDate || meta.startDate,
+          endDate: normalizedDates?.endDate || meta.endDate,
         });
         (Array.isArray(response.activityCosts) ? response.activityCosts : []).forEach((cost) => {
           if (cost?.placeId) knownCosts.set(String(cost.placeId), cost);
@@ -806,19 +927,18 @@ async function loadLiveTripBudget(itineraryData, email) {
         sources,
       });
     } else {
-      const response = await window.SidekickCore.apiRequest('/api/itinerary/estimate-budget', {
-        method: 'POST',
-        body: JSON.stringify({
-          email,
-          itinerary: itineraryForPricing(itineraryData.itinerary),
-          destination: meta.destination || meta.focusedPlace || '',
-          startDate: normalizedDates?.startDate || meta.startDate,
-          endDate: normalizedDates?.endDate || meta.endDate,
-        }),
+      const response = await requestTripPrices({
+        email,
+        itinerary: itineraryForPricing(itineraryData.itinerary),
+        destination: meta.destination || meta.focusedPlace || '',
+        startDate: normalizedDates?.startDate || meta.startDate,
+        endDate: normalizedDates?.endDate || meta.endDate,
       });
       activityCosts = Array.isArray(response.activityCosts) ? response.activityCosts : [];
       tripBudget = response.tripBudget || null;
     }
+    // A newer lookup started meanwhile (another edit): its answer is the one shown.
+    if (loadSeq !== _tripBudgetLoadSeq) return;
     // The itinerary may have been removed while prices were being searched.
     if (!hasStoredItinerary()) {
       renderTripBudget(null);
@@ -844,10 +964,9 @@ async function loadLiveTripBudget(itineraryData, email) {
     setActiveTravelers(itineraryData.meta);
     renderItinerary(itineraryData.itinerary, Boolean(meta.isDevelopmentMock));
   } catch (error) {
-    if (summary && hasStoredItinerary()) {
-      summary.hidden = false;
-      summary.innerHTML = `<h2>Estimated activity costs</h2><p class="itinerary-budget-note">Live price search is unavailable right now. ${window.SidekickCore.escapeHtml(window.SidekickCore.friendlyError(error, 'Please try again later.'))}</p>`;
-    }
+    // The rest of the trip's cost still shows, with entry fees as not priced.
+    if (loadSeq !== _tripBudgetLoadSeq) return;
+    if (summary && hasStoredItinerary()) renderTripBudget(null, { failedText: window.SidekickCore.friendlyError(error, 'Please try again later.') });
   }
 }
 
@@ -919,6 +1038,7 @@ async function enrichItineraryWithLiveRoutes(itineraryData, email) {
           current.travelMinutes = route.durationMinutes;
           current.transportMode = route.travelMode;
           current.routeStatus = response.isDevelopmentMock ? "Development route estimate" : "";
+          current.routeSource = response.isDevelopmentMock ? "development-estimate" : "google-routes";
           delete current.routeNoneKey;
           delete current.routeRetryKey;
           delete current.routeRetryAfter;
@@ -928,6 +1048,7 @@ async function enrichItineraryWithLiveRoutes(itineraryData, email) {
           current.travelMinutes = null;
           current.transportMode = "Route unavailable";
           current.routeStatus = window.SidekickCore.friendlyError(error, "Route information could not be retrieved.");
+          current.routeSource = "unavailable";
           if (error?.statusCode === 422) {
             current.routeNoneKey = routeKey;
             delete current.routeRetryKey;
@@ -957,32 +1078,52 @@ async function enrichItineraryWithLiveRoutes(itineraryData, email) {
 // Google Maps (directions and live traffic, no map loads billed to Sidekick). A Google Maps
 // link takes up to 10 stops, so a longer trip gets one route per day instead.
 const MAPS_ROUTE_MAX_STOPS = 10;
-function mapsRouteUrl(stops) {
-  const point = (stop) => `${Number(stop.lat).toFixed(6)},${Number(stop.lng).toFixed(6)}`;
-  const middle = stops.slice(1, -1).map(point).join('|');
-  return `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(point(stops[0]))}`
-    + `&destination=${encodeURIComponent(point(stops[stops.length - 1]))}`
-    + (middle ? `&waypoints=${encodeURIComponent(middle)}` : '') + '&travelmode=driving';
+// from / to: the trip's starting and ending locations (as typed), before the first stop
+// and after the last one; without them the route runs from the first stop to the last.
+function mapsRouteUrl(stops, { from = '', to = '' } = {}) {
+  const points = stops.map((stop) => `${Number(stop.lat).toFixed(6)},${Number(stop.lng).toFixed(6)}`);
+  const origin = from || points.shift();
+  const destination = to || points.pop();
+  return `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(origin)}`
+    + `&destination=${encodeURIComponent(destination)}`
+    + (points.length ? `&waypoints=${encodeURIComponent(points.join('|'))}` : '') + '&travelmode=driving';
 }
+// "San Joaquin, Santo Tomas, Batangas, Philippines" -> "San Joaquin, Santo Tomas".
+function routePlaceName(text) {
+  const parts = String(text || '').split(',').map((part) => part.trim())
+    .filter((part) => part && !/^(philippines|batangas|\d{4}( batangas)?)$/i.test(part));
+  return parts.slice(0, 2).join(', ') || String(text || '');
+}
+
 function renderTripRoute(itinerary) {
   const days = (itinerary || []).map((day) => ({
     dayNumber: day.dayNumber,
     stops: (day.activities || []).map(lookupPlaceByActivity).filter(Boolean),
   }));
   const allStops = days.flatMap((day) => day.stops);
-  if (allStops.length < 2) return '';
+  const { start, end } = _activeRoute;
+  const ends = (start ? 1 : 0) + (end ? 1 : 0);
+  if (allStops.length + ends < 2 || !allStops.length) return '';
   const link = (url, label) => `<a class="btn btn-outline" href="${window.SidekickCore.escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${window.SidekickCore.escapeHtml(label)}</a>`;
-  const buttons = allStops.length <= MAPS_ROUTE_MAX_STOPS
-    ? [link(mapsRouteUrl(allStops), 'Open full trip route')]
-    : days.filter((day) => day.stops.length >= 2)
-      .map((day) => link(mapsRouteUrl(day.stops.slice(0, MAPS_ROUTE_MAX_STOPS)), `Day ${day.dayNumber} route`));
+  // Google Maps takes up to MAPS_ROUTE_MAX_STOPS places: a longer trip gets a route per
+  // day (the first day from the start, the last day to the end).
+  const fitsOneRoute = allStops.length + ends <= MAPS_ROUTE_MAX_STOPS;
+  const tripDays = days.filter((day) => day.stops.length);
+  const buttons = fitsOneRoute
+    ? [link(mapsRouteUrl(allStops, { from: start, to: end }), 'Open full trip route')]
+    : tripDays.map((day, index) => {
+      const from = index === 0 ? start : '';
+      const to = index === tripDays.length - 1 ? end : '';
+      const stops = day.stops.slice(0, MAPS_ROUTE_MAX_STOPS - (from ? 1 : 0) - (to ? 1 : 0));
+      return stops.length + (from ? 1 : 0) + (to ? 1 : 0) >= 2 ? link(mapsRouteUrl(stops, { from, to }), `Day ${day.dayNumber} route`) : '';
+    }).filter(Boolean);
   if (!buttons.length) return '';
   return `
     <div class="day-section trip-route-section">
       <div class="day-header">
         <div class="day-info">
           <h2>Trip route</h2>
-          <p>See ${allStops.length <= MAPS_ROUTE_MAX_STOPS ? 'all your stops' : 'each day’s stops'} in order on Google Maps, with directions and live traffic.</p>
+          <p>${fitsOneRoute ? 'Your stops' : 'Each day’s stops'} in order on Google Maps, with live traffic.${start ? ` ${end === start ? `Starts and ends at ${window.SidekickCore.escapeHtml(routePlaceName(start))}` : `From ${window.SidekickCore.escapeHtml(routePlaceName(start))} to ${window.SidekickCore.escapeHtml(routePlaceName(end))}`}.` : ''}</p>
         </div>
       </div>
       <div style="display:flex;flex-wrap:wrap;gap:10px;padding:4px 16px 16px">${buttons.join('')}</div>
@@ -996,6 +1137,31 @@ function renderItinerary(itinerary, isDevelopmentMock = false) {
 
   renderTripBudget(_liveTripBudget);
   container.innerHTML = "";
+  // A development-mode trip is test data: said once at the top, so its places, times and
+  // prices are never taken for real ones.
+  if (isDevelopmentMock) {
+    container.insertAdjacentHTML("beforeend", '<div class="itinerary-sample-notice" role="note"><strong>Sample itinerary (development mode).</strong> These places, times and prices are test data, not checked or real. Connect the app to the live server for a real plan.</div>');
+  }
+  _dayTabsObserver?.disconnect();
+  _dayTabsObserver = null;
+
+  // Day tabs (Day 1, Day 2, ...) stay at the top while scrolling: only the chosen day is
+  // shown (the same day again after an edit re-renders the trip; day 1 at first).
+  const multiDay = itinerary.length > 1;
+  // Another trip (its length and first date differ) opens on its day 1.
+  const tripKey = `${itinerary.length}|${itinerary[0]?.dateLabel || ''}`;
+  if (tripKey !== _shownDayTrip) {
+    _shownDayTrip = tripKey;
+    _shownDay = null;
+  }
+  if (!itinerary.some((day) => String(day.dayNumber) === String(_shownDay))) _shownDay = itinerary[0]?.dayNumber ?? null;
+  if (multiDay) {
+    const tabs = itinerary.map((day) => {
+      const active = String(day.dayNumber) === String(_shownDay);
+      return `<button type="button" class="day-tab${active ? ' active' : ''}" data-day-tab="${window.SidekickCore.escapeHtml(day.dayNumber)}" aria-pressed="${active}">Day ${window.SidekickCore.escapeHtml(day.dayNumber)}</button>`;
+    }).join('');
+    container.insertAdjacentHTML("beforeend", `<nav class="day-tabs" aria-label="Days of the trip">${tabs}</nav>`);
+  }
 
   for (const day of itinerary) {
     const activitiesHtml = renderDayStopsWithBreaks(day);
@@ -1021,13 +1187,15 @@ function renderItinerary(itinerary, isDevelopmentMock = false) {
         && Number.isFinite(dayCostLow) && Number.isFinite(dayCostHigh)
       : true);
     const dayCostText = hasDayCostEstimate
-      ? (dayPricedActivityCount
+      ? (isDevelopmentMock
+        ? `Sample prices (development mode, not real): ${formatPriceRange(dayCostLow, dayCostHigh)}`
+        : dayPricedActivityCount
         ? `Entry fees${_activeTravelers > 1 ? ` for ${_activeTravelers} travelers` : ''}: ${formatPriceRange(dayCostLow, dayCostHigh)} (prices found for ${dayPricedActivityCount} of ${dayActivities.length} stops)${Number.isFinite(_activeActivityDailyBudgetTargetPhp) ? ` · planned ~₱${_activeActivityDailyBudgetTargetPhp.toLocaleString()} a day` : ''}`
         : `No activity prices found${Number.isFinite(_activeActivityDailyBudgetTargetPhp) ? ` · planned ~₱${_activeActivityDailyBudgetTargetPhp.toLocaleString()} a day` : ''}`)
       : '';
 
     const dayHtml = `
-      <div class="day-section">
+      <div class="day-section" id="itinerary-day-${window.SidekickCore.escapeHtml(day.dayNumber)}" data-day="${window.SidekickCore.escapeHtml(day.dayNumber)}"${multiDay && String(day.dayNumber) !== String(_shownDay) ? ' hidden' : ''}>
         <div class="day-header">
           <div class="day-number">${window.SidekickCore.escapeHtml(day.dayNumber)}</div>
           <div class="day-info">
@@ -1054,6 +1222,68 @@ function renderItinerary(itinerary, isDevelopmentMock = false) {
     el.style.animationDelay = `${idx * 40}ms`;
   });
   attachActivityPhotoHandlers(container, itinerary);
+  attachDayTabs(container);
+}
+
+// Tapping a day tab shows that day only, from its top.
+function attachDayTabs(container) {
+  const nav = container.querySelector(".day-tabs");
+  if (!nav) return;
+  nav.addEventListener("click", (event) => {
+    const tab = event.target.closest(".day-tab");
+    if (!tab) return;
+    _shownDay = tab.dataset.dayTab;
+    nav.querySelectorAll(".day-tab").forEach((item) => {
+      const active = item === tab;
+      item.classList.toggle("active", active);
+      item.setAttribute("aria-pressed", String(active));
+    });
+    tab.scrollIntoView({ block: "nearest", inline: "nearest" });
+    container.querySelectorAll(".day-section").forEach((section) => {
+      section.hidden = section.dataset.day !== String(_shownDay);
+    });
+    const shown = document.getElementById(`itinerary-day-${_shownDay}`);
+    // Back to the top of the day when the tabs had scrolled past it.
+    if (shown && shown.getBoundingClientRect().top < nav.getBoundingClientRect().bottom) {
+      shown.scrollIntoView({ block: "start" });
+    }
+  });
+}
+
+// A stop where the group can also stay the night (a beach resort): after building, the
+// traveler is asked whether to stay there, instead of the chosen hotel or when none was
+// chosen. Only for trips with at least one night.
+async function offerResortStay(itineraryData, email, destinationName, hotel) {
+  const nights = Math.max(0, Number(itineraryData.meta?.durationDays || 1) - 1);
+  if (!nights) return;
+  const resort = (itineraryData.itinerary || [])
+    .flatMap((day) => (day.activities || []).map((activity) => ({ activity, dayNumber: day.dayNumber })))
+    .find(({ activity }) => activity.hasRooms && activity.placeId && activity.placeId !== hotel?.placeId);
+  if (!resort) return;
+  const { activity, dayNumber } = resort;
+  const name = String(activity.title || '').trim();
+  if (!name) return;
+  const ok = await window.SidekickUI.confirm(hotel
+    ? `${name} (Day ${dayNumber}) also has rooms. Stay there instead of ${hotel.name}?`
+    : `${name} (Day ${dayNumber}) also has rooms. Stay there for the night?`, {
+    title: 'Stay at this resort?',
+    confirmText: hotel ? 'Stay at the resort' : 'Yes, stay there',
+    cancelText: hotel ? 'Keep my hotel' : 'No thanks',
+  });
+  if (!ok) return;
+  const stay = {
+    name,
+    address: activity.location || '',
+    placeId: activity.placeId,
+    lat: activity.locationCoords?.lat ?? null,
+    lng: activity.locationCoords?.lng ?? null,
+    photoResource: activity.photoResource || '',
+  };
+  itineraryData.meta = { ...itineraryData.meta, stay };
+  setItineraryForEmail(email, itineraryData);
+  window.SidekickItineraryEdit?.setCurrent(itineraryData);
+  window.SidekickStayEat?.setStay(stay, destinationName);
+  window.SidekickUI.toast?.(`Staying at ${name}`);
 }
 
 function getItineraryForEmail(email) {
@@ -1231,6 +1461,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // How many people travel together (1–10); the budget covers the whole group.
   const travelersInput = document.getElementById('itinerary-travelers');
   const originInput = document.getElementById('itinerary-origin');
+  const endPointInput = document.getElementById('itinerary-end-location');
   const nameInput = document.getElementById('itinerary-name');
   // Trip name: filled in as "<destination> trip" (the name the app gives a trip) until
   // the traveler types their own; clearing it goes back to the automatic name.
@@ -1298,7 +1529,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!destinationSuggestions) return;
     activeDestinationSuggestion = -1;
     destinationSuggestions.replaceChildren();
-    const touristTypeOrder = ['tourist_attraction', 'landmark', 'national_park', 'museum', 'park'];
+    const touristTypeOrder = ['tourist_attraction', 'resort_hotel', 'beach', 'landmark', 'national_park', 'amusement_park', 'water_park', 'hiking_area', 'museum', 'park'];
     const rankedSuggestions = suggestions.slice().sort((a, b) => {
       const aRank = touristTypeOrder.findIndex((type) => (a.types || []).includes(type));
       const bRank = touristTypeOrder.findIndex((type) => (b.types || []).includes(type));
@@ -1311,10 +1542,11 @@ document.addEventListener("DOMContentLoaded", () => {
       destinationSuggestions.appendChild(empty);
     } else {
       const typeLabels = [
-        ['tourist_attraction', 'Tourist spot'], ['landmark', 'Landmark'],
+        ['resort_hotel', 'Resort'], ['beach', 'Beach'], ['amusement_park', 'Theme park'], ['water_park', 'Water park'],
+        ['hiking_area', 'Hiking spot'], ['tourist_attraction', 'Tourist spot'], ['landmark', 'Landmark'],
         ['national_park', 'National park'], ['museum', 'Museum'], ['park', 'Park'],
       ];
-      rankedSuggestions.slice(0, 6).forEach((suggestion, index) => {
+      rankedSuggestions.slice(0, 8).forEach((suggestion, index) => {
         const button = document.createElement('button');
         button.type = 'button';
         button.className = 'destination-suggestion';
@@ -1376,7 +1608,8 @@ document.addEventListener("DOMContentLoaded", () => {
           try {
             response = await window.SidekickCore.apiRequest('/api/maps/place-suggestions', {
               method: 'POST',
-              body: JSON.stringify({ input: query }),
+              // v: spot suggestions (no towns or areas); skips results cached before them.
+              body: JSON.stringify({ input: query, v: 3 }),
             });
           } catch (suggestionError) {
             // Older backend processes may not have the autocomplete route yet.
@@ -1440,6 +1673,90 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     });
   }
+
+  // Starting and ending locations: Google suggestions for towns, cities and addresses
+  // (any place, not only tourist spots) while typing. Picking one fills in its full name.
+  const attachLocationSuggestions = (input) => {
+    if (!input) return;
+    const list = document.createElement('div');
+    list.className = 'destination-suggestions';
+    list.id = `${input.id}-suggestions`;
+    list.setAttribute('role', 'listbox');
+    list.hidden = true;
+    input.setAttribute('role', 'combobox');
+    input.setAttribute('aria-autocomplete', 'list');
+    input.setAttribute('aria-controls', list.id);
+    input.setAttribute('aria-expanded', 'false');
+    input.after(list);
+    let timer = null;
+    let requestId = 0;
+    const close = () => {
+      list.hidden = true;
+      input.setAttribute('aria-expanded', 'false');
+    };
+    const showStatus = (text) => {
+      const status = document.createElement('div');
+      status.className = 'destination-suggestion-status';
+      status.textContent = text;
+      list.replaceChildren(status);
+      list.hidden = false;
+      input.setAttribute('aria-expanded', 'true');
+    };
+    input.addEventListener('input', () => {
+      const query = input.value.trim();
+      const id = ++requestId;
+      clearTimeout(timer);
+      if (query.length < 2) { close(); return; }
+      timer = setTimeout(async () => {
+        showStatus('Searching…');
+        try {
+          const response = await window.SidekickCore.apiRequest('/api/maps/place-suggestions', {
+            method: 'POST',
+            body: JSON.stringify({ input: query, scope: 'origin' }),
+          });
+          if (id !== requestId || input.value.trim() !== query) return;
+          const suggestions = (response.suggestions || []).slice(0, 5);
+          if (!suggestions.length) { showStatus('No places found'); return; }
+          list.replaceChildren();
+          suggestions.forEach((suggestion) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'destination-suggestion';
+            button.setAttribute('role', 'option');
+            const copy = document.createElement('span');
+            copy.className = 'destination-suggestion-copy';
+            const name = document.createElement('strong');
+            name.textContent = suggestion.name || suggestion.text || '';
+            copy.appendChild(name);
+            if (suggestion.secondaryText) {
+              const where = document.createElement('small');
+              where.textContent = suggestion.secondaryText;
+              copy.appendChild(where);
+            }
+            button.appendChild(copy);
+            button.addEventListener('mousedown', (event) => event.preventDefault());
+            button.addEventListener('click', () => {
+              input.value = String(suggestion.text || suggestion.name || '').slice(0, 180);
+              close();
+            });
+            list.appendChild(button);
+          });
+          const attribution = document.createElement('div');
+          attribution.className = 'destination-suggestions-attribution';
+          attribution.innerHTML = '<img src="https://maps.gstatic.com/mapfiles/api-3/images/google4.png" alt="Google" />';
+          list.appendChild(attribution);
+          list.hidden = false;
+          input.setAttribute('aria-expanded', 'true');
+        } catch (error) {
+          if (id === requestId) showStatus('Suggestions are unavailable right now');
+        }
+      }, 280);
+    });
+    input.addEventListener('keydown', (event) => { if (event.key === 'Escape') close(); });
+    input.addEventListener('blur', () => setTimeout(close, 120));
+  };
+  attachLocationSuggestions(originInput);
+  attachLocationSuggestions(endPointInput);
 
   if (placeSearchInput) {
     placeSearchInput.addEventListener("keydown", (event) => {
@@ -1613,6 +1930,12 @@ document.addEventListener("DOMContentLoaded", () => {
       destinationInput?.focus();
       return;
     }
+    // The starting location begins the trip's route (and its end, unless another is given).
+    if (!String(originInput?.value || '').trim()) {
+      await window.SidekickUI.alert('Enter where your trip starts, like your town or address. Your trip route on the map starts there.', { title: 'Where are you starting from?' });
+      originInput?.focus();
+      return;
+    }
     let tripDates;
     try {
       tripDates = itineraryDates(startInput?.value, endInput?.value);
@@ -1665,7 +1988,9 @@ document.addEventListener("DOMContentLoaded", () => {
       if (!replace) { clearPendingBuild(); return; }
     }
     const originText = String(originInput?.value || '').trim().slice(0, 180);
-    const travelers = window.SidekickCore.normalizeTravelers?.(travelersInput?.value) || 1;
+    // Left blank, the trip ends back where it started.
+    const endPointText = String(endPointInput?.value || '').trim().slice(0, 180);
+    const travelers =window.SidekickCore.normalizeTravelers?.(travelersInput?.value) || 1;
     const groupText = travelers > 1 ? ` for ${travelers} travelers` : '';
     let budgetLabel = `PHP ${rawBudget.toLocaleString()} total${groupText}`;
     const tempPrefs = { ...prefs, preferredPlaces: [destinationName], budget: budgetLabel, budgetAmountPhp: rawBudget, travelers, transportation: 'DRIVE' };
@@ -1680,7 +2005,7 @@ document.addEventListener("DOMContentLoaded", () => {
         ['Dates', durationDays === 1 ? shortDate(startVal) : `${shortDate(startVal)} – ${shortDate(endVal)}`],
         ['Travelers', window.SidekickCore.travelersLabel?.(travelers) || String(travelers)],
         ['Budget', `₱${rawBudget.toLocaleString()} total${groupText}`],
-        ...(originText ? [['Starting from', originText]] : []),
+        ...(originText ? [['Starting from', originText], ['Ending at', endPointText || `${originText} (same as start)`]] : []),
       ],
     });
     // The traveler answered: a trip handed over from Home or the chat is no longer waiting.
@@ -1729,6 +2054,17 @@ document.addEventListener("DOMContentLoaded", () => {
         await window.SidekickUI.alert(problem.message, { title: problem.title, details: problem.details, confirmText: 'Edit my trip' });
         budgetInput?.focus();
         return;
+      }
+      // Possible but tight at the cheapest prices found: they are shown with where they
+      // come from, and the traveler decides.
+      if (budgetCheck?.checked && budgetCheck.tight && window.SidekickCore.describeTightBudget) {
+        const notice = window.SidekickCore.describeTightBudget(budgetCheck, destinationName);
+        const goOn = await window.SidekickUI.confirm(notice.message, { title: notice.title, details: notice.details, confirmText: 'Continue anyway', cancelText: 'Edit my trip' });
+        if (!goOn) {
+          showBuilder(true);
+          budgetInput?.focus();
+          return;
+        }
       }
     }
     preCheckedBudgetKey = '';
@@ -1788,28 +2124,63 @@ document.addEventListener("DOMContentLoaded", () => {
           photoResource: hotel.photoResource || '',
           nightlyLowPhp: hotel.nightlyLowPhp,
           nightlyHighPhp: hotel.nightlyHighPhp,
+          // Where the price was confirmed (the trip cost says "checked" or "from a web search").
+          ...(hotel.priceCheckedOn ? { priceCheckedOn: String(hotel.priceCheckedOn) } : {}),
         };
       }
     }
 
     buildBtn.disabled = true;
     // A percentage with what is happening (planning, finding places, prices, routes).
-    const buildProgress = window.SidekickCore.startBuildProgress
-      ? window.SidekickCore.startBuildProgress('Building your itinerary…')
-      : (window.SidekickUI?.loading.show('Building your itinerary… this can take a minute'), null);
+    const startProgress = (label) => (window.SidekickCore.startBuildProgress
+      ? window.SidekickCore.startBuildProgress(label)
+      : (window.SidekickUI?.loading.show(`${label} this can take a minute`), null));
+    const buildProgress = startProgress('Finding places for your trip…');
+    // The progress screen on show; a second one runs while the itinerary is built.
+    let activeProgress = buildProgress;
     try {
-      const generated = await window.SidekickCore.apiRequest('/api/itinerary/generate', {
-        method: 'POST',
-        body: JSON.stringify({
-          email,
-          ...(buildProgress ? { progressId: buildProgress.id } : {}),
-          message: `Plan a ${durationDays}-day trip to ${destinationName}${groupText}. Total budget: PHP ${rawBudget}. Keep the full trip within this budget when possible. Start date: ${formatDateInput(startVal)}. End date: ${formatDateInput(endVal)}.`,
-          selectedDestination: { name: destinationName, placeId: destinationInput?.dataset.placeId || '' },
-          profile: { ...tempPrefs, startDate: formatDateInput(startVal), endDate: formatDateInput(endVal), durationDays, ...(chosenStay ? { stay: chosenStay } : {}), ...(tripStyle ? { tripStyle } : {}), ...(Number.isFinite(firstDayStart) ? { firstDayStartMinute: firstDayStart } : {}), ...(_chatMustSee.length ? { mustSee: _chatMustSee } : {}), clientToday: formatDateInput(new Date()) },
-          origin: originText ? { name: originText, address: originText } : null,
-        }),
-      });
-      await buildProgress?.finish(true);
+      const request = {
+        email,
+        message: `Plan a ${durationDays}-day trip to ${destinationName}${groupText}. Total budget: PHP ${rawBudget}. Keep the full trip within this budget when possible. Start date: ${formatDateInput(startVal)}. End date: ${formatDateInput(endVal)}.`,
+        selectedDestination: { name: destinationName, placeId: destinationInput?.dataset.placeId || '' },
+        profile: { ...tempPrefs, startDate: formatDateInput(startVal), endDate: formatDateInput(endVal), durationDays, ...(chosenStay ? { stay: chosenStay } : {}), ...(tripStyle ? { tripStyle } : {}), ...(Number.isFinite(firstDayStart) ? { firstDayStartMinute: firstDayStart } : {}), ...(_chatMustSee.length ? { mustSee: _chatMustSee } : {}), clientToday: formatDateInput(new Date()) },
+        origin: originText ? { name: originText, address: originText } : null,
+        ...(endPointText ? { endLocation: { name: endPointText, address: endPointText } } : {}),
+      };
+      // First each stop's three options (the traveler picks one per stop), then the
+      // itinerary is built from those picks. An older server builds it in one step.
+      let generated;
+      try {
+        generated = await window.SidekickCore.apiRequest('/api/itinerary/options', {
+          method: 'POST',
+          body: JSON.stringify({ ...request, ...(buildProgress ? { progressId: buildProgress.id } : {}) }),
+        });
+      } catch (error) {
+        if (error?.statusCode !== 404) throw error;
+        generated = await window.SidekickCore.apiRequest('/api/itinerary/generate', {
+          method: 'POST',
+          body: JSON.stringify({ ...request, ...(buildProgress ? { progressId: buildProgress.id } : {}) }),
+        });
+      }
+      // Options are ready: the progress screen closes quietly ("ready" only once it's built).
+      await buildProgress?.finish(!generated?.plan);
+      if (generated?.plan) {
+        window.SidekickUI?.loading.hide(true);
+        const picked = await window.SidekickBudgetPickers?.askStops?.({ ...generated.plan, ...(chosenStay ? { stay: chosenStay } : {}) });
+        // Closed without choosing: nothing is built (and nothing counts toward the limit).
+        if (!picked) return;
+        // { choices, extraStops, searchedStops } (removed stops are "" in choices; added places
+        // in extraStops; stops whose pick the traveler searched for in searchedStops).
+        const choices = picked.choices || {};
+        const extraStops = Array.isArray(picked.extraStops) ? picked.extraStops : [];
+        const searchedStops = Array.isArray(picked.searchedStops) ? picked.searchedStops : [];
+        activeProgress = startProgress('Building your itinerary…');
+        generated = await window.SidekickCore.apiRequest('/api/itinerary/build', {
+          method: 'POST',
+          body: JSON.stringify({ planId: generated.planId, choices, ...(extraStops.length ? { extraStops } : {}), ...(searchedStops.length ? { searchedStops } : {}), ...(activeProgress ? { progressId: activeProgress.id } : {}) }),
+        });
+        await activeProgress?.finish(true);
+      }
       generated.itinerary = applyLocalScheduleTimes(generated.itinerary, startVal);
       const itineraryData = {
         itinerary: generated.itinerary,
@@ -1826,6 +2197,7 @@ document.addEventListener("DOMContentLoaded", () => {
           isDraft: true,
           // A name the traveler typed; otherwise the trip is named after its destination.
           ...(customTripName() ? { title: customTripName() } : {}),
+          ...(endPointText ? { endLocation: { name: endPointText, address: endPointText } } : {}),
           ...(chosenStay ? { stay: { ...chosenStay, ...(generated.meta?.stay || {}) } } : {}),
         },
       };
@@ -1836,6 +2208,7 @@ document.addEventListener("DOMContentLoaded", () => {
       setItineraryForEmail(email, itineraryData);
       updateHeaderDate(tempPrefs, itineraryData);
       setActiveTravelers(itineraryData.meta);
+      _shownDay = null; // a new trip opens on day 1
       renderItinerary(itineraryData.itinerary, Boolean(itineraryData.meta?.isDevelopmentMock));
       loadLiveTripBudget(itineraryData, email);
       enrichItineraryWithLiveRoutes(itineraryData, email);
@@ -1847,11 +2220,12 @@ document.addEventListener("DOMContentLoaded", () => {
       showBuilder(false);
       // The Planned trips list shows the new draft open, with "Save itinerary" at its end.
       document.dispatchEvent(new CustomEvent('sidekick:draft-built'));
+      await offerResortStay(itineraryData, email, destinationName, chosenStay);
       window.SidekickAppRating?.afterItineraryGenerated();
       try { window.SidekickCore?.syncRemindersFromItinerary?.(email); } catch (error) {}
       try { window.SidekickCore?.scheduleAllFor?.(email); } catch (error) {}
     } catch (error) {
-      await buildProgress?.finish(false);
+      await activeProgress?.finish(false);
       window.SidekickUI?.loading.hide(true);
       if (error?.code === 'build_limit') showBuildLimit(error.message);
       else window.SidekickUI.alert(window.SidekickCore.friendlyError(error, 'Your itinerary couldn’t be built right now. Please try again.'), { title: 'Itinerary not built' });
@@ -1864,6 +2238,7 @@ document.addEventListener("DOMContentLoaded", () => {
   if (existing?.meta?.budgetAmountPhp && budgetInput) budgetInput.value = existing.meta.budgetAmountPhp;
   if (existing?.meta?.travelers && travelersInput) travelersInput.value = String(window.SidekickCore.normalizeTravelers?.(existing.meta.travelers) || 1);
   if (existing?.meta?.origin && originInput) originInput.value = existing.meta.origin.address || existing.meta.origin.name || '';
+  if (existing?.meta?.endLocation && endPointInput) endPointInput.value = existing.meta.endLocation.address || existing.meta.endLocation.name || '';
 
   // "Generate itinerary" on a Home destination hands its trip here: fill the
   // builder with it and run the same Build Itinerary flow as tapping the button.
